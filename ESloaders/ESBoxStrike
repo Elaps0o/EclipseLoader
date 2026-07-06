@@ -6558,8 +6558,15 @@ pcall(function()
         return ok, err
     end
 
-    SaveManager:BuildConfigSection(Tabs.Configs)
-    ThemeManager:ApplyToTab(Tabs.Configs)
+    -- Force SaveManager/ThemeManager groupboxes onto the LEFT column of the
+    -- Configs tab (Obsidian defaults to right). Monkey-patch just for this tab.
+    do
+        local origRight = Tabs.Configs.AddRightGroupbox
+        Tabs.Configs.AddRightGroupbox = function(self, ...) return self:AddLeftGroupbox(...) end
+        SaveManager:BuildConfigSection(Tabs.Configs)
+        ThemeManager:ApplyToTab(Tabs.Configs)
+        Tabs.Configs.AddRightGroupbox = origRight
+    end
     SaveManager:SetIgnoreIndexes({
         "SaveManager_ConfigList",
         "SaveManager_ConfigName",
@@ -6573,7 +6580,13 @@ end)
 
 ;(function() -- GENERAL controls + server hop (IIFE for register budget)
 local GenGB = Tabs.General:AddLeftGroupbox("MENU")
-GenGB:AddLabel("Toggle GUI: RightShift")
+GenGB:AddLabel("Menu Toggle"):AddKeyPicker("MenuKeybind", {
+    Default = "RightShift", NoUI = false, Text = "Menu Toggle",
+    Callback = function(k)
+        pcall(function() Library.ToggleKeybind = Options.MenuKeybind end)
+    end,
+})
+pcall(function() Library.ToggleKeybind = Options.MenuKeybind end)
 GenGB:AddButton({ Text="Copy Discord",   Func=function() copyToClipboard(ECLIPSE.Discord) end })
 GenGB:AddButton({ Text="Copy Website",   Func=function() copyToClipboard(ECLIPSE.Website) end })
 GenGB:AddButton({ Text="Rejoin",         Func=function()
@@ -8556,11 +8569,22 @@ end)() -- UI CREATION
     end
     StretchGB:AddToggle("Stretch_Enable", { Text="SCREEN STRETCH", Default=false,
         Callback=function(v)
+            -- Alive gate: only allow enabling while the local player is alive.
+            -- Turning off is always allowed. Prevents FOV writes on the death
+            -- cam that stick after respawn.
+            if v then
+                local char = LocalPlayer.Character
+                local hum  = char and char:FindFirstChildOfClass("Humanoid")
+                if not (hum and hum.Health > 0) then
+                    pcall(function() Toggles.Stretch_Enable:SetValue(false) end)
+                    Library:Notify({ Title="Screen Stretch", Description="Only usable while alive.", Time=3 })
+                    return
+                end
+            end
             ST.Enabled = v
             if v then
                 _origFOV = _origFOV or Camera.FieldOfView
                 _applyStretch()
-                -- Persistence: reapply the moment anything else touches FOV.
                 if _fovConn then _fovConn:Disconnect() end
                 _fovConn = Camera:GetPropertyChangedSignal("FieldOfView"):Connect(function()
                     if not ST.Enabled then return end
