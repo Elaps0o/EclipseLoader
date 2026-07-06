@@ -5044,144 +5044,15 @@ pcall(function()
 end)
 
 -- ============================================================
---   NAME OVERLAY SYSTEM (from-scratch, no direct name hook)
---   Cria um TextLabel filho de cada nameLbl de slot HUD e mostra
---   "★ <Weapon> | <Skin>" por cima. Não escreve em nameLbl.Text —
---   apenas oculta o original (TextTransparency=1) enquanto o
---   overlay estiver ativo. Não toca no sistema de icon já embutido.
---   Persistência via loop 0.35s + ChildAdded no Inventory.
---   Ativado junto com Enable Skin Changer, sem toggle próprio.
+--   NAME OVERLAY SYSTEM — removed.
+--   O nome no HUD já é sobrescrito por `_applyOneSlot` (que
+--   escreve nameLbl.Text = "★ Weapon | Skin" via _desiredHUDForSlot).
+--   O overlay antigo apenas ocultava o original e não substituía
+--   corretamente o nome das facas — foi removido para eliminar o
+--   conflito. Placeholder mantido só para compatibilidade.
 -- ============================================================
-_NameOverlay = { labels = setmetatable({}, {__mode = "k"}) }
+function _nameOverlayRestoreAll() end
 
-function _nameOverlay_desiredText(slotFrame, nameLbl)
-    local rawWeapon = _slotWeaponKey(slotFrame, nameLbl) or tostring(slotFrame.Name)
-    local isMelee = _isHUDMeleeSlot(slotFrame, rawWeapon)
-    local displayName, skin
-    if isMelee then
-        displayName = _selectedHUDKnife() or rawWeapon
-        skin = _hudSkinForWeapon(displayName, rawWeapon)
-    else
-        displayName = rawWeapon
-        if not displayName or displayName == "" then return nil end
-        skin = _hudSkinForWeapon(displayName)
-    end
-    if not skin or skin == "" then return nil end
-    local prefix = isMelee and "\xE2\x98\x85 " or ""
-    return prefix .. tostring(displayName) .. " | " .. tostring(skin)
-end
-
-function _nameOverlay_ensure(nameLbl)
-    local rec = _NameOverlay.labels[nameLbl]
-    if rec and rec.overlay and rec.overlay.Parent then return rec end
-    rec = rec or {
-        origTransparency        = nameLbl.TextTransparency,
-        origStrokeTransparency  = nameLbl.TextStrokeTransparency,
-    }
-    local ov = Instance.new("TextLabel")
-    ov.Name = "EclipseNameOverlay"
-    ov.BackgroundTransparency = 1
-    ov.BorderSizePixel = 0
-    ov.Size = UDim2.fromScale(1, 1)
-    ov.Position = UDim2.fromScale(0, 0)
-    ov.ZIndex = (nameLbl.ZIndex or 1) + 10
-    pcall(function()
-        ov.Font                  = nameLbl.Font
-        ov.TextSize              = nameLbl.TextSize
-        ov.TextScaled            = nameLbl.TextScaled
-        ov.TextColor3            = nameLbl.TextColor3
-        ov.TextStrokeColor3      = nameLbl.TextStrokeColor3
-        ov.TextStrokeTransparency= nameLbl.TextStrokeTransparency
-        ov.TextXAlignment        = nameLbl.TextXAlignment
-        ov.TextYAlignment        = nameLbl.TextYAlignment
-        ov.RichText              = nameLbl.RichText
-    end)
-    ov.Text = ""
-    ov.Parent = nameLbl
-    rec.overlay = ov
-    _NameOverlay.labels[nameLbl] = rec
-    return rec
-end
-
-function _nameOverlay_hideOriginal(nameLbl, rec)
-    if rec.origTransparency == nil then rec.origTransparency = nameLbl.TextTransparency end
-    if rec.origStrokeTransparency == nil then rec.origStrokeTransparency = nameLbl.TextStrokeTransparency end
-    pcall(function()
-        nameLbl.TextTransparency = 1
-        nameLbl.TextStrokeTransparency = 1
-    end)
-end
-
-function _nameOverlay_restore(nameLbl, rec)
-    if rec and rec.overlay then pcall(function() rec.overlay:Destroy() end) end
-    if nameLbl and nameLbl.Parent then
-        pcall(function()
-            nameLbl.TextTransparency = rec and rec.origTransparency or 0
-            nameLbl.TextStrokeTransparency = rec and rec.origStrokeTransparency or 1
-        end)
-    end
-    if nameLbl then _NameOverlay.labels[nameLbl] = nil end
-end
-
-function _nameOverlayApplyOne(slotFrame)
-    if not slotFrame or not slotFrame.Parent then return end
-    if not Config.Skins.SkinChangerEnabled then return end
-    local nameLbl = select(1, _slotParts(slotFrame)); if not nameLbl then return end
-    local text = _nameOverlay_desiredText(slotFrame, nameLbl)
-    if not text then
-        local existing = _NameOverlay.labels[nameLbl]
-        if existing then _nameOverlay_restore(nameLbl, existing) end
-        return
-    end
-    local rec = _nameOverlay_ensure(nameLbl)
-    _nameOverlay_hideOriginal(nameLbl, rec)
-    if rec.overlay.Text ~= text then rec.overlay.Text = text end
-end
-
-function _nameOverlayApplyAll()
-    local inv = _hudInventory(); if not inv then return end
-    for _, slotFrame in ipairs(inv:GetChildren()) do
-        if slotFrame:IsA("GuiObject") then
-            pcall(_nameOverlayApplyOne, slotFrame)
-        end
-    end
-end
-
-function _nameOverlayRestoreAll()
-    for nameLbl, rec in pairs(_NameOverlay.labels) do
-        _nameOverlay_restore(nameLbl, rec)
-    end
-    _NameOverlay.labels = setmetatable({}, {__mode = "k"})
-end
-
-task.spawn(function()
-    while scriptRunning do
-        if Config.Skins.SkinChangerEnabled then
-            pcall(_nameOverlayApplyAll)
-        end
-        task.wait(0.35)
-    end
-end)
-
-pcall(function()
-    local inv = _hudInventory()
-    if inv then
-        table.insert(UnloadConnections, inv.ChildAdded:Connect(function(child)
-            task.delay(0.15, function()
-                if Config.Skins.SkinChangerEnabled and child:IsA("GuiObject") then
-                    pcall(_nameOverlayApplyOne, child)
-                end
-            end)
-        end))
-    end
-    table.insert(UnloadConnections, LocalPlayer.CharacterAdded:Connect(function()
-        for _, dt in ipairs({0.4, 1.0, 2.0}) do
-            task.delay(dt, function()
-                if Config.Skins.SkinChangerEnabled then pcall(_nameOverlayApplyAll) end
-            end)
-        end
-    end))
-end)
 
 
 function CleanupScript()
@@ -8678,41 +8549,62 @@ end)() -- UI CREATION
     -- toggle is on; it only snaps back when the user disables it.
     local ST = Config.Stretch
     local StretchGB = Tabs.Misc:AddRightGroupbox("SCREEN STRETCH", "maximize")
-    local _origFOV, _fovConn
+    local _origFOV, _fovConn, _charConn
+    local function _isAlive()
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        return hum and hum.Health > 0
+    end
     local function _applyStretch()
         if not ST.Enabled then return end
+        if not _isAlive() then return end
         pcall(function()
-            -- INVERTED logic: LOWER ratio = MORE stretch (smaller FOV = zoom).
-            -- Ratio 1.0 = default, <1 = more stretched, >1 = less stretched.
-            local base = _origFOV or 70
+            local base = _origFOV or OriginalCameraFOV or 70
             Camera.FieldOfView = math.clamp(base * ST.Ratio, 1, 120)
         end)
     end
     local function _restoreStretch()
-        if _fovConn then _fovConn:Disconnect(); _fovConn = nil end
+        if _fovConn then pcall(function() _fovConn:Disconnect() end); _fovConn = nil end
+        if _charConn then pcall(function() _charConn:Disconnect() end); _charConn = nil end
         pcall(function()
-            if _origFOV then Camera.FieldOfView = _origFOV end
+            Camera.FieldOfView = _origFOV or OriginalCameraFOV or 70
         end)
         _origFOV = nil
     end
+    table.insert(UnloadConnections, { Disconnect = _restoreStretch })
     StretchGB:AddToggle("Stretch_Enable", { Text="SCREEN STRETCH", Default=false,
         Callback=function(v)
             ST.Enabled = v
             if v then
-                _origFOV = _origFOV or Camera.FieldOfView
+                if not _isAlive() then
+                    ST.Enabled = false
+                    pcall(function() Toggles.Stretch_Enable:SetValue(false) end)
+                    return
+                end
+                _origFOV = Camera.FieldOfView
                 _applyStretch()
-                -- Persistence: reapply the moment anything else touches FOV.
                 if _fovConn then _fovConn:Disconnect() end
                 _fovConn = Camera:GetPropertyChangedSignal("FieldOfView"):Connect(function()
-                    if not ST.Enabled then return end
-                    local base = _origFOV or 70
+                    if not ST.Enabled or not _isAlive() then return end
+                    local base = _origFOV or OriginalCameraFOV or 70
                     local target = math.clamp(base * ST.Ratio, 1, 120)
                     if math.abs(Camera.FieldOfView - target) > 0.05 then _applyStretch() end
+                end)
+                if _charConn then _charConn:Disconnect() end
+                _charConn = LocalPlayer.CharacterAdded:Connect(function()
+                    -- Recapture base FOV on respawn so we don't lock in the
+                    -- spectator/death-cam FOV and drag it into the new life.
+                    task.wait(0.5)
+                    if ST.Enabled then
+                        _origFOV = Camera.FieldOfView
+                        _applyStretch()
+                    end
                 end)
             else
                 _restoreStretch()
             end
         end })
+
     StretchGB:AddSlider("Stretch_Ratio", { Text="ASPECT RATIO", Default=1.30, Min=0.60, Max=2.20, Rounding=2,
         Callback=function(v)
             -- Only allow adjusting aspect ratio while the local player is
