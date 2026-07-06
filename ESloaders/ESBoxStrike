@@ -2518,6 +2518,12 @@ function c4Scheme(name, fallback)
     if ok and typeof(v) == "Color3" then return v end
     return fallback
 end
+
+-- Auto-sizing pill panel, styled to match Keybind/Spectator list & Terms modal:
+--   * Black bg (Transparency 0.4)  * White UIStroke (Transparency 0.6, 1px)
+--   * 4px corner                    * Font.Code 12px white/accented
+--   * Auto-fits text width via AutomaticSize.X = Enum.AutomaticSize.X
+--   * Header dot (accent-coloured) + rich-text body + trailing "…" animation
 function ensureC4UI()
     if C4UI.frame and C4UI.frame.Parent then return end
     local parent = (Library and Library.ScreenGui) or CoreGui
@@ -2528,210 +2534,149 @@ function ensureC4UI()
         pcall(function() g.Parent = (gethui and gethui()) or CoreGui end)
         parent = g
     end
-    local MAIN_ = c4Scheme("MainColor",       Color3.fromRGB(20,20,20))
-    local OUT_  = c4Scheme("OutlineColor",    Color3.fromRGB(40,40,40))
-    local ACC_  = c4Scheme("AccentColor",     Color3.fromRGB(255,90,60))
-    local FG_   = c4Scheme("FontColor",       Color3.fromRGB(255,255,255))
 
-    -- Premium redesign: square panel with a segmented circular ring hugging
-    -- the seconds text at the centre. No linear bar, no "PLANTED" label.
     local f = Instance.new("Frame")
     f.Name = "C4Frame"
-    f.Size = UDim2.fromOffset(180, 180)
     f.AnchorPoint = Vector2.new(0, 0.5)
-    f.Position = UDim2.new(0, -210, 0.5, -90) -- off-screen for slide-in
-    f.BackgroundColor3 = MAIN_
-    f.BackgroundTransparency = 0.15
+    f.Position = UDim2.new(0, 14, 0.5, 0)
+    f.BackgroundColor3 = Color3.new(0, 0, 0)
+    f.BackgroundTransparency = 0.4
     f.BorderSizePixel = 0
-    f.Visible = false
-    f.Active = true
-    f.ZIndex = 60
+    f.Size = UDim2.fromOffset(10, 30)                    -- min size; auto-grows to text
+    f.AutomaticSize = Enum.AutomaticSize.X
+    f.Visible = false; f.Active = true; f.ZIndex = 60
     f.Parent = parent
     local stroke = Instance.new("UIStroke", f)
-    stroke.Color = OUT_; stroke.Thickness = 1; stroke.Transparency = 0.25
-    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 14)
-    -- Acrylic gradient background.
-    local grad = Instance.new("UIGradient", f)
-    grad.Rotation = 90
-    grad.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(42,42,48)),
-        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(24,24,28)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(14,14,18)),
-    }
-    grad.Transparency = NumberSequence.new{
-        NumberSequenceKeypoint.new(0, 0.10),
-        NumberSequenceKeypoint.new(1, 0.28),
-    }
+    stroke.Color = Color3.new(1, 1, 1); stroke.Thickness = 1; stroke.Transparency = 0.6
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 4)
 
-    -- Title/header intentionally removed: the ring itself is the identifier,
-    -- keeping the panel clean and giving the number more room to breathe.
-    local title = Instance.new("TextLabel", f)
-    title.BackgroundTransparency = 1
-    title.Size = UDim2.new(1, 0, 0, 1)
-    title.Text = ""
-    title.Visible = false
+    -- horizontal list: [dot] [text] [dots]
+    local pad = Instance.new("UIPadding", f)
+    pad.PaddingLeft = UDim.new(0, 10); pad.PaddingRight = UDim.new(0, 10)
+    pad.PaddingTop  = UDim.new(0, 4);  pad.PaddingBottom = UDim.new(0, 4)
+    local lay = Instance.new("UIListLayout", f)
+    lay.FillDirection = Enum.FillDirection.Horizontal
+    lay.SortOrder = Enum.SortOrder.LayoutOrder
+    lay.VerticalAlignment = Enum.VerticalAlignment.Center
+    lay.Padding = UDim.new(0, 6)
 
-    -- Circular ring container (perfectly centred, larger radius).
-    local ring = Instance.new("Frame", f)
-    ring.BackgroundTransparency = 1
-    ring.AnchorPoint = Vector2.new(0.5, 0.5)
-    ring.Position = UDim2.fromScale(0.5, 0.5)
-    ring.Size = UDim2.fromOffset(140, 140)
-    ring.ZIndex = 61
+    local dot = Instance.new("Frame", f)
+    dot.Name = "Dot"; dot.LayoutOrder = 1
+    dot.Size = UDim2.fromOffset(8, 8)
+    dot.BackgroundColor3 = Color3.fromRGB(255, 90, 60)
+    dot.BorderSizePixel = 0; dot.ZIndex = 61
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
-    -- Build one tick mark per whole second of the fuse. Ticks live on the
-    -- ring's circumference and are recoloured/faded to reflect progress.
-    local ticks = {}
-    local totalTicks = C4_FALLBACK_DURATION -- rebuilt on duration change
-    local radius = 62
-    local function buildTicks(count)
-        for _, t in ipairs(ticks) do t:Destroy() end
-        table.clear(ticks)
-        for i = 1, count do
-            local seg = Instance.new("Frame", ring)
-            seg.BackgroundColor3 = ACC_
-            seg.BorderSizePixel = 0
-            seg.Size = UDim2.fromOffset(3, 12)
-            seg.AnchorPoint = Vector2.new(0.5, 0.5)
-            local angle = (i - 1) / count * math.pi * 2 - math.pi / 2
-            seg.Position = UDim2.new(0.5, math.cos(angle) * radius, 0.5, math.sin(angle) * radius)
-            seg.Rotation = math.deg(angle) + 90
-            seg.ZIndex = 62
-            Instance.new("UICorner", seg).CornerRadius = UDim.new(1, 0)
-            ticks[i] = seg
-        end
+    local text = Instance.new("TextLabel", f)
+    text.Name = "Body"; text.LayoutOrder = 2
+    text.BackgroundTransparency = 1
+    text.AutomaticSize = Enum.AutomaticSize.X
+    text.Size = UDim2.fromOffset(0, 22)
+    text.Font = Enum.Font.Code; text.TextSize = 13
+    text.TextColor3 = Color3.new(1, 1, 1)
+    text.TextXAlignment = Enum.TextXAlignment.Left
+    text.RichText = true
+    text.Text = ""
+    text.ZIndex = 61
+
+    -- Animated trailing "…" (three dots that pulse in sequence).
+    local dots = Instance.new("TextLabel", f)
+    dots.Name = "Dots"; dots.LayoutOrder = 3
+    dots.BackgroundTransparency = 1
+    dots.AutomaticSize = Enum.AutomaticSize.X
+    dots.Size = UDim2.fromOffset(0, 22)
+    dots.Font = Enum.Font.Code; dots.TextSize = 13
+    dots.TextColor3 = Color3.fromRGB(200, 200, 205)
+    dots.TextXAlignment = Enum.TextXAlignment.Left
+    dots.RichText = false; dots.Text = ""
+    dots.ZIndex = 61
+    dots.Visible = false
+
+    -- Drag
+    do
+        local dragging, dStart, sPos
+        f.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true; dStart = input.Position; sPos = f.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                end)
+            end
+        end)
+        UserInput.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local d = input.Position - dStart
+                f.Position = UDim2.new(sPos.X.Scale, sPos.X.Offset + d.X, sPos.Y.Scale, sPos.Y.Offset + d.Y)
+            end
+        end)
     end
-    buildTicks(totalTicks)
-
-    -- Seconds label at the centre of the ring.
-    local time = Instance.new("TextLabel", ring)
-    time.BackgroundTransparency = 1
-    time.AnchorPoint = Vector2.new(0.5, 0.5)
-    time.Position = UDim2.fromScale(0.5, 0.44)
-    time.Size = UDim2.fromOffset(110, 54)
-    time.Font = Enum.Font.Code; time.TextSize = 42
-    time.TextColor3 = ACC_
-    time.TextXAlignment = Enum.TextXAlignment.Center
-    time.Text = "40"; time.ZIndex = 63
-
-    -- Sub-line under the number (defuser info etc.).
-    local sub = Instance.new("TextLabel", ring)
-    sub.BackgroundTransparency = 1
-    sub.AnchorPoint = Vector2.new(0.5, 0.5)
-    sub.Position = UDim2.fromScale(0.5, 0.72)
-    sub.Size = UDim2.fromOffset(150, 16)
-    sub.Font = Enum.Font.Code; sub.TextSize = 11
-    sub.TextColor3 = Color3.fromRGB(180,180,185)
-    sub.TextXAlignment = Enum.TextXAlignment.Center
-    sub.Text = ""; sub.ZIndex = 63
-
-    -- Drag support
-    local dragging, dStart, sPos
-    f.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true; dStart = input.Position; sPos = f.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
-            end)
-        end
-    end)
-    UserInput.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - dStart
-            f.Position = UDim2.new(sPos.X.Scale, sPos.X.Offset + d.X, sPos.Y.Scale, sPos.Y.Offset + d.Y)
-        end
-    end)
 
     C4UI.frame  = f
-    C4UI.title  = title
-    C4UI.time   = time
-    C4UI.sub    = sub
-    C4UI.accent = nil
+    C4UI.dot    = dot
+    C4UI.text   = text
+    C4UI.dots   = dots
     C4UI.stroke = stroke
-    C4UI.bar    = nil -- legacy linear bar removed
-    C4UI.ring   = ring
-    C4UI.ticks  = ticks
-    C4UI.tickCount = totalTicks
-    C4UI.tickAccent = ACC_
-    C4UI.rebuildTicks = buildTicks
     C4UI.shown  = false
+    C4UI.pinned = false          -- true while summary is held until respawn
 end
 
--- Update the segmented ring so tick marks up to `remain` seconds are lit in
--- the accent colour and the rest fade to a dim grey. Called from the C4
--- update loop each frame while the panel is visible.
-function updateC4Ring(remain, duration, accent)
-    if not C4UI.ticks or not C4UI.tickCount then return end
-    local total = math.max(1, math.ceil(duration or C4_FALLBACK_DURATION))
-    if total ~= C4UI.tickCount and C4UI.rebuildTicks then
-        C4UI.rebuildTicks(total); C4UI.tickCount = total
-    end
-    if accent then C4UI.tickAccent = accent end
-    local litColor = C4UI.tickAccent or Color3.fromRGB(255,90,60)
-    local dimColor = Color3.fromRGB(60,60,66)
-    local lit = math.clamp(math.ceil(remain), 0, C4UI.tickCount)
-    for i, seg in ipairs(C4UI.ticks) do
-        if i <= lit then
-            seg.BackgroundColor3 = litColor
-            seg.BackgroundTransparency = 0
-        else
-            seg.BackgroundColor3 = dimColor
-            seg.BackgroundTransparency = 0.35
-        end
-    end
-end
+-- Ring removed by C4 redesign — kept as a no-op stub so old callers do not break.
+function updateC4Ring() end
 
 function C4Hide()
-    if not C4UI.frame or not C4UI.shown then
-        if C4UI.frame then C4UI.frame.Visible = false end
-        C4UI.shown = false
-        return
-    end
-    C4UI.shown = false
+    if not C4UI.frame then return end
+    if not C4UI.shown then C4UI.frame.Visible = false; return end
+    C4UI.shown = false; C4UI.pinned = false
     local f = C4UI.frame
-    local tween = TweenService:Create(f, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-        { Position = UDim2.new(0, -220, f.Position.Y.Scale, f.Position.Y.Offset) })
-    tween:Play()
-    tween.Completed:Once(function() if not C4UI.shown then f.Visible = false end end)
+    local tw = TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+        { BackgroundTransparency = 1 })
+    tw:Play()
+    tw.Completed:Once(function() if not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 0.4 end end)
 end
-function C4Show(status, timeText, sub, color)
+
+-- richText: string with <b>...</b> allowed; color: dot/stroke accent.
+-- animateDots: if true, shows the trailing "…" ellipsis animation.
+-- pinUntilAlive: if true, panel stays visible after the caller stops updating
+--                until LocalPlayer respawns (used for DEFUSED / DETONATED / LOST).
+function C4Show(richText, color, animateDots, pinUntilAlive)
     ensureC4UI()
     if not C4UI.frame then return end
-    -- Title element is hidden entirely — ring + colour tell the story.
-    if C4UI.title then C4UI.title.Text = "" end
-
-    C4UI.time.Text  = timeText
-    local subLine = ""
-    if status == "DEFUSING" or status == "BOMB DEFUSED"
-       or status == "BOMB DETONATED" or status == "BOMB LOST"
-       or status == "TIME UP" then
-        subLine = status
-    end
-    if sub and sub ~= "" then
-        local cleaned = tostring(sub):gsub("PLANTED", ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if cleaned ~= "" then
-            subLine = (subLine ~= "" and (subLine .. " · ") or "") .. cleaned
-        end
-    end
-    C4UI.sub.Text = subLine
+    C4UI.text.Text = richText or ""
     if color then
-        C4UI.time.TextColor3       = color
-        if C4UI.accent then C4UI.accent.BackgroundColor3 = color end
-        C4UI.stroke.Color          = color
-        C4UI.tickAccent            = color
+        C4UI.dot.BackgroundColor3 = color
+        C4UI.stroke.Color = color; C4UI.stroke.Transparency = 0.45
+    else
+        C4UI.stroke.Color = Color3.new(1, 1, 1); C4UI.stroke.Transparency = 0.6
     end
+    C4UI.dots.Visible = animateDots == true
+    C4UI.pinned = pinUntilAlive == true
     if not C4UI.shown then
         C4UI.shown = true
-        local f = C4UI.frame
-        f.Visible = true
-        -- Parchment unfurl: slide-in from left AND scale from 60% width → 100%.
-        f.Position = UDim2.new(0, -170, f.Position.Y.Scale, f.Position.Y.Offset)
-        local finalSz = UDim2.fromOffset(140, 140)
-        f.Size = UDim2.fromOffset(math.floor(140 * 0.6), 140)
-        TweenService:Create(f, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-            { Position = UDim2.new(0, 14, f.Position.Y.Scale, f.Position.Y.Offset), Size = finalSz }):Play()
+        C4UI.frame.Visible = true
+        C4UI.frame.BackgroundTransparency = 1
+        TweenService:Create(C4UI.frame, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            { BackgroundTransparency = 0.4 }):Play()
     end
 end
+
+-- Trailing "…" animation loop — one dot appears every 0.33s, resets at 3.
+task.spawn(function()
+    while true do
+        task.wait(0.33)
+        if C4UI.dots and C4UI.dots.Visible then
+            local n = (#C4UI.dots.Text % 3) + 1
+            C4UI.dots.Text = string.rep(".", n)
+        end
+    end
+end)
+
+-- Returns true once the LocalPlayer's Humanoid has a fresh spawn with HP > 0.
+function _c4LocalPlayerAlive()
+    local ch = LocalPlayer.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    return hum and hum.Health > 0
+end
+
 
 function findDefuser()
     for _, p in ipairs(Players:GetPlayers()) do
@@ -2859,170 +2804,105 @@ function stopC4Timer()
 end
 
 function updateC4Timer()
-    -- Timer runs internally regardless of the toggle; toggle only hides the UI
-    -- so toggling off/on mid-round does NOT reset the countdown.
     local hideOnly = not Config.Misc.C4Timer
-    -- GUI open preview: while the main GUI is on-screen and the C4 toggle is
-    -- enabled, keep the panel visible even without a live bomb so the user can
-    -- drag/position it. When GUI closes and there's no bomb, it auto-hides.
-    local previewOpen = false
-    if not hideOnly then
-        local guiOpen = (ECLIPSE._isGuiOpen and ECLIPSE._isGuiOpen()) or false
-        if guiOpen and not C4Timer.planted and C4Timer.hideAt == 0 then
-            previewOpen = true
-            C4Show("", "40", "", Color3.fromRGB(120,120,130))
-        end
-    end
-    if hideOnly then C4Hide() end
-    -- When previewing (GUI open, no bomb), skip the rest — nothing else to compute.
-    if previewOpen then return end
-    local _C4Show = hideOnly and function() end or C4Show
+    if hideOnly then C4Hide(); return end
+
+    -- Pinned summary (DEFUSED / DETONATED / LOST): keep panel visible untouched
+    -- until LocalPlayer respawns. CharacterAdded listener installed in
+    -- ensureC4UI() actually flips it off; here we just short-circuit.
+    if C4UI.pinned then return end
+
+    -- GUI-open preview: show a dim "C4 · 40s" while user drags the panel.
+    local guiOpen = (ECLIPSE._isGuiOpen and ECLIPSE._isGuiOpen()) or false
     local bomb = getBombModel()
     local resolved = isBombResolvedState(bomb)
     local planted = bomb ~= nil and not resolved
 
+    if guiOpen and not planted and not resolved and not C4Timer.planted then
+        C4Show("<b>C4</b> · <b>40s</b>", Color3.fromRGB(120,120,130), false, false)
+        return
+    end
+
+    -- Resolution states → summary once + pin until respawn.
     if resolved and C4Timer.planted then
         if bomb and bomb:GetAttribute("Defused") == true then
-            _C4Show("BOMB DEFUSED", "SAFE", "", Color3.fromRGB(90,220,140))
+            C4Show("<b>BOMB DEFUSED</b>", Color3.fromRGB(90,220,140), false, true)
         elseif bomb and (bomb:GetAttribute("Exploded") == true or bomb:GetAttribute("Exploding") == true) then
-            _C4Show("BOMB DETONATED", "BOOM", "", Color3.fromRGB(255,80,80))
+            C4Show("<b>BOMB DETONATED</b>", Color3.fromRGB(255,80,80), false, true)
         else
-            _C4Show("TIME UP", "0", "fuse ended", Color3.fromRGB(255,140,60))
+            C4Show("<b>TIME UP</b>", Color3.fromRGB(255,140,60), false, true)
         end
-        -- Keep the panel visible showing SAFE / BOOM until the round ends
-        -- (bomb model despawns from the workspace tag). No auto-hide timer.
-        C4Timer.hideAt = 0
-        C4Timer.resolvedShown = true
         stopC4Timer(); return
     end
 
     if planted and not C4Timer.planted then startC4Timer(bomb) end
     if planted and C4Timer.planted then
-        C4Timer.bomb = bomb
-        syncC4Timer(bomb)
+        C4Timer.bomb = bomb; syncC4Timer(bomb)
     end
     if not planted and C4Timer.planted then
         local remainLeft = math.max(0, C4Timer.endT - tick())
         if isBombDefused() then
-            _C4Show("BOMB DEFUSED", "SAFE", "", Color3.fromRGB(90,220,140))
+            C4Show("<b>BOMB DEFUSED</b>", Color3.fromRGB(90,220,140), false, true)
         elseif remainLeft <= 0.5 then
-            _C4Show("BOMB DETONATED", "BOOM", "", Color3.fromRGB(255,80,80))
+            C4Show("<b>BOMB DETONATED</b>", Color3.fromRGB(255,80,80), false, true)
         else
-            _C4Show("BOMB LOST", "--", "signal lost", Color3.fromRGB(200,200,200))
+            C4Show("<b>BOMB LOST</b>", Color3.fromRGB(200,200,200), false, true)
         end
-        -- Same rule as above: linger on SAFE/BOOM/LOST until round ends.
-        C4Timer.hideAt = 0
-        C4Timer.resolvedShown = true
         stopC4Timer(); return
     end
-    -- Round-end detection: panel is holding a resolved state (SAFE/BOOM/LOST)
-    -- with no live bomb. Hide only when the Bomb tag is fully gone from the
-    -- workspace, meaning the round has actually reset.
-    if C4Timer.resolvedShown and not planted and not resolved then
-        local hasAnyBomb = false
-        pcall(function()
-            local tagged = CollectionService:GetTagged("Bomb")
-            for _, b in ipairs(tagged or {}) do
-                if b and b:IsDescendantOf(Workspace) then hasAnyBomb = true; break end
-            end
-        end)
-        if not hasAnyBomb then
-            C4Timer.resolvedShown = false
-            C4Hide()
-        end
-    end
-    if C4Timer.hideAt > 0 and tick() >= C4Timer.hideAt then
-        C4Timer.hideAt = 0; C4Hide()
-    end
-
     if not C4Timer.planted then
-        -- Nothing planted, no timer running: if the panel is showing only because
-        -- of the GUI-open preview and the GUI just closed, animate the hide.
-        if C4UI.shown and not hideOnly then
-            local guiOpen = (ECLIPSE._isGuiOpen and ECLIPSE._isGuiOpen()) or false
-            if not guiOpen then C4Hide() end
-        end
+        if C4UI.shown and not guiOpen then C4Hide() end
         return
     end
 
     local remain = math.max(0, C4Timer.endT - tick())
-    if remain <= 0 and C4Timer.exact then
-        remain = 0
-    end
+    if remain <= 0 and C4Timer.exact then remain = 0 end
     local d = findDefuser()
-    local sub, col = "", nil
     if d then
-        -- Defuse phase mirrors game logic (DefuseBomb script dump):
-        --   duration = 5s with kit, 10s without.
-        --   start is the defuser's server-synced DefuseStartTime attribute
-        --   (workspace:GetServerTimeNow() timebase). Fall back to local tick()
-        --   only when the attribute is missing or stale.
         local kit = d:GetAttribute("HasDefuseKit") == true
         local dur = kit and 5 or 10
         local nowServer = c4ServerNow()
         local startServer = d:GetAttribute("DefuseStartTime")
         local elapsed
         if typeof(startServer) == "number"
-           and startServer <= nowServer
-           and (nowServer - startServer) >= 0
+           and startServer <= nowServer and (nowServer - startServer) >= 0
            and (nowServer - startServer) <= math.max(dur, 12) then
             elapsed = nowServer - startServer
         else
             if C4Timer.defuser ~= d then
-                C4Timer.defuser = d
-                C4Timer.defuseStart = tick()
-                C4Timer.defuseDuration = dur
+                C4Timer.defuser = d; C4Timer.defuseStart = tick(); C4Timer.defuseDuration = dur
             end
             elapsed = tick() - (C4Timer.defuseStart or tick())
         end
         local defRemain = math.max(0, dur - elapsed)
-        local pct = math.clamp(defRemain / dur, 0, 1)
-        _C4Show("DEFUSING",
-            tostring(math.ceil(defRemain)),
-            string.format("%s [%s]", d.DisplayName or d.Name, kit and "KIT" or "NO KIT"),
-            Color3.fromRGB(90, 200, 255))
-        -- Circular ring reflects defuse progress in seconds.
-        updateC4Ring(defRemain, dur, Color3.fromRGB(90, 200, 255))
+        local kitTag = kit and "KIT" or "NO KIT"
+        local defName = (d.DisplayName or d.Name)
+        C4Show(
+            string.format("<b>Defusing</b> <b>%s</b> [%s] · <b>%ds</b>",
+                defName, kitTag, math.ceil(defRemain)),
+            Color3.fromRGB(90, 200, 255),
+            true,   -- "..." animation
+            false)
         return
     else
-        C4Timer.defuser = nil
-        C4Timer.defuseStart = nil
+        C4Timer.defuser = nil; C4Timer.defuseStart = nil
     end
-    -- CS2-style urgency tiers based on time REMAINING on a 40s fuse:
-    --   >30s (elapsed 0-10) : calm red   · 1 beat/sec
-    --   20-30 (elapsed 10-20): warm ramp  · 1→2 beats/sec
-    --   10-20 (elapsed 20-30): orange     · 2→3 beats/sec
-    --    5-10 (elapsed 30-35): high red   · 5 beats/sec
-    --    <5   (elapsed 35-40): frenetic   · 8 beats/sec
+
+    local col
     if     remain <= 5  then col = Color3.fromRGB(255, 50, 50)
     elseif remain <= 10 then col = Color3.fromRGB(255, 90, 60)
     elseif remain <= 20 then col = Color3.fromRGB(255, 170, 60)
     else                     col = Color3.fromRGB(255, 110, 70) end
-    _C4Show("PLANTED", tostring(math.ceil(remain)), sub, col)
-    do
-        -- Segmented circular ring around the seconds text, one tick per second.
-        local total = C4Timer.duration > 0 and C4Timer.duration or C4_FALLBACK_DURATION
-        updateC4Ring(remain, total, col)
-    end
-    -- Ticking pulse: mirrors the CS2 beep cadence. `speed` here is 2× beats/sec
-    -- because sin(tick * speed * pi) completes a cycle every 2/speed seconds.
-    if C4UI.time then
-        local speed
-        if     remain > 30 then speed = 2                                 -- 1 bps
-        elseif remain > 20 then speed = 2 + (30 - remain) / 10 * 2        -- 1→2 bps
-        elseif remain > 10 then speed = 4 + (20 - remain) / 10 * 2        -- 2→3 bps
-        elseif remain > 5  then speed = 10                                -- 5 bps
-        else                    speed = 16                                -- 8 bps (frenetic)
-        end
-        local beat = 0.5 + 0.5 * math.sin(tick() * speed * math.pi)
-        C4UI.time.TextTransparency = (remain <= 30) and (0.15 * (1 - beat)) or 0
-        if C4UI.stroke then
-            C4UI.stroke.Transparency = 0.15 + 0.55 * (1 - beat) * (remain <= 30 and 1 or 0)
-        end
-    end
+    C4Show(string.format("<b>C4</b> · <b>%ds</b>", math.ceil(remain)), col, false, false)
 
     tryAutoDefuse()
 end
+
+-- Auto-hide pinned summary once the LocalPlayer respawns.
+LocalPlayer.CharacterAdded:Connect(function()
+    if C4UI and C4UI.pinned then C4Hide() end
+end)
+
 
 
 
@@ -3859,12 +3739,18 @@ end
 -- em runtime; se uma faca não estiver listada aqui, o AssetViewer pede
 -- confirmação antes de tentar aplicar.
 local HUD_KNIFE_ASSETS = {
-    ["CT Knife"]         = { Icon="rbxassetid://115204080823353", ReverseIcon="rbxassetid://102135209052420", Team="Counter-Terrorists" },
-    ["T Knife"]          = { Icon="rbxassetid://140484419446969", ReverseIcon="rbxassetid://100704390906232", Team="Terrorists" },
-    ["Butterfly Knife"]  = { Icon="rbxassetid://78088217065173",  ReverseIcon="rbxassetid://119105180712017", Team="Both" },
-    ["Karambit"]         = { Icon="rbxassetid://85121618781867",  ReverseIcon="rbxassetid://125193639488260", Team="Both" },
-    ["Gut Knife"]        = { Icon="rbxassetid://91965772008164",  ReverseIcon="rbxassetid://71818508657433",  Team="Both" },
-    ["M9 Bayonet"]       = { Icon="rbxassetid://92481124554479",  ReverseIcon="rbxassetid://90954924716133",  Team="Both" },
+    ["CT Knife"]         = { Icon="rbxassetid://115204080823353", Team="Counter-Terrorists" },
+    ["T Knife"]          = { Icon="rbxassetid://140484419446969", Team="Terrorists" },
+    ["Stiletto Knife"]   = { Icon="rbxassetid://71208637985987",  Team="Both" },
+    ["Skeleton Knife"]   = { Icon="rbxassetid://73573766861663",  Team="Both" },
+    ["Butterfly Knife"]  = { Icon="rbxassetid://75781072466921",  Team="Both" },
+    ["Karambit"]         = { Icon="rbxassetid://90116642907491",  Team="Both" },
+    ["M9 Bayonet"]       = { Icon="rbxassetid://122151088088611", Team="Both" },
+    ["Flip Knife"]       = { Icon="rbxassetid://84073333716773",  Team="Both" },
+    ["Gut Knife"]        = { Icon="rbxassetid://112036366395709", Team="Both" },
+    ["Bayonet"]          = { Icon="rbxassetid://75781072466921",  Team="Both" },
+    ["Huntsman Knife"]   = { Icon="rbxassetid://75781072466921",  Team="Both" },
+    ["Falchion Knife"]   = { Icon="rbxassetid://75781072466921",  Team="Both" },
 }
 
 local HUD_KNIFE_ICONS = {}
@@ -4731,9 +4617,9 @@ local function _desiredHUDForSlot(slotFrame, rawWeapon)
     rawWeapon = _cleanHUDWeaponText(rawWeapon) or rawWeapon
     if _isHUDMeleeSlot(slotFrame, rawWeapon) then
         local originalKnife = _localKnifeByTeam()
-        if not SkinSystem.scriptRunning then
-            return originalKnife, nil, originalKnife, false
-        end
+        -- Override name/icon whenever the Skin Changer is enabled — do NOT
+        -- gate on SkinSystem.scriptRunning (that toggle is for the custom
+        -- viewmodel only, not for the HUD text). Matches ec_69 behavior.
         local knifeName = _selectedHUDKnife()
         local prettySkin = _hudSkinForWeapon(knifeName, originalKnife)
         local base = knifeName
@@ -8595,4 +8481,256 @@ task.spawn(function()
         end)
     end
 end)
+
+-- =====================================================================
+-- HVH ADDENDUM — ported from user's open-source HvH reference
+--   * Multipoint (aim target selection samples multiple body points)
+--   * No Spread                                (bullet_module hook)
+--   * No Camera Recoil (visual)                (CameraController hook)
+--   * Auto Scope · Auto Stop · Auto Peek       (movement/aim helpers)
+--   * Screech Vision (X-ray chams) — toggle+slider LOCKED when dead;
+--     enemies fade in on ESP with a smooth animation.
+-- =====================================================================
+;(function() -- function scope: Luau top-level "Out of local registers" fix
+
+
+Config.HVH = Config.HVH or {
+    Multipoint=false, NoSpread=false, NoCamRecoil=false,
+    AutoScope=false, AutoStop=false,
+    AutoPeek=false, AutoPeekKey=Enum.KeyCode.E,
+    Screech=false, ScreechAlpha=0.55, ScreechColor=Color3.fromRGB(255,60,60),
+}
+
+-- Multipoint: wrap GetAimbotTargetPart -> pick closest-to-crosshair body point.
+do
+    local _origPick = GetAimbotTargetPart
+    local MP_PARTS = { "Head","UpperTorso","LowerTorso","HumanoidRootPart",
+                       "LeftHand","RightHand","LeftFoot","RightFoot" }
+    GetAimbotTargetPart = function(character)
+        if not (character and Config.HVH.Multipoint) then return _origPick(character) end
+        local mp = UserInput:GetMouseLocation()
+        local best, bestD
+        for _, n in ipairs(MP_PARTS) do
+            local p = character:FindFirstChild(n)
+            if p and p:IsA("BasePart") then
+                local sp, on = Camera:WorldToViewportPoint(p.Position)
+                if on then
+                    local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
+                    if not bestD or d < bestD then bestD, best = d, p end
+                end
+            end
+        end
+        return best or _origPick(character)
+    end
+end
+
+-- No Camera Recoil (visual): hook CameraController.weaponKick.
+do
+    local CC, oldKick
+    local function ensure()
+        if CC then return true end
+        local ok, mod = pcall(function()
+            return require(game:GetService("ReplicatedStorage")
+                :WaitForChild("Controllers", 5)
+                :WaitForChild("CameraController", 5))
+        end)
+        if not ok or not mod then return false end
+        CC = mod; oldKick = mod.weaponKick
+        return true
+    end
+    task.spawn(function()
+        while true do
+            if Config.HVH.NoCamRecoil and ensure() then
+                CC.weaponKick = function() end
+            elseif CC and oldKick and not Config.HVH.NoCamRecoil then
+                CC.weaponKick = oldKick
+            end
+            task.wait(1)
+        end
+    end)
+end
+
+-- No Spread: best-effort BulletModule hook.
+task.spawn(function()
+    local ok, bm = pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local c = rs:FindFirstChild("Components")
+        local common = c and c:FindFirstChild("Common")
+        local bmod = common and common:FindFirstChild("BulletModule")
+        return bmod and require(bmod)
+    end)
+    if not ok or not bm then return end
+    local key = bm._performRaycast and "_performRaycast" or (bm.performRaycast and "performRaycast")
+    if not key then return end
+    local orig = bm[key]
+    bm[key] = function(self, spreadAmount, ...)
+        if Config.HVH.NoSpread then spreadAmount = 0 end
+        return orig(self, spreadAmount, ...)
+    end
+end)
+
+-- Auto Scope / Auto Stop (Heartbeat).
+do
+    local vim = game:GetService("VirtualInputManager")
+    local _scoping = false
+    RunService.Heartbeat:Connect(function()
+        if not Config.GlobalEnable then return end
+        local char = LocalPlayer.Character; if not char then return end
+        local hum  = char:FindFirstChildOfClass("Humanoid")
+        local rp   = char:FindFirstChild("HumanoidRootPart")
+        if not (hum and rp) or hum.Health <= 0 then return end
+        local firing = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        if Config.HVH.AutoStop and firing then
+            local v = rp.AssemblyLinearVelocity
+            if Vector3.new(v.X, 0, v.Z).Magnitude > 0.5 then
+                rp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+                pcall(function() hum:Move(Vector3.zero, true) end)
+            end
+        end
+        if Config.HVH.AutoScope and firing then
+            local scoped = (LocalPlayer:GetAttribute("ScopeIncrement") or 0) > 0
+            if not scoped and not _scoping then
+                _scoping = true
+                pcall(function() vim:SendMouseButtonEvent(0, 0, 1, true, game, 1) end)
+                task.delay(0.25, function()
+                    pcall(function() vim:SendMouseButtonEvent(0, 0, 1, false, game, 1) end)
+                    _scoping = false
+                end)
+            end
+        end
+    end)
+end
+
+-- Auto Peek.
+do
+    local origin, peeking, returning = nil, false, false
+    local function startPeek()
+        local char = LocalPlayer.Character
+        local rp = char and char:FindFirstChild("HumanoidRootPart")
+        if not rp then return end
+        origin, peeking, returning = rp.Position, true, false
+    end
+    local function endPeek()
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and origin and not returning then
+            returning = true
+            pcall(function() hum:MoveTo(origin) end)
+            task.delay(0.6, function() peeking = false; returning = false; origin = nil end)
+        end
+    end
+    UserInput.InputBegan:Connect(function(input, gpe)
+        if gpe or not Config.HVH.AutoPeek then return end
+        if input.KeyCode == Config.HVH.AutoPeekKey then
+            if peeking then endPeek() else startPeek() end
+        elseif peeking and input.UserInputType == Enum.UserInputType.MouseButton1 then
+            endPeek()
+        end
+    end)
+end
+
+-- Screech Vision (X-ray chams w/ alive-gate + fade animation).
+do
+    local adorns = {}
+    local function aliveNow()
+        local c = LocalPlayer.Character
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        return h and h.Health > 0
+    end
+    local function clearAll()
+        for k, a in pairs(adorns) do pcall(function() a:Destroy() end); adorns[k] = nil end
+    end
+    local function ensureFor(plr)
+        local char = plr.Character; if not char then return end
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                local key = tostring(plr.UserId) .. ":" .. part.Name
+                if not adorns[key] or not adorns[key].Parent then
+                    local box = Instance.new("BoxHandleAdornment")
+                    box.Name = "EclipseScreech"
+                    box.Adornee = part; box.AlwaysOnTop = true; box.ZIndex = 1
+                    box.Size = part.Size; box.Color3 = Config.HVH.ScreechColor
+                    box.Transparency = 1
+                    box.Parent = part
+                    adorns[key] = box
+                    TweenService:Create(box, TweenInfo.new(0.35),
+                        { Transparency = 1 - (Config.HVH.ScreechAlpha or 0.55) }):Play()
+                end
+            end
+        end
+    end
+    RunService.RenderStepped:Connect(function()
+        if not Config.HVH.Screech or not aliveNow() then
+            if next(adorns) then clearAll() end
+            return
+        end
+        local alpha = 1 - (Config.HVH.ScreechAlpha or 0.55)
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and IsEnemy(plr) then
+                local c = plr.Character
+                local h = c and c:FindFirstChildOfClass("Humanoid")
+                if h and h.Health > 0 then ensureFor(plr) end
+            end
+        end
+        for k, box in pairs(adorns) do
+            if not box.Parent or not box.Adornee then adorns[k] = nil
+            else box.Color3 = Config.HVH.ScreechColor; box.Transparency = alpha end
+        end
+    end)
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        clearAll()
+        local hum = char:WaitForChild("Humanoid", 5)
+        if hum then hum.Died:Connect(clearAll) end
+    end)
+end
+
+-- UI rows on existing tabs.
+pcall(function()
+    local G = Tabs.Aim:AddRightGroupbox("HVH", "swords")
+    G:AddToggle("HVH_Multipoint",  { Text="MULTIPOINT",       Default=false, Callback=function(v) Config.HVH.Multipoint=v end })
+    G:AddToggle("HVH_NoSpread",    { Text="NO SPREAD",        Default=false, Callback=function(v) Config.HVH.NoSpread=v end })
+    G:AddToggle("HVH_NoCamRecoil", { Text="NO CAMERA RECOIL", Default=false, Callback=function(v) Config.HVH.NoCamRecoil=v end })
+    G:AddToggle("HVH_AutoScope",   { Text="AUTO SCOPE",       Default=false, Callback=function(v) Config.HVH.AutoScope=v end })
+end)
+pcall(function()
+    local G = Tabs.Movement:AddRightGroupbox("HVH", "move")
+    G:AddToggle("HVH_AutoStop", { Text="AUTO STOP", Default=false, Callback=function(v) Config.HVH.AutoStop=v end })
+    G:AddToggle("HVH_AutoPeek", { Text="AUTO PEEK", Default=false, Callback=function(v) Config.HVH.AutoPeek=v end })
+     :AddKeyPicker("HVH_AutoPeekKey", { Default="E", NoUI=false, Mode="Toggle", Text="Peek Key",
+        Callback=function(k) local ok, kc = pcall(function() return Enum.KeyCode[k] end); if ok and kc then Config.HVH.AutoPeekKey = kc end end })
+end)
+pcall(function()
+    local G = Tabs.Visuals:AddRightGroupbox("SCREECH VISION", "eye")
+    local tgl = G:AddToggle("HVH_Screech", { Text="SCREECH VISION", Default=false,
+        Callback=function(v)
+            local c = LocalPlayer.Character; local h = c and c:FindFirstChildOfClass("Humanoid")
+            local a = h and h.Health > 0
+            if v and not a then
+                pcall(function() Library:Notify({ Title="Screech Vision", Description="Only available while alive.", Time=3 }) end)
+                pcall(function() Library.Toggles.HVH_Screech:SetValue(false) end)
+                Config.HVH.Screech = false; return
+            end
+            Config.HVH.Screech = v
+        end })
+    local sld = G:AddSlider("HVH_ScreechAlpha", { Text="OPACITY", Default=0.55, Min=0.1, Max=1.0, Rounding=2,
+        Callback=function(v) Config.HVH.ScreechAlpha=v end })
+    G:AddLabel("Locked while dead — respawn to enable.", true)
+    task.spawn(function()
+        while true do
+            local c = LocalPlayer.Character; local h = c and c:FindFirstChildOfClass("Humanoid")
+            local a = h and h.Health > 0
+            pcall(function() tgl:SetDisabled(not a) end)
+            pcall(function() sld:SetDisabled(not a) end)
+            if not a and Config.HVH.Screech then
+                Config.HVH.Screech = false
+                pcall(function() Library.Toggles.HVH_Screech:SetValue(false) end)
+            end
+            task.wait(0.5)
+        end
+    end)
+end)
+
+end)() -- end of HVH addendum scope
+
+
 
