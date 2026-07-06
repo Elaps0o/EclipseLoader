@@ -8485,9 +8485,7 @@ end)
 -- =====================================================================
 -- HVH ADDENDUM — ported from user's open-source HvH reference
 --   * Multipoint (aim target selection samples multiple body points)
---   * No Spread                                (bullet_module hook)
 --   * No Camera Recoil (visual)                (CameraController hook)
---   * Auto Scope · Auto Stop · Auto Peek       (movement/aim helpers)
 --   * Screech Vision (X-ray chams) — toggle+slider LOCKED when dead;
 --     enemies fade in on ESP with a smooth animation.
 -- =====================================================================
@@ -8495,11 +8493,10 @@ end)
 
 
 Config.HVH = Config.HVH or {
-    Multipoint=false, NoSpread=false, NoCamRecoil=false,
-    AutoScope=false, AutoStop=false,
-    AutoPeek=false, AutoPeekKey=Enum.KeyCode.E,
+    Multipoint=false, NoCamRecoil=false,
     Screech=false, ScreechAlpha=0.55, ScreechColor=Color3.fromRGB(255,60,60),
 }
+
 
 -- Multipoint: wrap GetAimbotTargetPart -> pick closest-to-crosshair body point.
 do
@@ -8550,84 +8547,8 @@ do
     end)
 end
 
--- No Spread: best-effort BulletModule hook.
-task.spawn(function()
-    local ok, bm = pcall(function()
-        local rs = game:GetService("ReplicatedStorage")
-        local c = rs:FindFirstChild("Components")
-        local common = c and c:FindFirstChild("Common")
-        local bmod = common and common:FindFirstChild("BulletModule")
-        return bmod and require(bmod)
-    end)
-    if not ok or not bm then return end
-    local key = bm._performRaycast and "_performRaycast" or (bm.performRaycast and "performRaycast")
-    if not key then return end
-    local orig = bm[key]
-    bm[key] = function(self, spreadAmount, ...)
-        if Config.HVH.NoSpread then spreadAmount = 0 end
-        return orig(self, spreadAmount, ...)
-    end
-end)
+-- (No Spread / Auto Scope / Auto Stop / Auto Peek removed per user request)
 
--- Auto Scope / Auto Stop (Heartbeat).
-do
-    local vim = game:GetService("VirtualInputManager")
-    local _scoping = false
-    RunService.Heartbeat:Connect(function()
-        if not Config.GlobalEnable then return end
-        local char = LocalPlayer.Character; if not char then return end
-        local hum  = char:FindFirstChildOfClass("Humanoid")
-        local rp   = char:FindFirstChild("HumanoidRootPart")
-        if not (hum and rp) or hum.Health <= 0 then return end
-        local firing = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-        if Config.HVH.AutoStop and firing then
-            local v = rp.AssemblyLinearVelocity
-            if Vector3.new(v.X, 0, v.Z).Magnitude > 0.5 then
-                rp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
-                pcall(function() hum:Move(Vector3.zero, true) end)
-            end
-        end
-        if Config.HVH.AutoScope and firing then
-            local scoped = (LocalPlayer:GetAttribute("ScopeIncrement") or 0) > 0
-            if not scoped and not _scoping then
-                _scoping = true
-                pcall(function() vim:SendMouseButtonEvent(0, 0, 1, true, game, 1) end)
-                task.delay(0.25, function()
-                    pcall(function() vim:SendMouseButtonEvent(0, 0, 1, false, game, 1) end)
-                    _scoping = false
-                end)
-            end
-        end
-    end)
-end
-
--- Auto Peek.
-do
-    local origin, peeking, returning = nil, false, false
-    local function startPeek()
-        local char = LocalPlayer.Character
-        local rp = char and char:FindFirstChild("HumanoidRootPart")
-        if not rp then return end
-        origin, peeking, returning = rp.Position, true, false
-    end
-    local function endPeek()
-        local char = LocalPlayer.Character
-        local hum  = char and char:FindFirstChildOfClass("Humanoid")
-        if hum and origin and not returning then
-            returning = true
-            pcall(function() hum:MoveTo(origin) end)
-            task.delay(0.6, function() peeking = false; returning = false; origin = nil end)
-        end
-    end
-    UserInput.InputBegan:Connect(function(input, gpe)
-        if gpe or not Config.HVH.AutoPeek then return end
-        if input.KeyCode == Config.HVH.AutoPeekKey then
-            if peeking then endPeek() else startPeek() end
-        elseif peeking and input.UserInputType == Enum.UserInputType.MouseButton1 then
-            endPeek()
-        end
-    end)
-end
 
 -- Screech Vision (X-ray chams w/ alive-gate + fade animation).
 do
@@ -8688,17 +8609,9 @@ end
 pcall(function()
     local G = Tabs.Aim:AddRightGroupbox("HVH", "swords")
     G:AddToggle("HVH_Multipoint",  { Text="MULTIPOINT",       Default=false, Callback=function(v) Config.HVH.Multipoint=v end })
-    G:AddToggle("HVH_NoSpread",    { Text="NO SPREAD",        Default=false, Callback=function(v) Config.HVH.NoSpread=v end })
     G:AddToggle("HVH_NoCamRecoil", { Text="NO CAMERA RECOIL", Default=false, Callback=function(v) Config.HVH.NoCamRecoil=v end })
-    G:AddToggle("HVH_AutoScope",   { Text="AUTO SCOPE",       Default=false, Callback=function(v) Config.HVH.AutoScope=v end })
 end)
-pcall(function()
-    local G = Tabs.Movement:AddRightGroupbox("HVH", "move")
-    G:AddToggle("HVH_AutoStop", { Text="AUTO STOP", Default=false, Callback=function(v) Config.HVH.AutoStop=v end })
-    G:AddToggle("HVH_AutoPeek", { Text="AUTO PEEK", Default=false, Callback=function(v) Config.HVH.AutoPeek=v end })
-     :AddKeyPicker("HVH_AutoPeekKey", { Default="E", NoUI=false, Mode="Toggle", Text="Peek Key",
-        Callback=function(k) local ok, kc = pcall(function() return Enum.KeyCode[k] end); if ok and kc then Config.HVH.AutoPeekKey = kc end end })
-end)
+
 pcall(function()
     local G = Tabs.Visuals:AddRightGroupbox("SCREECH VISION", "eye")
     local tgl = G:AddToggle("HVH_Screech", { Text="SCREECH VISION", Default=false,
