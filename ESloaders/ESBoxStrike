@@ -3624,7 +3624,7 @@ pcall(function()
 end)
 
 function _sanitizeSkinConfig()
-    if not knives[Config.Skins.SelectedKnife] then
+    if not knives[Config.Skins.SelectedKnife] or Config.Skins.SelectedKnife == "T Knife" or Config.Skins.SelectedKnife == "CT Knife" then
         Config.Skins.SelectedKnife = "Butterfly Knife"
         pcall(function()
             if Options and Options.Knife_Select and Options.Knife_Select.Value ~= "Butterfly Knife" then
@@ -3714,14 +3714,32 @@ local function _restoreAppliedSkins()
                     if rec.Color then target.Color = rec.Color end
                     if rec.Material then target.Material = rec.Material end
                 end
+                target:SetAttribute("EclipseSkinSource", nil)
             end)
         end
     end
     SkinSystem._skinRestore = setmetatable({}, {__mode="k"})
 end
 
+function _clearSkinChangerRuntime()
+    pcall(_restoreAppliedSkins)
+    pcall(function()
+        for _, obj in ipairs(Camera:GetChildren()) do
+            obj:SetAttribute("SkinApplied", nil)
+            obj:SetAttribute("EclipseSkinSource", nil)
+            for _, d in ipairs(obj:GetDescendants()) do
+                d:SetAttribute("SkinApplied", nil)
+                d:SetAttribute("EclipseSkinSource", nil)
+            end
+        end
+    end)
+end
+
 local function _applySkinSourceToPart(target, source)
     if not target or not source or not target:IsA("BasePart") then return end
+    local sourceKey = nil
+    pcall(function() sourceKey = source:GetFullName() end)
+    if sourceKey and target:GetAttribute("EclipseSkinSource") == sourceKey then return end
     _cacheSkinTarget(target)
     pcall(function()
         for _, ch in ipairs(target:GetChildren()) do
@@ -3737,6 +3755,7 @@ local function _applySkinSourceToPart(target, source)
         if target:IsA("MeshPart") and source:IsA("MeshPart") and source.TextureID and source.TextureID ~= "" then
             target.TextureID = source.TextureID
         end
+        if sourceKey then target:SetAttribute("EclipseSkinSource", sourceKey) end
     end)
 end
 
@@ -3874,33 +3893,40 @@ local function spawnViewmodel(knife)
     if not SkinSystem.spawned and SkinSystem.vm then pcall(function() SkinSystem.vm:Destroy() end); SkinSystem.vm=nil; restoreOriginalKnife() end
 end
 
+function _applySelectedGloveSkin()
+    if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+    local gloveSkin = Config.Skins.SelectedSkins["Sports Gloves"]; if not gloveSkin or gloveSkin == "" then return end
+    pcall(function()
+        local gf = SkinsFolder:FindFirstChild("Sports Gloves"); if not gf then return end
+        local gs = gf:FindFirstChild(gloveSkin)
+        local gsr = gs and gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Factory New")
+        if not gsr then return end
+        for _, obj in ipairs(Camera:GetChildren()) do
+            local l = obj:FindFirstChild("Left Arm"); local r = obj:FindFirstChild("Right Arm")
+            if l or r then
+                for _, side in {"Left Arm","Right Arm"} do
+                    local arm = obj:FindFirstChild(side); local s = gsr:FindFirstChild(side)
+                    if arm and s then
+                        local gm = arm:FindFirstChild("Glove")
+                        if gm then
+                            _applySkinSourceToPart(gm, s)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
 local function applyWeaponSkin(model, forcedSkin)
     if not SkinsFolder or not model or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+    pcall(_applySelectedGloveSkin)
     local skin = forcedSkin or Config.Skins.SelectedSkins[model.Name]; if not skin then return end
     pcall(function()
         local sf = SkinsFolder:FindFirstChild(model.Name); if not sf then return end
         local st = sf:FindFirstChild(skin)
         local src = st and st:FindFirstChild("Camera") and st.Camera:FindFirstChild("Factory New")
         if not src then return end
-        for _, obj in Camera:GetChildren() do
-            local l = obj:FindFirstChild("Left Arm"); local r = obj:FindFirstChild("Right Arm")
-            if l or r then
-                local gf = SkinsFolder:FindFirstChild("Sports Gloves")
-                local gs = gf and gf:FindFirstChild(Config.Skins.SelectedSkins["Sports Gloves"])
-                local gsr = gs and gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Factory New")
-                if gsr then
-                    for _, side in {"Left Arm","Right Arm"} do
-                        local arm = obj:FindFirstChild(side); local s = gsr:FindFirstChild(side)
-                        if arm and s then
-                            local gm = arm:FindFirstChild("Glove")
-                            if gm then
-                                _applySkinSourceToPart(gm, s)
-                            end
-                        end
-                    end
-                end
-            end
-        end
         if not GLOVES[model.Name] then
             local wf = model:FindFirstChild("Weapon")
             if wf then
@@ -4812,9 +4838,6 @@ local function _desiredHUDForSlot(slotFrame, rawWeapon)
     rawWeapon = _cleanHUDWeaponText(rawWeapon) or rawWeapon
     if _isHUDMeleeSlot(slotFrame, rawWeapon) then
         local originalKnife = _localKnifeByTeam()
-        if not SkinSystem.scriptRunning then
-            return originalKnife, nil, originalKnife, false
-        end
         local knifeName = _selectedHUDKnife()
         local prettySkin = _hudSkinForWeapon(knifeName, originalKnife)
         local base = knifeName
@@ -4824,12 +4847,16 @@ local function _desiredHUDForSlot(slotFrame, rawWeapon)
     end
     local weaponName = rawWeapon; if not weaponName or weaponName == "" then return nil, nil, nil, false end
     local prettySkin = _hudSkinForWeapon(weaponName)
-    local text = prettySkin and ("\xE2\x98\x85 " .. weaponName .. " | " .. prettySkin) or weaponName
+    local text = prettySkin and (weaponName .. " | " .. prettySkin) or weaponName
     return text, nil, weaponName, prettySkin ~= nil
 end
 
 local function _queueHUDSlotApply(slotFrame)
-    task.defer(function()
+    local rec = slotFrame and HUDSkin.slots[slotFrame]
+    if rec and rec.queued then return end
+    if rec then rec.queued = true end
+    task.delay(0.04, function()
+        if rec then rec.queued = false end
         if scriptRunning and Config.Skins.SkinChangerEnabled and slotFrame and slotFrame.Parent then pcall(function() _applyOneSlot(slotFrame, false) end) end
     end)
 end
@@ -4856,7 +4883,7 @@ function _applyOneSlot(slotFrame, forceKnife)
     end)
     _hudDbg("slot=", slotFrame.Name, "weapon=", baseName, "hasSkin=", hasSkin, "icon=", icon, "iconLbl=", iconLbl and iconLbl:GetFullName() or "nil", "vp=", iconViewport and iconViewport:GetFullName() or "nil")
 
-    if isMelee and type(icon) == "string" and icon ~= "" and _hudIconOverrideAllowed() then
+    if isMelee and SkinSystem.scriptRunning and type(icon) == "string" and icon ~= "" and _hudIconOverrideAllowed() then
         -- Previous in-slot method: no top-level transparent GUI. We inject an
         -- ImageLabel into the real melee slot / mutate the slot ImageLabel when
         -- available. The chosen asset is hardcoded from dumps and converted to
@@ -4953,10 +4980,62 @@ function _hudLiteApplyToLabel(lbl, wantIcon, wantReverse)
     pcall(function() lbl.Image = target end)
 end
 
+function _restoreHUDLiteIcons()
+    for lbl, orig in pairs(_HUDLite.originals) do
+        if lbl and lbl.Parent and orig then pcall(function() lbl.Image = orig end) end
+    end
+    _HUDLite.originals = {}
+end
+
+function _scheduleHUDApply(delayT)
+    if HUDSkin.applyQueued then return end
+    HUDSkin.applyQueued = true
+    task.delay(delayT or 0.08, function()
+        HUDSkin.applyQueued = false
+        if scriptRunning and Config.Skins.SkinChangerEnabled then pcall(_applyHUDKnife, true) end
+    end)
+end
+
+function _hookHUDInventory(inv)
+    if HUDSkin.inventoryRef == inv then return end
+    if HUDSkin.inventoryChildConn then pcall(function() HUDSkin.inventoryChildConn:Disconnect() end); HUDSkin.inventoryChildConn = nil end
+    if HUDSkin.inventoryDescConn then pcall(function() HUDSkin.inventoryDescConn:Disconnect() end); HUDSkin.inventoryDescConn = nil end
+    HUDSkin.inventoryRef = inv
+    if not inv then return end
+    HUDSkin.inventoryChildConn = inv.ChildAdded:Connect(function(child)
+        _scheduleHUDApply(0.06)
+    end)
+    HUDSkin.inventoryDescConn = inv.DescendantAdded:Connect(function(d)
+        local n = tostring(d.Name)
+        if n == "WeaponName" or n == "Weapon" or n:find("Icon", 1, true) or d:IsA("ImageLabel") or d:IsA("ImageButton") or d:IsA("ViewportFrame") then
+            _scheduleHUDApply(0.06)
+        end
+    end)
+    table.insert(UnloadConnections, HUDSkin.inventoryChildConn)
+    table.insert(UnloadConnections, HUDSkin.inventoryDescConn)
+end
+
+function _hudInventorySlots(inv)
+    local out, seen = {}, {}
+    local function add(slot)
+        if slot and not seen[slot] and slot:FindFirstChild("Weapon") then
+            seen[slot] = true; out[#out + 1] = slot
+        end
+    end
+    for _, child in ipairs(inv:GetChildren()) do add(child) end
+    for _, d in ipairs(inv:GetDescendants()) do add(d) end
+    return out
+end
+
 _applyHUDKnife = function(_force)
     if not Config.Skins.SkinChangerEnabled then return end
     local inv = _hudInventory(); if not inv then return end
+    _hookHUDInventory(inv)
+    for _, slot in ipairs(_hudInventorySlots(inv)) do
+        pcall(function() _applyOneSlot(slot, tostring(slot.Name):lower():find("melee", 1, true) ~= nil) end)
+    end
     local slot = inv:FindFirstChild("Melee"); if not slot then return end
+    if not SkinSystem.scriptRunning then _restoreHUDLiteIcons(); return end
     local knife = _selectedHUDKnife()
     local asset = HUD_KNIFE_ASSETS[knife]
     if not asset then
@@ -4993,6 +5072,9 @@ function _postSkinConfigLoadApply()
 end
 
 function _restoreHUDKnife()
+    if HUDSkin.inventoryChildConn then pcall(function() HUDSkin.inventoryChildConn:Disconnect() end); HUDSkin.inventoryChildConn = nil end
+    if HUDSkin.inventoryDescConn then pcall(function() HUDSkin.inventoryDescConn:Disconnect() end); HUDSkin.inventoryDescConn = nil end
+    HUDSkin.inventoryRef = nil
     for slotFrame, rec in pairs(HUDSkin.slots) do
         if rec.conn then pcall(function() rec.conn:Disconnect() end); rec.conn = nil end
         if rec.iconConn then pcall(function() rec.iconConn:Disconnect() end); rec.iconConn = nil end
@@ -5012,10 +5094,7 @@ function _restoreHUDKnife()
     end
     HUDSkin.slots = setmetatable({}, {__mode="k"})
     -- Light melee override: restore all icon labels we touched.
-    for lbl, orig in pairs(_HUDLite.originals) do
-        if lbl and lbl.Parent and orig then pcall(function() lbl.Image = orig end) end
-    end
-    _HUDLite.originals = {}
+    _restoreHUDLiteIcons()
 end
 
 function _resetHUDSlots()
@@ -5032,7 +5111,7 @@ end
 task.spawn(function()
     while scriptRunning do
         if Config.Skins.SkinChangerEnabled then pcall(_applyHUDKnife, false) end
-        task.wait(0.25)
+        task.wait(0.8)
     end
 end)
 
@@ -5058,6 +5137,9 @@ function _nameOverlayRestoreAll() end
 function CleanupScript()
     scriptRunning = false
     sendWebhook("unloaded", "Script unloaded")
+    SkinSystem.scriptRunning=false
+    pcall(removeViewmodel)
+    pcall(_clearSkinChangerRuntime)
     pcall(_restoreHUDKnife)
     pcall(_nameOverlayRestoreAll)
     pcall(_restoreKnifeModuleOverride)
@@ -5265,6 +5347,7 @@ task.spawn(function()
     while scriptRunning do
         task.wait(0.5)
         if Config.Skins.SkinChangerEnabled and IsAlive() then
+            pcall(_applySelectedGloveSkin)
             for _, obj in Camera:GetChildren() do
                 local skinName = Config.Skins.SelectedSkins[obj.Name]
                 if skinName and obj:GetAttribute("SkinApplied") ~= skinName then
@@ -5289,7 +5372,9 @@ connectSignal(Camera.ChildAdded:Connect(function(obj)
     if not scriptRunning then return end
     if Config.Skins.SkinChangerEnabled and IsAlive() then
         local skinName = Config.Skins.SelectedSkins[obj.Name]
-        if skinName then task.wait(0.1); applyWeaponSkin(obj) end
+        task.wait(0.1)
+        pcall(_applySelectedGloveSkin)
+        if skinName then applyWeaponSkin(obj) end
     end
 end))
 
@@ -5578,7 +5663,7 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
         -- CUSTOM KNIFE requires the skin changer to be enabled.
         if not v then
             SkinSystem.scriptRunning=false; removeViewmodel()
-            _restoreAppliedSkins()
+            pcall(_clearSkinChangerRuntime)
             pcall(_restoreHUDKnife)
             pcall(_nameOverlayRestoreAll)
             pcall(_restoreKnifeModuleOverride)
@@ -5588,7 +5673,9 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
             -- Silently revert the custom-knife toggle when the parent goes off.
             pcall(function() if Toggles.Knife_Toggle then Toggles.Knife_Toggle:SetValue(false) end end)
         else
+            pcall(_applySelectedGloveSkin)
             pcall(_applyHUDKnife, true)
+            for _, delayT in ipairs({0.15, 0.45, 0.9}) do task.delay(delayT, function() pcall(_applyHUDKnife, true) end) end
         end
         _syncKnifeLock()
     end })
