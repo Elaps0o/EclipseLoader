@@ -32,7 +32,7 @@ local LocalPlayer = Players.LocalPlayer
 -- gatilho automático está off — nada de hooks CoreGui no boot, então o erro
 -- "attempt to index nil with 'Body'" em Obsidian não pode mais acontecer no
 -- 2º load. Para reativar futuramente, basta flipar isso para true.
-local ECLIPSE_BYPASS_ENABLED = true
+local ECLIPSE_BYPASS_ENABLED = false
 
 -- ============================================================
 --   DEVICE SPOOFER (built-in)
@@ -312,7 +312,7 @@ do
                 local ts, sig = val:match("^(%d+)|([%x]+)$")
                 ts = tonumber(ts)
                 if ts and sig and sig == _eclSig(uid, hwid, ts) then
-                    getgenv().Eclipse.sessionSeen = (os.time() - ts) < 8 * 3600
+                        getgenv().Eclipse.sessionSeen = (os.time() - ts) < 10 * 3600
                 end
             end
         end
@@ -5054,7 +5054,7 @@ end)
 -- ============================================================
 _NameOverlay = { labels = setmetatable({}, {__mode = "k"}) }
 
-local function _nameOverlay_desiredText(slotFrame, nameLbl)
+function _nameOverlay_desiredText(slotFrame, nameLbl)
     local rawWeapon = _slotWeaponKey(slotFrame, nameLbl) or tostring(slotFrame.Name)
     local isMelee = _isHUDMeleeSlot(slotFrame, rawWeapon)
     local displayName, skin
@@ -5071,7 +5071,7 @@ local function _nameOverlay_desiredText(slotFrame, nameLbl)
     return prefix .. tostring(displayName) .. " | " .. tostring(skin)
 end
 
-local function _nameOverlay_ensure(nameLbl)
+function _nameOverlay_ensure(nameLbl)
     local rec = _NameOverlay.labels[nameLbl]
     if rec and rec.overlay and rec.overlay.Parent then return rec end
     rec = rec or {
@@ -5103,7 +5103,7 @@ local function _nameOverlay_ensure(nameLbl)
     return rec
 end
 
-local function _nameOverlay_hideOriginal(nameLbl, rec)
+function _nameOverlay_hideOriginal(nameLbl, rec)
     if rec.origTransparency == nil then rec.origTransparency = nameLbl.TextTransparency end
     if rec.origStrokeTransparency == nil then rec.origStrokeTransparency = nameLbl.TextStrokeTransparency end
     pcall(function()
@@ -5112,7 +5112,7 @@ local function _nameOverlay_hideOriginal(nameLbl, rec)
     end)
 end
 
-local function _nameOverlay_restore(nameLbl, rec)
+function _nameOverlay_restore(nameLbl, rec)
     if rec and rec.overlay then pcall(function() rec.overlay:Destroy() end) end
     if nameLbl and nameLbl.Parent then
         pcall(function()
