@@ -880,7 +880,7 @@ local Config = {
         Enabled=false, FOV=150, Smoothness=0.35, TargetPart="Head",
         DrawFOV=true, VisibilityCheck=true, FOVColor=Color3.fromRGB(255,255,255),
         Global=true, SelectedWeapon="AK-47", PerWeapon={},
-        SilentAim=false, SilentFOV=250,
+        
     },
     TriggerBot = { Enabled=false, Delay=0.01, Mode="HitChance", HitChance=100, Spread=0 },
     ESP      = {
@@ -3339,99 +3339,8 @@ end
 function _getCurrentWeaponObj() return nil end
 function _weaponHasScope() return false end
 
--- =====================================================================
--- SILENT AIM  ·  universal __namecall hook (executor-agnostic)
--- Redirects bullet Direction / Hits[*].Position toward the closest visible
--- enemy Head within Config.Aimbot.SilentFOV pixels of the crosshair. Works
--- on the popular "ShootWeapon" remote pattern used by CS-style games —
--- transparent no-op when SilentAim is OFF or no target is in range.
--- =====================================================================
-function _silentFindTargetHead()
-    local mp = UserInput:GetMouseLocation()
-    local best, bestD = nil, Config.Aimbot.SilentFOV or 250
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer or not IsEnemy(plr) then continue end
-        local char = GetCharacter(plr); if not char then continue end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then continue end
-        local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
-        if not head then continue end
-        if Config.Aimbot.VisibilityCheck and not IsVisible(head) then continue end
-        local sp, on = Camera:WorldToViewportPoint(head.Position)
-        if on then
-            local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
-            if d < bestD then bestD = d; best = head end
-        end
-    end
-    return best
-end
+-- Silent Aim removed by user request.
 
-function _silentRewriteArgs(args)
-    if not (Config.GlobalEnable and Config.Aimbot.SilentAim) then return args end
-    local head = _silentFindTargetHead(); if not head then return args end
-    for i, v in ipairs(args) do
-        if type(v) == "table" then
-            local bullets = v.Bullets or (type(v[1]) == "table" and v[1].Bullets)
-            local origin  = v.Origin or (type(v[1]) == "table" and v[1].Origin) or Camera.CFrame.Position
-            if bullets and type(bullets) == "table" then
-                for _, b in ipairs(bullets) do
-                    if type(b) == "table" then
-                        local o = b.Origin or origin
-                        local dir = (head.Position - o).Unit
-                        b.Direction = dir
-                        if b.Hits and type(b.Hits) == "table" then
-                            for _, h in ipairs(b.Hits) do
-                                if type(h) == "table" then
-                                    h.Instance = head
-                                    h.Position = head.Position
-                                    h.Normal   = -dir
-                                    h.Distance = (head.Position - o).Magnitude
-                                end
-                            end
-                        end
-                    end
-                end
-                args[i] = v
-            end
-        end
-    end
-    return args
-end
-
-do
-    local ok = pcall(function()
-        local mt = getrawmetatable and getrawmetatable(game)
-        if not mt then return end
-        local oldNC = mt.__namecall
-        if hookmetamethod then
-            hookmetamethod(game, "__namecall", function(self, ...)
-                local method = getnamecallmethod and getnamecallmethod() or ""
-                if (method == "FireServer" or method == "InvokeServer" or method == "Fire" or method == "Send")
-                    and Config.GlobalEnable and Config.Aimbot.SilentAim then
-                    local args = _silentRewriteArgs({...})
-                    return oldNC(self, table.unpack(args))
-                end
-                return oldNC(self, ...)
-            end)
-        else
-            -- Fallback: replace __namecall directly (requires setreadonly).
-            if setreadonly then pcall(setreadonly, mt, false) end
-            mt.__namecall = function(self, ...)
-                local method = getnamecallmethod and getnamecallmethod() or ""
-                if (method == "FireServer" or method == "InvokeServer" or method == "Fire" or method == "Send")
-                    and Config.GlobalEnable and Config.Aimbot.SilentAim then
-                    local args = _silentRewriteArgs({...})
-                    return oldNC(self, table.unpack(args))
-                end
-                return oldNC(self, ...)
-            end
-            if setreadonly then pcall(setreadonly, mt, true) end
-        end
-    end)
-    if not ok then
-        pcall(function() Library:Notify({ Title="Silent Aim", Description="Unsupported executor (namecall hook unavailable)", Time=4 }) end)
-    end
-end
 
 
 
@@ -4833,9 +4742,15 @@ local function _desiredHUDForSlot(slotFrame, rawWeapon)
         return text, icon, originalKnife, prettySkin ~= nil
     end
     local weaponName = rawWeapon; if not weaponName or weaponName == "" then return nil, nil, nil, false end
+    -- Only touch weapons whose exact name matches a known skin folder — leaves
+    -- legit/renamed skins untouched. star only on melee (handled above).
+    if not (SkinsFolder and SkinsFolder:FindFirstChild(weaponName)) then
+        return nil, nil, weaponName, false
+    end
     local prettySkin = _hudSkinForWeapon(weaponName)
-    local text = prettySkin and ("\xE2\x98\x85 " .. weaponName .. " | " .. prettySkin) or weaponName
-    return text, nil, weaponName, prettySkin ~= nil
+    if not prettySkin then return nil, nil, weaponName, false end
+    local text = weaponName .. " | " .. prettySkin
+    return text, nil, weaponName, true
 end
 
 local function _queueHUDSlotApply(slotFrame)
@@ -5372,11 +5287,7 @@ AS.smth = AimGB:AddSlider("Aimbot_Smooth", { Text="SMOOTHNESS", Default=0.35, Mi
         else local o=_aimOverride(Config.Aimbot.SelectedWeapon); if o then o.Smoothness=v end end
     end })
 SafeAddDropdown(AimGB, "Aimbot_Part", { Text="TARGET PART", Values={"Head","Neck","Arms","Legs"}, Default="Head", Callback=function(v) Config.Aimbot.TargetPart=v end })
--- SILENT AIM: toggle-only, no sliders. Rewrites bullet Direction toward the
--- closest enemy head via a universal __namecall hook (works on any executor
--- that supports hookmetamethod OR falls back to __namecall replacement).
-AimGB:AddToggle("Aimbot_Silent", { Text="SILENT AIM", Default=false,
-    Callback=function(v) Config.Aimbot.SilentAim=v end })
+-- Silent Aim removed by user request.
 AimGB:AddToggle("Aimbot_DrawFOV", { Text="DRAW FOV",    Default=true, Callback=function(v) Config.Aimbot.DrawFOV=v end })
     :AddColorPicker("Aimbot_FOVColor", { Default=Color3.fromRGB(255,255,255), Title="FOV color", Callback=function(c) Config.Aimbot.FOVColor=c end })
 -- VISIBILITY CHECK is built-in and always on (no toggle).
