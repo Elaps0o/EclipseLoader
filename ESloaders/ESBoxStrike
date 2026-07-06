@@ -901,18 +901,22 @@ local Config = {
     },
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={} },
-    Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
+    Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil,
+                 NameOverride=false, SkinName="Fade" },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
     World    = { Weather="None" },
     Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
+    Sniper      = { AutoScope=false },
+    Effects     = {}, -- (kill effect / hit-notify toggles removed; hit logs live in MATCH LOGGING)
     -- === Screen Stretch (matrix aspect ratio) + Logging module ==========
     Stretch   = { Enabled=false, Ratio=1.30 },
     Logging   = { Enabled=false },
 
 }
+
 
 local _EclipseConfigLoading = false
 
@@ -3940,8 +3944,6 @@ end
 -- em runtime; se uma faca não estiver listada aqui, o AssetViewer pede
 -- confirmação antes de tentar aplicar.
 local HUD_KNIFE_ASSETS = {
-    ["CT Knife"]         = { Icon="rbxassetid://115204080823353", ReverseIcon="rbxassetid://102135209052420", Team="Counter-Terrorists" },
-    ["T Knife"]          = { Icon="rbxassetid://140484419446969", ReverseIcon="rbxassetid://100704390906232", Team="Terrorists" },
     ["Butterfly Knife"]  = { Icon="rbxassetid://78088217065173",  ReverseIcon="rbxassetid://119105180712017", Team="Both" },
     ["Karambit"]         = { Icon="rbxassetid://85121618781867",  ReverseIcon="rbxassetid://125193639488260", Team="Both" },
     ["Gut Knife"]        = { Icon="rbxassetid://91965772008164",  ReverseIcon="rbxassetid://71818508657433",  Team="Both" },
@@ -3951,10 +3953,8 @@ local HUD_KNIFE_ASSETS = {
 local HUD_KNIFE_ICONS = {}
 for n, data in pairs(HUD_KNIFE_ASSETS) do HUD_KNIFE_ICONS[n] = data.Icon end
 
-local HUD_KNIFE_TEAMS = {
-    ["CT Knife"] = "Counter-Terrorists",
-    ["T Knife"]  = "Terrorists",
-}
+local HUD_KNIFE_TEAMS = {}
+
 
 local function _hudInventory()
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui"); if not pg then return nil end
@@ -5362,11 +5362,9 @@ AS.smth = AimGB:AddSlider("Aimbot_Smooth", { Text="SMOOTHNESS", Default=0.35, Mi
         else local o=_aimOverride(Config.Aimbot.SelectedWeapon); if o then o.Smoothness=v end end
     end })
 SafeAddDropdown(AimGB, "Aimbot_Part", { Text="TARGET PART", Values={"Head","Neck","Arms","Legs"}, Default="Head", Callback=function(v) Config.Aimbot.TargetPart=v end })
--- SILENT AIM: toggle-only, no sliders. Rewrites bullet Direction toward the
--- closest enemy head via a universal __namecall hook (works on any executor
--- that supports hookmetamethod OR falls back to __namecall replacement).
-AimGB:AddToggle("Aimbot_Silent", { Text="SILENT AIM", Default=false,
-    Callback=function(v) Config.Aimbot.SilentAim=v end })
+-- SILENT AIM removed by user request (buggy on snipers).
+Config.Aimbot.SilentAim = false
+
 AimGB:AddToggle("Aimbot_DrawFOV", { Text="DRAW FOV",    Default=true, Callback=function(v) Config.Aimbot.DrawFOV=v end })
     :AddColorPicker("Aimbot_FOVColor", { Default=Color3.fromRGB(255,255,255), Title="FOV color", Callback=function(c) Config.Aimbot.FOVColor=c end })
 -- VISIBILITY CHECK is built-in and always on (no toggle).
@@ -5445,7 +5443,7 @@ end })
     :AddColorPicker("Grenade_LineCol", { Default=Config.Grenade.LineColor, Title="Trajectory color", Callback=function(c) Config.Grenade.LineColor=c end })
 
 
-local ChGB = Tabs.Visuals:AddLeftGroupbox("SNIPER CROSSHAIR", "crosshair")
+local ChGB = Tabs.Visuals:AddLeftGroupbox("SNIPER SETTINGS", "crosshair")
 ChGB:AddToggle("Sniper_CH_Toggle", { Text="SNIPER CROSSHAIR", Default=false,
     Callback=function(v) Config.Crosshair.SniperEnabled=v; for _,o in pairs(CH) do o.Visible=false end end })
 
@@ -5458,7 +5456,10 @@ ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=fu
 
 
 
-
+-- === SNIPER extras (auto scope) ================
+ChGB:AddDivider()
+ChGB:AddToggle("Sniper_AutoScope", { Text="AUTO SCOPE + FIRE", Default=false,
+    Callback=function(v) Config.Sniper.AutoScope=v end })
 
 
 
@@ -5594,7 +5595,8 @@ SkinGB:AddToggle("Knife_Toggle", { Text="CUSTOM KNIFE", Default=false,
         pcall(_applyHUDKnife, true)
     end })
 SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
-    Values={"Butterfly Knife","Karambit","M9 Bayonet","Gut Knife","CT Knife","T Knife"},
+    Values={"Butterfly Knife","Karambit","M9 Bayonet","Gut Knife"},
+
     Default=Config.Skins.SelectedKnife,
     Callback=function(v)
         -- Refuse to change knife while Skin Changer is disabled.
@@ -5610,8 +5612,16 @@ SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
     end })
 -- HUD Asset Viewer / confirmation UI removed. Injection happens automatically.
 
+-- === OVERRIDE NAME (★ Weapon | Skin) ===============================
+SkinGB:AddDivider()
+SkinGB:AddToggle("Name_Override_Toggle", { Text="OVERRIDE NAME", Default=false,
+    Callback=function(v) Config.Skins.NameOverride=v end })
+SkinGB:AddInput("Skin_Name_Input", { Text="SKIN NAME", Default="Fade", Placeholder="e.g. Dragon Lore",
+    Finished=false, Callback=function(v) Config.Skins.SkinName=(v ~= "" and v) or "Fade" end })
+
 -- Apply the initial lock state after both controls have registered.
 task.defer(_syncKnifeLock)
+
 
 -- 3D SKIN PREVIEW (ported from Mur4Scripts Update3DVisualizer): floating
 -- ViewportFrame panel that shows the currently-selected skin before it is
@@ -8380,7 +8390,11 @@ end)() -- CUSTOM SHOOT SOUNDS
         Text="KEYBIND LIST", Default=false,
         Callback=function(v) Config.KeybindList.Enabled = v end,
     })
+
+    -- (EFFECTS groupbox removed by user request — no kill effect, no hit-notify toggle.)
+
     -- (BULLET TRACER removed by user request.)
+
 
     -- (VOTEKICK INFO toggle removed by user request.)
     -- (New SPECTATOR LIST toggle removed — old one lives in Misc groupbox.)
@@ -8675,3 +8689,146 @@ task.spawn(function()
     end
 end)
 
+-- =====================================================================
+-- ADDITIONAL RUNTIME SYSTEMS (IIFE to avoid main-chunk register bloat)
+-- =====================================================================
+;(function()
+    local VIM = pcall(function() return game:GetService("VirtualInputManager") end)
+        and game:GetService("VirtualInputManager") or nil
+
+    -- ---------- OVERRIDE NAME (★ Weapon | Skin) ----------
+    _overrideNameOriginals = _overrideNameOriginals or {}
+    local function _findWeaponNameLabels()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui"); if not pg then return {} end
+        local ok, inv = pcall(function()
+            return pg.MainGui.Gameplay.Bottom.Inventory
+        end)
+        if not ok or not inv then return {} end
+        local out = {}
+        for _, slot in ipairs(inv:GetChildren()) do
+            local weapon = slot:FindFirstChild("Weapon")
+            if weapon then
+                local wn = weapon:FindFirstChild("WeaponName")
+                if wn and wn:IsA("TextLabel") then table.insert(out, {slot=slot, label=wn}) end
+            end
+        end
+        return out
+    end
+    task.spawn(function()
+        while task.wait(0.2) do
+            local entries = _findWeaponNameLabels()
+            for _, e in ipairs(entries) do
+                local lbl = e.label
+                if Config.Skins.NameOverride then
+                    if not _overrideNameOriginals[lbl] then
+                        _overrideNameOriginals[lbl] = lbl.Text
+                    end
+                    local weaponName = _overrideNameOriginals[lbl] or lbl.Text or ""
+                    -- Strip any previous override so we don't stack stars.
+                    weaponName = weaponName:gsub("^★%s*", ""):gsub("%s*|%s*.+$", "")
+                    local skin = tostring(Config.Skins.SkinName or "Fade")
+                    local newText = string.format("★ %s | %s", weaponName, skin)
+                    if lbl.Text ~= newText then lbl.Text = newText end
+                else
+                    if _overrideNameOriginals[lbl] and lbl.Text:find("★") then
+                        lbl.Text = _overrideNameOriginals[lbl]
+                    end
+                end
+            end
+        end
+    end)
+
+    -- ---------- SNIPER HELD DETECTION (used by auto scope) ----------
+    local function _heldIsSniper()
+        local cam = Workspace.CurrentCamera; if not cam then return false end
+        for _, ch in ipairs(cam:GetChildren()) do
+            if ch:IsA("Model") then
+                local n = ch.Name
+                if n ~= "Arms" and n ~= "Arms1" and n ~= "Arms2" and n ~= "Viewmodel" then
+                    if _rcsIsSniper and _rcsIsSniper(n) then return true, n end
+                end
+            end
+        end
+        return false
+    end
+
+    -- ---------- AUTO SCOPE + FIRE ----------
+    local _scoping = false
+    task.spawn(function()
+        while task.wait(0.05) do
+            if not (Config.GlobalEnable and Config.Sniper.AutoScope) then
+                if _scoping and VIM then
+                    pcall(function() VIM:SendMouseButtonEvent(0, 0, 1, false, game, 0) end)
+                    _scoping = false
+                end
+                continue
+            end
+            local sniperHeld, wname = _heldIsSniper()
+            if not sniperHeld then
+                if _scoping and VIM then
+                    pcall(function() VIM:SendMouseButtonEvent(0, 0, 1, false, game, 0) end)
+                    _scoping = false
+                end
+                continue
+            end
+            -- Enemy-in-FOV check (reuse silent aim helper: any enemy head near crosshair).
+            local mp = UserInput:GetMouseLocation()
+            local fov = Config.Aimbot.FOV or 250
+            local hasTarget = false
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LocalPlayer and IsEnemy(plr) then
+                    local char = GetCharacter(plr)
+                    local head = char and char:FindFirstChild("Head")
+                    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+                    if head and hum and hum.Health > 0 then
+                        local sp, on = Camera:WorldToViewportPoint(head.Position)
+                        if on then
+                            local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
+                            if d < fov then hasTarget = true; break end
+                        end
+                    end
+                end
+            end
+            if hasTarget and not _scoping and VIM then
+                pcall(function() VIM:SendMouseButtonEvent(0, 0, 1, true, game, 0) end)
+                _scoping = true
+            elseif not hasTarget and _scoping and VIM then
+                pcall(function() VIM:SendMouseButtonEvent(0, 0, 1, false, game, 0) end)
+                _scoping = false
+            end
+        end
+    end)
+
+    -- ---------- HIT DAMAGE (embedded in MATCH LOGGING) ----------
+    -- Listens to enemy HumanoidHealthChanged and logs damage via the
+    -- existing match-logging notify pipeline. No standalone toggle.
+    local _hpTrack = setmetatable({}, {__mode="k"})
+    task.spawn(function()
+        while task.wait(0.5) do
+            if not Config.Logging.Enabled then continue end
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LocalPlayer and IsEnemy(plr) then
+                    local char = GetCharacter(plr)
+                    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+                    if hum and not _hpTrack[hum] then
+                        _hpTrack[hum] = hum.Health
+                        hum.HealthChanged:Connect(function(newHp)
+                            local prev = _hpTrack[hum] or newHp
+                            local dmg  = math.floor(prev - newHp + 0.5)
+                            _hpTrack[hum] = newHp
+                            if dmg > 0 and Config.Logging.Enabled then
+                                pcall(function()
+                                    Library:Notify({
+                                        Title = "Hit",
+                                        Description = string.format("<b>%s</b> for <b>%d</b> HP", plr.Name, dmg),
+                                        Time = 2,
+                                    })
+                                end)
+                            end
+                        end)
+                    end
+                end
+            end
+        end
+    end)
+end)()
