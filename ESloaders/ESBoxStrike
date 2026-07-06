@@ -32,7 +32,7 @@ local LocalPlayer = Players.LocalPlayer
 -- gatilho automático está off — nada de hooks CoreGui no boot, então o erro
 -- "attempt to index nil with 'Body'" em Obsidian não pode mais acontecer no
 -- 2º load. Para reativar futuramente, basta flipar isso para true.
-local ECLIPSE_BYPASS_ENABLED = true
+local ECLIPSE_BYPASS_ENABLED = false
 
 -- ============================================================
 --   DEVICE SPOOFER (built-in)
@@ -214,68 +214,58 @@ do
 end
 
 -- ================================================================
--- LOADER GATE — verifies the caller came through the official Eclipse
--- loader by validating a signed auth token installed at getgenv().ECLIPSE_AUTH.
--- The loader signs { userId, username, issued } with a shared secret;
--- we recompute the signature and verify it binds to THIS LocalPlayer
--- and was issued in the last 5 minutes. Setting getgenv() manually
--- without the secret fails signature check.
+-- LOADER GATE — refuses to run unless the user came through the
+-- official Eclipse loader. Two independent checks: (1) the loader
+-- sets getgenv().EclipseLoaderLoaded in the same executor session,
+-- (2) the loader writes a signed session file we can re-verify with
+-- the shared secret. If BOTH fail, we kick and bail — this blocks
+-- "espertinhos" trying to loadstring ec.lua directly.
 -- ================================================================
 do
-    local SIG_SECRET = "ES_v1_9f2a4c1e8b6d3a57f2e0c9b1a48d76e2c5f0"
-    local MAX_AGE    = 300 -- 5 min
-    local function _sign(data)
-        local payload = data .. "|" .. SIG_SECRET
-        if crypt and type(crypt.hash) == "function" then
-            local o, h = pcall(crypt.hash, payload, "sha256"); if o and h then return h end
+    local ok = rawget(getgenv(), "EclipseLoaderLoaded") == true
+    if not ok and writefile and readfile and isfile then
+        local SESSION_FILE = "EclipseHub_session.dat"
+        local SIG_SECRET   = "ES_v1_9f2a4c1e8b6d3a57f2e0c9b1a48d76e2c5f0"
+        local SESSION_TTL  = 30 * 86400
+        local function _sign(data)
+            local payload = data .. "|" .. SIG_SECRET
+            if crypt and type(crypt.hash) == "function" then
+                local o, h = pcall(crypt.hash, payload, "sha256"); if o and h then return h end
+            end
+            if syn and syn.crypto and type(syn.crypto.hash) == "function" then
+                local o, h = pcall(syn.crypto.hash, "sha256", payload); if o and h then return h end
+            end
+            local h1, h2 = 2166136261, 3735928559
+            for i = 1, #payload do
+                local b = string.byte(payload, i)
+                h1 = (bit32.bxor(h1, b) * 16777619) % 0x100000000
+                h2 = (bit32.bxor(h2, b * 131 + i) * 2246822519) % 0x100000000
+            end
+            return string.format("%08x%08x", h1, h2)
         end
-        if syn and syn.crypto and type(syn.crypto.hash) == "function" then
-            local o, h = pcall(syn.crypto.hash, "sha256", payload); if o and h then return h end
-        end
-        local h1, h2 = 2166136261, 3735928559
-        for i = 1, #payload do
-            local b = string.byte(payload, i)
-            h1 = (bit32.bxor(h1, b) * 16777619) % 0x100000000
-            h2 = (bit32.bxor(h2, b * 131 + i) * 2246822519) % 0x100000000
-        end
-        return string.format("%08x%08x", h1, h2)
-    end
-
-    local ok = false
-    local reason = "missing auth token"
-    local auth = rawget(getgenv(), "ECLIPSE_AUTH")
-    if type(auth) == "table" then
-        local uid, uname, issued, token =
-            auth.userId, auth.username, auth.issued, auth.token
-        if type(uid) == "number" and type(uname) == "string"
-            and type(issued) == "number" and type(token) == "string" then
-            if uid ~= LocalPlayer.UserId then
-                reason = "user id mismatch"
-            elseif uname ~= LocalPlayer.Name then
-                reason = "username mismatch"
-            elseif math.abs(os.time() - issued) > MAX_AGE then
-                reason = "token expired"
-            else
-                local expect = _sign(tostring(uid) .. "|" .. uname .. "|" .. tostring(issued))
-                if expect == token then
-                    ok = true
-                else
-                    reason = "bad signature"
+        local ex = pcall(isfile, SESSION_FILE) and isfile(SESSION_FILE)
+        if ex then
+            local _, body = pcall(readfile, SESSION_FILE)
+            if body and body ~= "" then
+                local payload, sig = body:match("^(.-)%.([^%.]+)$")
+                if payload and sig and _sign(payload) == sig then
+                    local o, tbl = pcall(function() return HttpService:JSONDecode(payload) end)
+                    if o and type(tbl) == "table"
+                        and tbl.userId == LocalPlayer.UserId
+                        and tbl.username == LocalPlayer.Name
+                        and type(tbl.issued) == "number"
+                        and (os.time() - tbl.issued) <= SESSION_TTL then
+                        ok = true
+                    end
                 end
             end
-        else
-            reason = "malformed token"
         end
     end
-
-    -- Consume token so it cannot be replayed within the same session.
-    pcall(function() getgenv().ECLIPSE_AUTH = nil end)
-
     if not ok then
         pcall(function()
-            LocalPlayer:Kick("Eclipse Hub: please use the official loader (" .. reason .. ").")
+            LocalPlayer:Kick("Eclipse Hub: please use the official loader. Direct execution is blocked.")
         end)
-        error("Eclipse Hub: loader gate failed — " .. reason)
+        error("Eclipse Hub: loader gate failed — script must be launched by the Eclipse loader.")
     end
 end
 
@@ -880,7 +870,7 @@ local Config = {
         Enabled=false, FOV=150, Smoothness=0.35, TargetPart="Head",
         DrawFOV=true, VisibilityCheck=true, FOVColor=Color3.fromRGB(255,255,255),
         Global=true, SelectedWeapon="AK-47", PerWeapon={},
-        
+        SilentAim=false, SilentFOV=250,
     },
     TriggerBot = { Enabled=false, Delay=0.01, Mode="HitChance", HitChance=100, Spread=0 },
     ESP      = {
@@ -2518,12 +2508,6 @@ function c4Scheme(name, fallback)
     if ok and typeof(v) == "Color3" then return v end
     return fallback
 end
-
--- Auto-sizing pill panel, styled to match Keybind/Spectator list & Terms modal:
---   * Black bg (Transparency 0.4)  * White UIStroke (Transparency 0.6, 1px)
---   * 4px corner                    * Font.Code 12px white/accented
---   * Auto-fits text width via AutomaticSize.X = Enum.AutomaticSize.X
---   * Header dot (accent-coloured) + rich-text body + trailing "…" animation
 function ensureC4UI()
     if C4UI.frame and C4UI.frame.Parent then return end
     local parent = (Library and Library.ScreenGui) or CoreGui
@@ -2534,149 +2518,210 @@ function ensureC4UI()
         pcall(function() g.Parent = (gethui and gethui()) or CoreGui end)
         parent = g
     end
+    local MAIN_ = c4Scheme("MainColor",       Color3.fromRGB(20,20,20))
+    local OUT_  = c4Scheme("OutlineColor",    Color3.fromRGB(40,40,40))
+    local ACC_  = c4Scheme("AccentColor",     Color3.fromRGB(255,90,60))
+    local FG_   = c4Scheme("FontColor",       Color3.fromRGB(255,255,255))
 
+    -- Premium redesign: square panel with a segmented circular ring hugging
+    -- the seconds text at the centre. No linear bar, no "PLANTED" label.
     local f = Instance.new("Frame")
     f.Name = "C4Frame"
+    f.Size = UDim2.fromOffset(180, 180)
     f.AnchorPoint = Vector2.new(0, 0.5)
-    f.Position = UDim2.new(0, 14, 0.5, 0)
-    f.BackgroundColor3 = Color3.new(0, 0, 0)
-    f.BackgroundTransparency = 0.4
+    f.Position = UDim2.new(0, -210, 0.5, -90) -- off-screen for slide-in
+    f.BackgroundColor3 = MAIN_
+    f.BackgroundTransparency = 0.15
     f.BorderSizePixel = 0
-    f.Size = UDim2.fromOffset(10, 30)                    -- min size; auto-grows to text
-    f.AutomaticSize = Enum.AutomaticSize.X
-    f.Visible = false; f.Active = true; f.ZIndex = 60
+    f.Visible = false
+    f.Active = true
+    f.ZIndex = 60
     f.Parent = parent
     local stroke = Instance.new("UIStroke", f)
-    stroke.Color = Color3.new(1, 1, 1); stroke.Thickness = 1; stroke.Transparency = 0.6
-    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 4)
+    stroke.Color = OUT_; stroke.Thickness = 1; stroke.Transparency = 0.25
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 14)
+    -- Acrylic gradient background.
+    local grad = Instance.new("UIGradient", f)
+    grad.Rotation = 90
+    grad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(42,42,48)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(24,24,28)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(14,14,18)),
+    }
+    grad.Transparency = NumberSequence.new{
+        NumberSequenceKeypoint.new(0, 0.10),
+        NumberSequenceKeypoint.new(1, 0.28),
+    }
 
-    -- horizontal list: [dot] [text] [dots]
-    local pad = Instance.new("UIPadding", f)
-    pad.PaddingLeft = UDim.new(0, 10); pad.PaddingRight = UDim.new(0, 10)
-    pad.PaddingTop  = UDim.new(0, 4);  pad.PaddingBottom = UDim.new(0, 4)
-    local lay = Instance.new("UIListLayout", f)
-    lay.FillDirection = Enum.FillDirection.Horizontal
-    lay.SortOrder = Enum.SortOrder.LayoutOrder
-    lay.VerticalAlignment = Enum.VerticalAlignment.Center
-    lay.Padding = UDim.new(0, 6)
+    -- Title/header intentionally removed: the ring itself is the identifier,
+    -- keeping the panel clean and giving the number more room to breathe.
+    local title = Instance.new("TextLabel", f)
+    title.BackgroundTransparency = 1
+    title.Size = UDim2.new(1, 0, 0, 1)
+    title.Text = ""
+    title.Visible = false
 
-    local dot = Instance.new("Frame", f)
-    dot.Name = "Dot"; dot.LayoutOrder = 1
-    dot.Size = UDim2.fromOffset(8, 8)
-    dot.BackgroundColor3 = Color3.fromRGB(255, 90, 60)
-    dot.BorderSizePixel = 0; dot.ZIndex = 61
-    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+    -- Circular ring container (perfectly centred, larger radius).
+    local ring = Instance.new("Frame", f)
+    ring.BackgroundTransparency = 1
+    ring.AnchorPoint = Vector2.new(0.5, 0.5)
+    ring.Position = UDim2.fromScale(0.5, 0.5)
+    ring.Size = UDim2.fromOffset(140, 140)
+    ring.ZIndex = 61
 
-    local text = Instance.new("TextLabel", f)
-    text.Name = "Body"; text.LayoutOrder = 2
-    text.BackgroundTransparency = 1
-    text.AutomaticSize = Enum.AutomaticSize.X
-    text.Size = UDim2.fromOffset(0, 22)
-    text.Font = Enum.Font.Code; text.TextSize = 13
-    text.TextColor3 = Color3.new(1, 1, 1)
-    text.TextXAlignment = Enum.TextXAlignment.Left
-    text.RichText = true
-    text.Text = ""
-    text.ZIndex = 61
-
-    -- Animated trailing "…" (three dots that pulse in sequence).
-    local dots = Instance.new("TextLabel", f)
-    dots.Name = "Dots"; dots.LayoutOrder = 3
-    dots.BackgroundTransparency = 1
-    dots.AutomaticSize = Enum.AutomaticSize.X
-    dots.Size = UDim2.fromOffset(0, 22)
-    dots.Font = Enum.Font.Code; dots.TextSize = 13
-    dots.TextColor3 = Color3.fromRGB(200, 200, 205)
-    dots.TextXAlignment = Enum.TextXAlignment.Left
-    dots.RichText = false; dots.Text = ""
-    dots.ZIndex = 61
-    dots.Visible = false
-
-    -- Drag
-    do
-        local dragging, dStart, sPos
-        f.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                dragging = true; dStart = input.Position; sPos = f.Position
-                input.Changed:Connect(function()
-                    if input.UserInputState == Enum.UserInputState.End then dragging = false end
-                end)
-            end
-        end)
-        UserInput.InputChanged:Connect(function(input)
-            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-                local d = input.Position - dStart
-                f.Position = UDim2.new(sPos.X.Scale, sPos.X.Offset + d.X, sPos.Y.Scale, sPos.Y.Offset + d.Y)
-            end
-        end)
-    end
-
-    C4UI.frame  = f
-    C4UI.dot    = dot
-    C4UI.text   = text
-    C4UI.dots   = dots
-    C4UI.stroke = stroke
-    C4UI.shown  = false
-    C4UI.pinned = false          -- true while summary is held until respawn
-end
-
--- Ring removed by C4 redesign — kept as a no-op stub so old callers do not break.
-function updateC4Ring() end
-
-function C4Hide()
-    if not C4UI.frame then return end
-    if not C4UI.shown then C4UI.frame.Visible = false; return end
-    C4UI.shown = false; C4UI.pinned = false
-    local f = C4UI.frame
-    local tw = TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-        { BackgroundTransparency = 1 })
-    tw:Play()
-    tw.Completed:Once(function() if not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 0.4 end end)
-end
-
--- richText: string with <b>...</b> allowed; color: dot/stroke accent.
--- animateDots: if true, shows the trailing "…" ellipsis animation.
--- pinUntilAlive: if true, panel stays visible after the caller stops updating
---                until LocalPlayer respawns (used for DEFUSED / DETONATED / LOST).
-function C4Show(richText, color, animateDots, pinUntilAlive)
-    ensureC4UI()
-    if not C4UI.frame then return end
-    C4UI.text.Text = richText or ""
-    if color then
-        C4UI.dot.BackgroundColor3 = color
-        C4UI.stroke.Color = color; C4UI.stroke.Transparency = 0.45
-    else
-        C4UI.stroke.Color = Color3.new(1, 1, 1); C4UI.stroke.Transparency = 0.6
-    end
-    C4UI.dots.Visible = animateDots == true
-    C4UI.pinned = pinUntilAlive == true
-    if not C4UI.shown then
-        C4UI.shown = true
-        C4UI.frame.Visible = true
-        C4UI.frame.BackgroundTransparency = 1
-        TweenService:Create(C4UI.frame, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            { BackgroundTransparency = 0.4 }):Play()
-    end
-end
-
--- Trailing "…" animation loop — one dot appears every 0.33s, resets at 3.
-task.spawn(function()
-    while true do
-        task.wait(0.33)
-        if C4UI.dots and C4UI.dots.Visible then
-            local n = (#C4UI.dots.Text % 3) + 1
-            C4UI.dots.Text = string.rep(".", n)
+    -- Build one tick mark per whole second of the fuse. Ticks live on the
+    -- ring's circumference and are recoloured/faded to reflect progress.
+    local ticks = {}
+    local totalTicks = C4_FALLBACK_DURATION -- rebuilt on duration change
+    local radius = 62
+    local function buildTicks(count)
+        for _, t in ipairs(ticks) do t:Destroy() end
+        table.clear(ticks)
+        for i = 1, count do
+            local seg = Instance.new("Frame", ring)
+            seg.BackgroundColor3 = ACC_
+            seg.BorderSizePixel = 0
+            seg.Size = UDim2.fromOffset(3, 12)
+            seg.AnchorPoint = Vector2.new(0.5, 0.5)
+            local angle = (i - 1) / count * math.pi * 2 - math.pi / 2
+            seg.Position = UDim2.new(0.5, math.cos(angle) * radius, 0.5, math.sin(angle) * radius)
+            seg.Rotation = math.deg(angle) + 90
+            seg.ZIndex = 62
+            Instance.new("UICorner", seg).CornerRadius = UDim.new(1, 0)
+            ticks[i] = seg
         end
     end
-end)
+    buildTicks(totalTicks)
 
--- Returns true once the LocalPlayer's Humanoid has a fresh spawn with HP > 0.
-function _c4LocalPlayerAlive()
-    local ch = LocalPlayer.Character
-    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-    return hum and hum.Health > 0
+    -- Seconds label at the centre of the ring.
+    local time = Instance.new("TextLabel", ring)
+    time.BackgroundTransparency = 1
+    time.AnchorPoint = Vector2.new(0.5, 0.5)
+    time.Position = UDim2.fromScale(0.5, 0.44)
+    time.Size = UDim2.fromOffset(110, 54)
+    time.Font = Enum.Font.Code; time.TextSize = 42
+    time.TextColor3 = ACC_
+    time.TextXAlignment = Enum.TextXAlignment.Center
+    time.Text = "40"; time.ZIndex = 63
+
+    -- Sub-line under the number (defuser info etc.).
+    local sub = Instance.new("TextLabel", ring)
+    sub.BackgroundTransparency = 1
+    sub.AnchorPoint = Vector2.new(0.5, 0.5)
+    sub.Position = UDim2.fromScale(0.5, 0.72)
+    sub.Size = UDim2.fromOffset(150, 16)
+    sub.Font = Enum.Font.Code; sub.TextSize = 11
+    sub.TextColor3 = Color3.fromRGB(180,180,185)
+    sub.TextXAlignment = Enum.TextXAlignment.Center
+    sub.Text = ""; sub.ZIndex = 63
+
+    -- Drag support
+    local dragging, dStart, sPos
+    f.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; dStart = input.Position; sPos = f.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    UserInput.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - dStart
+            f.Position = UDim2.new(sPos.X.Scale, sPos.X.Offset + d.X, sPos.Y.Scale, sPos.Y.Offset + d.Y)
+        end
+    end)
+
+    C4UI.frame  = f
+    C4UI.title  = title
+    C4UI.time   = time
+    C4UI.sub    = sub
+    C4UI.accent = nil
+    C4UI.stroke = stroke
+    C4UI.bar    = nil -- legacy linear bar removed
+    C4UI.ring   = ring
+    C4UI.ticks  = ticks
+    C4UI.tickCount = totalTicks
+    C4UI.tickAccent = ACC_
+    C4UI.rebuildTicks = buildTicks
+    C4UI.shown  = false
 end
 
+-- Update the segmented ring so tick marks up to `remain` seconds are lit in
+-- the accent colour and the rest fade to a dim grey. Called from the C4
+-- update loop each frame while the panel is visible.
+function updateC4Ring(remain, duration, accent)
+    if not C4UI.ticks or not C4UI.tickCount then return end
+    local total = math.max(1, math.ceil(duration or C4_FALLBACK_DURATION))
+    if total ~= C4UI.tickCount and C4UI.rebuildTicks then
+        C4UI.rebuildTicks(total); C4UI.tickCount = total
+    end
+    if accent then C4UI.tickAccent = accent end
+    local litColor = C4UI.tickAccent or Color3.fromRGB(255,90,60)
+    local dimColor = Color3.fromRGB(60,60,66)
+    local lit = math.clamp(math.ceil(remain), 0, C4UI.tickCount)
+    for i, seg in ipairs(C4UI.ticks) do
+        if i <= lit then
+            seg.BackgroundColor3 = litColor
+            seg.BackgroundTransparency = 0
+        else
+            seg.BackgroundColor3 = dimColor
+            seg.BackgroundTransparency = 0.35
+        end
+    end
+end
+
+function C4Hide()
+    if not C4UI.frame or not C4UI.shown then
+        if C4UI.frame then C4UI.frame.Visible = false end
+        C4UI.shown = false
+        return
+    end
+    C4UI.shown = false
+    local f = C4UI.frame
+    local tween = TweenService:Create(f, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+        { Position = UDim2.new(0, -220, f.Position.Y.Scale, f.Position.Y.Offset) })
+    tween:Play()
+    tween.Completed:Once(function() if not C4UI.shown then f.Visible = false end end)
+end
+function C4Show(status, timeText, sub, color)
+    ensureC4UI()
+    if not C4UI.frame then return end
+    -- Title element is hidden entirely — ring + colour tell the story.
+    if C4UI.title then C4UI.title.Text = "" end
+
+    C4UI.time.Text  = timeText
+    local subLine = ""
+    if status == "DEFUSING" or status == "BOMB DEFUSED"
+       or status == "BOMB DETONATED" or status == "BOMB LOST"
+       or status == "TIME UP" then
+        subLine = status
+    end
+    if sub and sub ~= "" then
+        local cleaned = tostring(sub):gsub("PLANTED", ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if cleaned ~= "" then
+            subLine = (subLine ~= "" and (subLine .. " · ") or "") .. cleaned
+        end
+    end
+    C4UI.sub.Text = subLine
+    if color then
+        C4UI.time.TextColor3       = color
+        if C4UI.accent then C4UI.accent.BackgroundColor3 = color end
+        C4UI.stroke.Color          = color
+        C4UI.tickAccent            = color
+    end
+    if not C4UI.shown then
+        C4UI.shown = true
+        local f = C4UI.frame
+        f.Visible = true
+        -- Parchment unfurl: slide-in from left AND scale from 60% width → 100%.
+        f.Position = UDim2.new(0, -170, f.Position.Y.Scale, f.Position.Y.Offset)
+        local finalSz = UDim2.fromOffset(140, 140)
+        f.Size = UDim2.fromOffset(math.floor(140 * 0.6), 140)
+        TweenService:Create(f, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+            { Position = UDim2.new(0, 14, f.Position.Y.Scale, f.Position.Y.Offset), Size = finalSz }):Play()
+    end
+end
 
 function findDefuser()
     for _, p in ipairs(Players:GetPlayers()) do
@@ -2804,105 +2849,170 @@ function stopC4Timer()
 end
 
 function updateC4Timer()
+    -- Timer runs internally regardless of the toggle; toggle only hides the UI
+    -- so toggling off/on mid-round does NOT reset the countdown.
     local hideOnly = not Config.Misc.C4Timer
-    if hideOnly then C4Hide(); return end
-
-    -- Pinned summary (DEFUSED / DETONATED / LOST): keep panel visible untouched
-    -- until LocalPlayer respawns. CharacterAdded listener installed in
-    -- ensureC4UI() actually flips it off; here we just short-circuit.
-    if C4UI.pinned then return end
-
-    -- GUI-open preview: show a dim "C4 · 40s" while user drags the panel.
-    local guiOpen = (ECLIPSE._isGuiOpen and ECLIPSE._isGuiOpen()) or false
+    -- GUI open preview: while the main GUI is on-screen and the C4 toggle is
+    -- enabled, keep the panel visible even without a live bomb so the user can
+    -- drag/position it. When GUI closes and there's no bomb, it auto-hides.
+    local previewOpen = false
+    if not hideOnly then
+        local guiOpen = (ECLIPSE._isGuiOpen and ECLIPSE._isGuiOpen()) or false
+        if guiOpen and not C4Timer.planted and C4Timer.hideAt == 0 then
+            previewOpen = true
+            C4Show("", "40", "", Color3.fromRGB(120,120,130))
+        end
+    end
+    if hideOnly then C4Hide() end
+    -- When previewing (GUI open, no bomb), skip the rest — nothing else to compute.
+    if previewOpen then return end
+    local _C4Show = hideOnly and function() end or C4Show
     local bomb = getBombModel()
     local resolved = isBombResolvedState(bomb)
     local planted = bomb ~= nil and not resolved
 
-    if guiOpen and not planted and not resolved and not C4Timer.planted then
-        C4Show("<b>C4</b> · <b>40s</b>", Color3.fromRGB(120,120,130), false, false)
-        return
-    end
-
-    -- Resolution states → summary once + pin until respawn.
     if resolved and C4Timer.planted then
         if bomb and bomb:GetAttribute("Defused") == true then
-            C4Show("<b>BOMB DEFUSED</b>", Color3.fromRGB(90,220,140), false, true)
+            _C4Show("BOMB DEFUSED", "SAFE", "", Color3.fromRGB(90,220,140))
         elseif bomb and (bomb:GetAttribute("Exploded") == true or bomb:GetAttribute("Exploding") == true) then
-            C4Show("<b>BOMB DETONATED</b>", Color3.fromRGB(255,80,80), false, true)
+            _C4Show("BOMB DETONATED", "BOOM", "", Color3.fromRGB(255,80,80))
         else
-            C4Show("<b>TIME UP</b>", Color3.fromRGB(255,140,60), false, true)
+            _C4Show("TIME UP", "0", "fuse ended", Color3.fromRGB(255,140,60))
         end
+        -- Keep the panel visible showing SAFE / BOOM until the round ends
+        -- (bomb model despawns from the workspace tag). No auto-hide timer.
+        C4Timer.hideAt = 0
+        C4Timer.resolvedShown = true
         stopC4Timer(); return
     end
 
     if planted and not C4Timer.planted then startC4Timer(bomb) end
     if planted and C4Timer.planted then
-        C4Timer.bomb = bomb; syncC4Timer(bomb)
+        C4Timer.bomb = bomb
+        syncC4Timer(bomb)
     end
     if not planted and C4Timer.planted then
         local remainLeft = math.max(0, C4Timer.endT - tick())
         if isBombDefused() then
-            C4Show("<b>BOMB DEFUSED</b>", Color3.fromRGB(90,220,140), false, true)
+            _C4Show("BOMB DEFUSED", "SAFE", "", Color3.fromRGB(90,220,140))
         elseif remainLeft <= 0.5 then
-            C4Show("<b>BOMB DETONATED</b>", Color3.fromRGB(255,80,80), false, true)
+            _C4Show("BOMB DETONATED", "BOOM", "", Color3.fromRGB(255,80,80))
         else
-            C4Show("<b>BOMB LOST</b>", Color3.fromRGB(200,200,200), false, true)
+            _C4Show("BOMB LOST", "--", "signal lost", Color3.fromRGB(200,200,200))
         end
+        -- Same rule as above: linger on SAFE/BOOM/LOST until round ends.
+        C4Timer.hideAt = 0
+        C4Timer.resolvedShown = true
         stopC4Timer(); return
     end
+    -- Round-end detection: panel is holding a resolved state (SAFE/BOOM/LOST)
+    -- with no live bomb. Hide only when the Bomb tag is fully gone from the
+    -- workspace, meaning the round has actually reset.
+    if C4Timer.resolvedShown and not planted and not resolved then
+        local hasAnyBomb = false
+        pcall(function()
+            local tagged = CollectionService:GetTagged("Bomb")
+            for _, b in ipairs(tagged or {}) do
+                if b and b:IsDescendantOf(Workspace) then hasAnyBomb = true; break end
+            end
+        end)
+        if not hasAnyBomb then
+            C4Timer.resolvedShown = false
+            C4Hide()
+        end
+    end
+    if C4Timer.hideAt > 0 and tick() >= C4Timer.hideAt then
+        C4Timer.hideAt = 0; C4Hide()
+    end
+
     if not C4Timer.planted then
-        if C4UI.shown and not guiOpen then C4Hide() end
+        -- Nothing planted, no timer running: if the panel is showing only because
+        -- of the GUI-open preview and the GUI just closed, animate the hide.
+        if C4UI.shown and not hideOnly then
+            local guiOpen = (ECLIPSE._isGuiOpen and ECLIPSE._isGuiOpen()) or false
+            if not guiOpen then C4Hide() end
+        end
         return
     end
 
     local remain = math.max(0, C4Timer.endT - tick())
-    if remain <= 0 and C4Timer.exact then remain = 0 end
+    if remain <= 0 and C4Timer.exact then
+        remain = 0
+    end
     local d = findDefuser()
+    local sub, col = "", nil
     if d then
+        -- Defuse phase mirrors game logic (DefuseBomb script dump):
+        --   duration = 5s with kit, 10s without.
+        --   start is the defuser's server-synced DefuseStartTime attribute
+        --   (workspace:GetServerTimeNow() timebase). Fall back to local tick()
+        --   only when the attribute is missing or stale.
         local kit = d:GetAttribute("HasDefuseKit") == true
         local dur = kit and 5 or 10
         local nowServer = c4ServerNow()
         local startServer = d:GetAttribute("DefuseStartTime")
         local elapsed
         if typeof(startServer) == "number"
-           and startServer <= nowServer and (nowServer - startServer) >= 0
+           and startServer <= nowServer
+           and (nowServer - startServer) >= 0
            and (nowServer - startServer) <= math.max(dur, 12) then
             elapsed = nowServer - startServer
         else
             if C4Timer.defuser ~= d then
-                C4Timer.defuser = d; C4Timer.defuseStart = tick(); C4Timer.defuseDuration = dur
+                C4Timer.defuser = d
+                C4Timer.defuseStart = tick()
+                C4Timer.defuseDuration = dur
             end
             elapsed = tick() - (C4Timer.defuseStart or tick())
         end
         local defRemain = math.max(0, dur - elapsed)
-        local kitTag = kit and "KIT" or "NO KIT"
-        local defName = (d.DisplayName or d.Name)
-        C4Show(
-            string.format("<b>Defusing</b> <b>%s</b> [%s] · <b>%ds</b>",
-                defName, kitTag, math.ceil(defRemain)),
-            Color3.fromRGB(90, 200, 255),
-            true,   -- "..." animation
-            false)
+        local pct = math.clamp(defRemain / dur, 0, 1)
+        _C4Show("DEFUSING",
+            tostring(math.ceil(defRemain)),
+            string.format("%s [%s]", d.DisplayName or d.Name, kit and "KIT" or "NO KIT"),
+            Color3.fromRGB(90, 200, 255))
+        -- Circular ring reflects defuse progress in seconds.
+        updateC4Ring(defRemain, dur, Color3.fromRGB(90, 200, 255))
         return
     else
-        C4Timer.defuser = nil; C4Timer.defuseStart = nil
+        C4Timer.defuser = nil
+        C4Timer.defuseStart = nil
     end
-
-    local col
+    -- CS2-style urgency tiers based on time REMAINING on a 40s fuse:
+    --   >30s (elapsed 0-10) : calm red   · 1 beat/sec
+    --   20-30 (elapsed 10-20): warm ramp  · 1→2 beats/sec
+    --   10-20 (elapsed 20-30): orange     · 2→3 beats/sec
+    --    5-10 (elapsed 30-35): high red   · 5 beats/sec
+    --    <5   (elapsed 35-40): frenetic   · 8 beats/sec
     if     remain <= 5  then col = Color3.fromRGB(255, 50, 50)
     elseif remain <= 10 then col = Color3.fromRGB(255, 90, 60)
     elseif remain <= 20 then col = Color3.fromRGB(255, 170, 60)
     else                     col = Color3.fromRGB(255, 110, 70) end
-    C4Show(string.format("<b>C4</b> · <b>%ds</b>", math.ceil(remain)), col, false, false)
+    _C4Show("PLANTED", tostring(math.ceil(remain)), sub, col)
+    do
+        -- Segmented circular ring around the seconds text, one tick per second.
+        local total = C4Timer.duration > 0 and C4Timer.duration or C4_FALLBACK_DURATION
+        updateC4Ring(remain, total, col)
+    end
+    -- Ticking pulse: mirrors the CS2 beep cadence. `speed` here is 2× beats/sec
+    -- because sin(tick * speed * pi) completes a cycle every 2/speed seconds.
+    if C4UI.time then
+        local speed
+        if     remain > 30 then speed = 2                                 -- 1 bps
+        elseif remain > 20 then speed = 2 + (30 - remain) / 10 * 2        -- 1→2 bps
+        elseif remain > 10 then speed = 4 + (20 - remain) / 10 * 2        -- 2→3 bps
+        elseif remain > 5  then speed = 10                                -- 5 bps
+        else                    speed = 16                                -- 8 bps (frenetic)
+        end
+        local beat = 0.5 + 0.5 * math.sin(tick() * speed * math.pi)
+        C4UI.time.TextTransparency = (remain <= 30) and (0.15 * (1 - beat)) or 0
+        if C4UI.stroke then
+            C4UI.stroke.Transparency = 0.15 + 0.55 * (1 - beat) * (remain <= 30 and 1 or 0)
+        end
+    end
 
     tryAutoDefuse()
 end
-
--- Auto-hide pinned summary once the LocalPlayer respawns.
-LocalPlayer.CharacterAdded:Connect(function()
-    if C4UI and C4UI.pinned then C4Hide() end
-end)
-
 
 
 
@@ -3219,8 +3329,99 @@ end
 function _getCurrentWeaponObj() return nil end
 function _weaponHasScope() return false end
 
--- Silent Aim removed by user request.
+-- =====================================================================
+-- SILENT AIM  ·  universal __namecall hook (executor-agnostic)
+-- Redirects bullet Direction / Hits[*].Position toward the closest visible
+-- enemy Head within Config.Aimbot.SilentFOV pixels of the crosshair. Works
+-- on the popular "ShootWeapon" remote pattern used by CS-style games —
+-- transparent no-op when SilentAim is OFF or no target is in range.
+-- =====================================================================
+function _silentFindTargetHead()
+    local mp = UserInput:GetMouseLocation()
+    local best, bestD = nil, Config.Aimbot.SilentFOV or 250
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer or not IsEnemy(plr) then continue end
+        local char = GetCharacter(plr); if not char then continue end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+        if not head then continue end
+        if Config.Aimbot.VisibilityCheck and not IsVisible(head) then continue end
+        local sp, on = Camera:WorldToViewportPoint(head.Position)
+        if on then
+            local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
+            if d < bestD then bestD = d; best = head end
+        end
+    end
+    return best
+end
 
+function _silentRewriteArgs(args)
+    if not (Config.GlobalEnable and Config.Aimbot.SilentAim) then return args end
+    local head = _silentFindTargetHead(); if not head then return args end
+    for i, v in ipairs(args) do
+        if type(v) == "table" then
+            local bullets = v.Bullets or (type(v[1]) == "table" and v[1].Bullets)
+            local origin  = v.Origin or (type(v[1]) == "table" and v[1].Origin) or Camera.CFrame.Position
+            if bullets and type(bullets) == "table" then
+                for _, b in ipairs(bullets) do
+                    if type(b) == "table" then
+                        local o = b.Origin or origin
+                        local dir = (head.Position - o).Unit
+                        b.Direction = dir
+                        if b.Hits and type(b.Hits) == "table" then
+                            for _, h in ipairs(b.Hits) do
+                                if type(h) == "table" then
+                                    h.Instance = head
+                                    h.Position = head.Position
+                                    h.Normal   = -dir
+                                    h.Distance = (head.Position - o).Magnitude
+                                end
+                            end
+                        end
+                    end
+                end
+                args[i] = v
+            end
+        end
+    end
+    return args
+end
+
+do
+    local ok = pcall(function()
+        local mt = getrawmetatable and getrawmetatable(game)
+        if not mt then return end
+        local oldNC = mt.__namecall
+        if hookmetamethod then
+            hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod and getnamecallmethod() or ""
+                if (method == "FireServer" or method == "InvokeServer" or method == "Fire" or method == "Send")
+                    and Config.GlobalEnable and Config.Aimbot.SilentAim then
+                    local args = _silentRewriteArgs({...})
+                    return oldNC(self, table.unpack(args))
+                end
+                return oldNC(self, ...)
+            end)
+        else
+            -- Fallback: replace __namecall directly (requires setreadonly).
+            if setreadonly then pcall(setreadonly, mt, false) end
+            mt.__namecall = function(self, ...)
+                local method = getnamecallmethod and getnamecallmethod() or ""
+                if (method == "FireServer" or method == "InvokeServer" or method == "Fire" or method == "Send")
+                    and Config.GlobalEnable and Config.Aimbot.SilentAim then
+                    local args = _silentRewriteArgs({...})
+                    return oldNC(self, table.unpack(args))
+                end
+                return oldNC(self, ...)
+            end
+            if setreadonly then pcall(setreadonly, mt, true) end
+        end
+    end)
+    if not ok then
+        pcall(function() Library:Notify({ Title="Silent Aim", Description="Unsupported executor (namecall hook unavailable)", Time=4 }) end)
+    end
+end
 
 
 
@@ -3719,46 +3920,17 @@ local function ApplyWeaponSkinsFast(model, skinName)
     applyWeaponSkin(model, skinName)
 end
 
--- ===================== HUD SKIN SYNC (SAFE UI REPLACE, real-time) =====================
+-- ===================== HUD SKIN SYNC (SAFE OVERLAY, real-time) =====================
 -- UI-only: never loads weapon modules and never edits real weapon/viewmodel
--- instances. It replaces only the HUD melee slot visuals and leaves the real
--- weapon identity intact, so death/respawn/equip reloads keep following the game.
-local HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={}, viewer=nil, debugPrints=0 }
+-- instances. It hides the original HUD label/icon and draws cloned overlays above
+-- them, so death/respawn/equip reloads keep following the game normally.
+local HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={} }
 
-local function _hudDbg(...)
-    -- Keep console clean: a few HUD lines for diagnosis, no constant spam.
-    HUDSkin.debugPrints = (HUDSkin.debugPrints or 0) + 1
-    if HUDSkin.debugPrints <= 6 then print("[EclipseHUD]", ...) end
-end
-
--- Hardcoded knife HUD assets from verified weapon dumps. Do NOT put audio ids or
--- unknown ids here: the viewer now validates AssetFetchStatus, so bad ids stay
--- blocked instead of being shown as "ready" while rendering blank.
--- Dumps de faca fornecidos pelo usuário (Database.Custom.Weapons.*). Tudo aqui
--- é lido no boot para popular HUD_KNIFE_ICONS — o script NÃO faz dump direto
--- em runtime; se uma faca não estiver listada aqui, o AssetViewer pede
--- confirmação antes de tentar aplicar.
-local HUD_KNIFE_ASSETS = {
-    ["CT Knife"]         = { Icon="rbxassetid://115204080823353", Team="Counter-Terrorists" },
-    ["T Knife"]          = { Icon="rbxassetid://140484419446969", Team="Terrorists" },
-    ["Stiletto Knife"]   = { Icon="rbxassetid://71208637985987",  Team="Both" },
-    ["Skeleton Knife"]   = { Icon="rbxassetid://73573766861663",  Team="Both" },
-    ["Butterfly Knife"]  = { Icon="rbxassetid://75781072466921",  Team="Both" },
-    ["Karambit"]         = { Icon="rbxassetid://90116642907491",  Team="Both" },
-    ["M9 Bayonet"]       = { Icon="rbxassetid://122151088088611", Team="Both" },
-    ["Flip Knife"]       = { Icon="rbxassetid://84073333716773",  Team="Both" },
-    ["Gut Knife"]        = { Icon="rbxassetid://112036366395709", Team="Both" },
-    ["Bayonet"]          = { Icon="rbxassetid://75781072466921",  Team="Both" },
-    ["Huntsman Knife"]   = { Icon="rbxassetid://75781072466921",  Team="Both" },
-    ["Falchion Knife"]   = { Icon="rbxassetid://75781072466921",  Team="Both" },
-}
-
-local HUD_KNIFE_ICONS = {}
-for n, data in pairs(HUD_KNIFE_ASSETS) do HUD_KNIFE_ICONS[n] = data.Icon end
-
-local HUD_KNIFE_TEAMS = {
-    ["CT Knife"] = "Counter-Terrorists",
-    ["T Knife"]  = "Terrorists",
+local HUD_KNIFE_STATIC = {
+    ["CT Knife"]={Team="Counter-Terrorists",ReverseIcon="rbxassetid://102135209052420",Icon="rbxassetid://115204080823353"},
+    ["T Knife"]={Team="Terrorists",ReverseIcon="rbxassetid://100704390906232",Icon="rbxassetid://140484419446969"},
+    ["Stiletto Knife"]={Team="Both",ReverseIcon="rbxassetid://99694742066082",Icon="rbxassetid://71208637985987"},
+    ["Skeleton Knife"]={Team="Both",ReverseIcon="rbxassetid://131474722426757",Icon="rbxassetid://73573766861663"},
 }
 
 local function _hudInventory()
@@ -3782,69 +3954,13 @@ local function _assetString(v)
     end
     if type(v) == "number" then return "rbxassetid://" .. tostring(v) end
     if type(v) ~= "string" or v == "" then return nil end
-    v = v:gsub("^%s+", ""):gsub("%s+$", "")
-    if v == "" then return nil end
     if v:match("^%d+$") then return "rbxassetid://" .. v end
-    if v:match("^rbxthumb://") then return v end
-    local id = v:match("rbxassetid://(%d+)") or v:match("[?&]id=(%d+)") or v:match("[?&]assetId=(%d+)") or v:match("/library/(%d+)") or v:match("/catalog/(%d+)")
-    if id then return "rbxassetid://" .. id end
     return v
 end
 
-local function _assetIdFromString(v)
-    v = _assetString(v)
-    if type(v) ~= "string" or v == "" then return nil end
-    return v:match("rbxassetid://(%d+)") or v:match("[?&]id=(%d+)") or v:match("[?&]assetId=(%d+)") or v:match("^(%d+)$")
-end
-
-local function _assetThumb(v)
-    local id = _assetIdFromString(v)
-    if not id then return nil end
-    return "rbxthumb://type=Asset&id=" .. id .. "&w=420&h=420"
-end
-
-local function _assetThumbSmall(v)
-    local id = _assetIdFromString(v)
-    if not id then return nil end
-    return "rbxthumb://type=Asset&id=" .. id .. "&w=150&h=150"
-end
-
-local function _iconCandidates(icon)
-    local out, seen = {}, {}
-    local function add(v)
-        v = _assetString(v) or v
-        if type(v) == "string" and v ~= "" and not seen[v] then
-            seen[v] = true; out[#out + 1] = v
-        end
-    end
-    local id = _assetIdFromString(icon)
-    if id then
-        -- Raster thumbnail first: this behaves like an already-rendered JPG in
-        -- ImageLabel and avoids the blank raw-asset problem.
-        add("rbxthumb://type=Asset&id=" .. id .. "&w=420&h=420")
-        add("rbxthumb://type=Asset&id=" .. id .. "&w=150&h=150")
-        add("rbxassetid://" .. id)
-    end
-    add(icon)
-    return out
-end
-
-local function _hudConfirmedKnifeKey()
-    local sel = Config.Skins.SelectedKnife or "Butterfly Knife"
-    local data = _weaponInfo(sel) or HUD_KNIFE_ASSETS[sel]
-    local id = data and (_assetIdFromString(data.Icon) or "") or ""
-    return tostring(sel) .. ":" .. tostring(id)
-end
-
--- Confirmation GUI was removed; HUD icon override is always allowed while
--- the skin changer is on. The apply pipeline still validates the fetched
--- asset before swapping in, so no confirmation step is required.
-local function _hudIconOverrideAllowed()
-    return true
-end
-
--- IMPORTANT: the inventory slot wants the normal Icon only.
-local HUD_ICON_KEYS = {"Icon","InventoryIcon","SlotIcon","DisplayIcon","WeaponIcon","HUDIcon","HudIcon","Image","ImageId","ImageID","TextureId","TextureID","DecalId","DecalID","Thumbnail","ThumbnailId"}
+-- IMPORTANT: prefer "Icon" over "ReverseIcon" (the HUD uses the normal Icon,
+-- ReverseIcon is only a fallback for weird slot orientations).
+local HUD_ICON_KEYS = {"Icon","InventoryIcon","SlotIcon","DisplayIcon","WeaponIcon","HUDIcon","HudIcon","Image","ImageId","ImageID","TextureId","TextureID","DecalId","DecalID","Thumbnail","ThumbnailId","ReverseIcon"}
 
 local function _weaponModule(name)
     if type(name) ~= "string" or name == "" then return nil end
@@ -3861,31 +3977,21 @@ local function _readWeaponModuleSourceInfo(name)
     local mod = _weaponModule(name); if not mod then return nil end
     local info = {}
     for _, key in ipairs(HUD_ICON_KEYS) do
-        local ok, val = pcall(function() return mod:GetAttribute(key) end)
-        local a = ok and _assetString(val) or nil
-        if a then info.Icon = a; break end
+        if key ~= "ReverseIcon" then
+            local ok, val = pcall(function() return mod:GetAttribute(key) end)
+            local a = ok and _assetString(val) or nil
+            if a then info.Icon = a; break end
+        end
     end
     local okSrc, src = pcall(function() return mod.Source end)
     if okSrc and type(src) == "string" and src ~= "" then
         info.Team = src:match('Team%s*=%s*"([^"]+)"') or src:match("Team%s*=%s*'([^']+)'") or info.Team
-        -- Use a frontier pattern so only the exact Icon field is parsed.
+        info.ReverseIcon = _assetString(src:match('ReverseIcon%s*=%s*"([^"]+)"') or src:match("ReverseIcon%s*=%s*'([^']+)'") or info.ReverseIcon)
+        -- Use a frontier pattern so "Icon =" does NOT also match "ReverseIcon =".
+        -- Without %f[%w], src:match('Icon%s*=') would greedily match the
+        -- ReverseIcon assignment and info.Icon would be set to the reverse asset.
         info.Icon = _assetString(src:match('%f[%w]Icon%s*=%s*"([^"]+)"') or src:match("%f[%w]Icon%s*=%s*'([^']+)'") or info.Icon)
     end
-    if info.Icon or info.Team then return info end
-    return nil
-end
-
-local function _readWeaponRuntimeInfo(name)
-    local mod = _weaponModule(name); if not mod then return nil end
-    local okReq, data = pcall(function() return require(mod) end)
-    if not okReq or type(data) ~= "table" then return nil end
-    local info = {}
-    info.Team = type(rawget(data, "Team")) == "string" and rawget(data, "Team") or nil
-    for _, key in ipairs(HUD_ICON_KEYS) do
-        local a = _assetString(rawget(data, key))
-        if a then info.Icon = a; break end
-    end
-    info.ReverseIcon = _assetString(rawget(data, "ReverseIcon") or rawget(data, "ReverseHUDIcon") or rawget(data, "ReverseImage"))
     if info.Icon or info.ReverseIcon or info.Team then return info end
     return nil
 end
@@ -3893,25 +3999,20 @@ end
 local function _weaponInfo(name)
     if type(name) ~= "string" or name == "" then return nil end
     if HUDSkin.infoCache[name] ~= nil then return HUDSkin.infoCache[name] or nil end
-    local hardcoded = HUD_KNIFE_ASSETS[name]
-    local runtime = _readWeaponRuntimeInfo(name)
-    local source = _readWeaponModuleSourceInfo(name)
-    local info = runtime or source or hardcoded
-    if info and hardcoded then
-        info.Icon = info.Icon or hardcoded.Icon
-        info.ReverseIcon = info.ReverseIcon or hardcoded.ReverseIcon
-        info.Team = info.Team or hardcoded.Team
-    end
-    if info then HUDSkin.infoCache[name] = info end
+    local src = HUD_KNIFE_STATIC[name]
+    local info = src and {Team=src.Team,Icon=src.Icon,ReverseIcon=src.ReverseIcon} or _readWeaponModuleSourceInfo(name)
+    HUDSkin.infoCache[name] = info or false
     return info
 end
 
 local function _iconFromModule(name)
     local mod = _weaponModule(name); if not mod then return nil end
     for _, key in ipairs(HUD_ICON_KEYS) do
-        local ok, val = pcall(function() return mod:GetAttribute(key) end)
-        local a = ok and _assetString(val) or nil
-        if a then return a end
+        if key ~= "ReverseIcon" then
+            local ok, val = pcall(function() return mod:GetAttribute(key) end)
+            local a = ok and _assetString(val) or nil
+            if a then return a end
+        end
     end
     for _, d in ipairs(mod:GetDescendants()) do
         local dn = tostring(d.Name):lower()
@@ -3926,78 +4027,29 @@ local function _iconFromModule(name)
     return nil
 end
 
-local function _iconFromAssetsFolder(name)
-    if type(name) ~= "string" or name == "" then return nil end
-    local ok, root = pcall(function()
-        local assets = ReplicatedSt:FindFirstChild("Assets")
-        local weapons = assets and assets:FindFirstChild("Weapons")
-        return weapons and weapons:FindFirstChild(name)
-    end)
-    if not ok or not root then return nil end
-    -- Check attributes first.
-    for _, key in ipairs(HUD_ICON_KEYS) do
-        local okA, val = pcall(function() return root:GetAttribute(key) end)
-        local a = okA and _assetString(val) or nil
-        if a then return a end
-    end
-    -- Then look for descendant named Icon/Image/Thumbnail (skip reverse).
-    for _, d in ipairs(root:GetDescendants()) do
-        local dn = tostring(d.Name):lower()
-        if not dn:find("reverse", 1, true) then
-            if dn == "icon" or dn:find("^icon") or dn:find("image", 1, true) or dn:find("thumbnail", 1, true) then
-                local a = _assetString(d); if a then return a end
-            end
-        end
-    end
-    return nil
-end
-
 local function _iconForWeapon(name, fallbackName)
-    -- If the selected thing is a knife, do not ever borrow the T/CT Knife icon.
-    -- Missing custom icon means keep the game's original visible instead.
     local function read(n)
         if type(n) ~= "string" or n == "" then return nil end
         local info = _weaponInfo(n)
-        return (info and info.Icon)
-            or _iconFromModule(n)
-            or _iconFromAssetsFolder(n)
+        -- Always prefer the primary Icon; only fall back to ReverseIcon when Icon is missing.
+        return (info and info.Icon) or _iconFromModule(n) or (info and info.ReverseIcon)
     end
-    local direct = read(name)
-    if direct then return direct end
-    if KNIVES[name] or tostring(name or ""):lower():find("knife", 1, true) then return nil end
-    return read(fallbackName)
+    return read(name) or read(fallbackName)
 end
 
-local function _localKnifeByTeam()
-    -- Original slot identity: CT side owns CT Knife, T side owns T Knife.
-    -- Check CT first because "Counter-Terrorists" contains "Terrorists".
-    local teamName = ""
-    pcall(function()
-        teamName = tostring((LocalPlayer.Team and LocalPlayer.Team.Name)
-            or (LocalPlayer.TeamColor and LocalPlayer.TeamColor.Name)
-            or "")
-    end)
-    local function fromText(txt)
-        txt = tostring(txt or ""):lower()
-        if txt:find("counter", 1, true) or txt == "ct" or txt:find("counter%-terrorists") then return "CT Knife" end
-        if txt:find("terrorists", 1, true) or txt == "t" then return "T Knife" end
-        return nil
-    end
-    local byTeam = fromText(teamName); if byTeam then return byTeam end
-    local ch = LocalPlayer.Character
-    local parentName = ch and ch.Parent and ch.Parent.Name
-    local byParent = fromText(parentName); if byParent then return byParent end
-    if Camera then
-        if Camera:FindFirstChild("CT Knife") then return "CT Knife" end
-        if Camera:FindFirstChild("T Knife") then return "T Knife" end
-    end
-    return "T Knife"
-end
-
-local function _selectedHUDKnife()
+local function _resolveHUDKnife()
     local sel = Config.Skins.SelectedKnife or "Butterfly Knife"
-    if KNIVES[sel] or tostring(sel):lower():find("knife", 1, true) or tostring(sel):lower():find("bayonet", 1, true) then return sel end
-    return _localKnifeByTeam()
+    local myTeam = LocalPlayer.Team and LocalPlayer.Team.Name or nil
+    local info = _weaponInfo(sel)
+    if info and info.Team and info.Team ~= "Both" and myTeam then
+        local wantCT = (info.Team == "Counter-Terrorists")
+        local iAmCT = (myTeam == "Counter-Terrorists")
+        if wantCT ~= iAmCT then
+            sel = iAmCT and "CT Knife" or "T Knife"
+            info = _weaponInfo(sel)
+        end
+    end
+    return sel, info
 end
 
 local function _prettySkinName(raw)
@@ -4023,46 +4075,18 @@ local function _slotParts(slotFrame)
         end
     end
     if not (nameLbl and nameLbl:IsA("TextLabel")) then return nil end
-    -- The child named after the slot ("Melee", "Primary", "Secondary") can be
-    -- either an ImageLabel/ImageButton (regular weapons) OR a ViewportFrame
-    -- showing the 3D knife model (melee). We must handle BOTH so the icon we
-    -- apply is actually visible.
-    local iconLbl, iconViewport, iconAnchor = nil, nil, nil
-    local named = w:FindFirstChild(slotFrame.Name)
-    if named then
-        iconAnchor = named:IsA("GuiObject") and named or nil
-        if named:IsA("ImageLabel") or named:IsA("ImageButton") then iconLbl = named
-        elseif named:IsA("ViewportFrame") then iconViewport = named end
-        if not iconLbl and not iconViewport then
-            for _, d in ipairs(named:GetDescendants()) do
-                if tostring(d.Name):find("^EclipseHUD") then
-                    -- ignore our own replacement images
-                elseif (d:IsA("ImageLabel") or d:IsA("ImageButton")) and not iconLbl then
-                    iconLbl = d
-                elseif d:IsA("ViewportFrame") and not iconViewport then
-                    iconViewport = d
-                end
-            end
-        end
-    end
-    if not iconLbl and not iconViewport then
+    local iconLbl = w:FindFirstChild(slotFrame.Name)
+    if not (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton"))) then
         for _, d in ipairs(w:GetDescendants()) do
-            if tostring(d.Name):find("^EclipseHUD") then
-                -- ignore our own overlays
-            elseif (d:IsA("ImageLabel") or d:IsA("ImageButton")) and not iconLbl then
-                iconLbl = d
-            elseif d:IsA("ViewportFrame") and not iconViewport then
-                iconViewport = d
-            end
+            if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and not tostring(d.Name):find("^EclipseHUD") then iconLbl = d; break end
         end
     end
-    return nameLbl, iconLbl, iconViewport, iconAnchor
+    return nameLbl, iconLbl
 end
 
 local function _cleanHUDWeaponText(t)
     if type(t) ~= "string" then return nil end
     local pipe = t:find(" | ", 1, true); if pipe then t = t:sub(1, pipe - 1) end
-    if t:sub(1, 3) == "\xE2\x98\x85" then t = t:sub(4) end
     t = t:gsub("^%s+", ""):gsub("%s+$", "")
     if t == "" then return nil end
     return t
@@ -4171,414 +4195,25 @@ local function _showKnifeViewportIcon(rec, iconLbl, knifeName)
     return true
 end
 
-local function _ensureIconImage(rec, anchor)
-    if not (rec and anchor and anchor.Parent) then return nil end
-    local parent = anchor.Parent
-    local img = rec.iconImage
-    if not (img and img.Parent) then
-        local old = parent:FindFirstChild("EclipseHUDIcon"); if old then pcall(function() old:Destroy() end) end
-        img = Instance.new("ImageLabel")
-        img.Name = "EclipseHUDIcon"; img.BackgroundTransparency = 1; img.BorderSizePixel = 0
-        img.ScaleType = Enum.ScaleType.Fit; img.Active = false; img.Selectable = false
-        img.ClipsDescendants = false
-        img.Parent = parent
-        rec.iconImage = img
-    elseif img.Parent ~= parent then
-        img.Parent = parent
-    end
-    pcall(function()
-        if anchor:IsA("GuiObject") then
-            img.AnchorPoint = anchor.AnchorPoint
-            img.Position    = anchor.Position
-            img.Size        = anchor.Size
-            img.Rotation    = anchor.Rotation
-            img.ZIndex      = math.max((anchor.ZIndex or 1) + 100, 150)
-        else
-            img.AnchorPoint = Vector2.new(0.5, 0.5)
-            img.Position    = UDim2.fromScale(0.5, 0.5)
-            img.Size        = UDim2.fromScale(1, 1)
-            img.Rotation    = 0
-            img.ZIndex      = 150
-        end
-        img.ImageColor3 = Color3.fromRGB(255,255,255)
-        img.ImageTransparency = 0
-        img.BackgroundTransparency = 1
-        img.Visible = true
-        img.ScaleType = Enum.ScaleType.Fit
-    end)
-    return img
-end
-
-local function _syncHUDFallbackGeometry(source, fallback)
-    if not (source and fallback) then return end
-    pcall(function()
-        fallback.AnchorPoint = source.AnchorPoint
-        fallback.Position = source.Position
-        fallback.Size = source.Size
-        fallback.Rotation = source.Rotation
-        fallback.ZIndex = math.max((source.ZIndex or 2) - 1, 1)
-        fallback.Visible = source.Visible
-    end)
-end
-
-local function _ensureIconFallbackImage(rec, source)
-    if not (rec and source and source.Parent) then return nil end
-    local parent = source.Parent
-    local img = rec.iconFallbackImage
-    if not (img and img.Parent) then
-        local old = parent:FindFirstChild("EclipseHUDIconThumbFallback"); if old then pcall(function() old:Destroy() end) end
-        img = Instance.new("ImageLabel")
-        img.Name = "EclipseHUDIconThumbFallback"
-        img.BackgroundTransparency = 1; img.BorderSizePixel = 0
-        img.ScaleType = Enum.ScaleType.Fit; img.Active = false; img.Selectable = false
-        img.ClipsDescendants = false
-        img.Parent = parent
-        rec.iconFallbackImage = img
-    elseif img.Parent ~= parent then
-        img.Parent = parent
-    end
-    _syncHUDFallbackGeometry(source, img)
-    pcall(function()
-        img.ImageColor3 = Color3.fromRGB(255,255,255)
-        img.ImageTransparency = 0
-        img.BackgroundTransparency = 1
-        img.ScaleType = Enum.ScaleType.Fit
-        img.ImageRectOffset = Vector2.new(0,0)
-        img.ImageRectSize = Vector2.new(0,0)
-    end)
-    return img
-end
-
-local function _preloadHUDIcon(icon)
-    local candidates = _iconCandidates(icon)
-    if #candidates == 0 then return end
-    task.spawn(function()
-        for _, candidate in ipairs(candidates) do
-            local tmp = Instance.new("ImageLabel")
-            tmp.BackgroundTransparency = 1
-            tmp.Image = candidate
-            local finalStatus = "Unknown"
-            local ok, err = pcall(function()
-                ContentProvider:PreloadAsync({tmp}, function(_, status)
-                    finalStatus = tostring(status):gsub("Enum.AssetFetchStatus%.", "")
-                end)
-            end)
-            if ok then
-                pcall(function()
-                    finalStatus = tostring(ContentProvider:GetAssetFetchStatus(candidate)):gsub("Enum.AssetFetchStatus%.", "")
-                end)
-            end
-            _hudDbg("preload", candidate, ok and finalStatus or tostring(err))
-            pcall(function() tmp:Destroy() end)
-        end
-    end)
-end
-
-local function _prepHUDImageLabel(img)
-    if not img then return end
-    pcall(function()
-        img.BackgroundTransparency = 1
-        img.ImageColor3 = Color3.fromRGB(255,255,255)
-        img.ImageTransparency = 0
-        img.ImageRectOffset = Vector2.new(0,0)
-        img.ImageRectSize = Vector2.new(0,0)
-        img.ScaleType = Enum.ScaleType.Fit
-        img.Visible = true
-    end)
-end
-
-local function _isImageLoaded(img)
-    local loaded = false
-    pcall(function() loaded = img.IsLoaded == true end)
-    return loaded
-end
-
-local function _assetFetchStatus(candidate)
-    local status = "Unknown"
-    pcall(function()
-        status = tostring(ContentProvider:GetAssetFetchStatus(candidate)):gsub("Enum.AssetFetchStatus%.", "")
-    end)
-    return status
-end
-
-local function _statusIsGood(status)
-    status = tostring(status or "")
-    return status:find("Success", 1, true) ~= nil or status:find("Loaded", 1, true) ~= nil
-end
-
-local function _statusIsBad(status)
-    status = tostring(status or "")
-    return status:find("Failure", 1, true) ~= nil or status:find("Failed", 1, true) ~= nil
-        or status:find("Error", 1, true) ~= nil or status:find("TimedOut", 1, true) ~= nil
-end
-
-local function _imageCandidateReady(img, candidate)
-    local loaded = _isImageLoaded(img)
-    local status = _assetFetchStatus(candidate)
-    return (loaded or _statusIsGood(status)) and not _statusIsBad(status), loaded, status
-end
-
-local function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed)
-    if not (rec and img and img.Parent) then return false end
-    local candidates = _iconCandidates(icon)
-    if #candidates == 0 then return false end
-    rec.iconToken = (rec.iconToken or 0) + 1
-    local token = rec.iconToken
-    _prepHUDImageLabel(img)
-    img.Image = candidates[1]
-    rec.lastIcon = candidates[1]
-    _hudDbg("image try", debugTag or "slot", "candidate=", candidates[1], "target=", img:GetFullName())
-
-    -- Roblox can report ImageLabel.IsLoaded=false even after PreloadAsync says ok.
-    -- To avoid the blank/invisible HUD state, keep a thumbnail from the SAME asset
-    -- rendered underneath the direct icon. If the direct rbxassetid renders, it wins;
-    -- if it stays blank, the thumb is already visible and the original slot is never
-    -- destructively hidden as a "failure" fallback.
-    local thumb = _assetThumb(icon)
-    if thumb then
-        local fb = _ensureIconFallbackImage(rec, img)
-        if fb then
-            pcall(function()
-                fb.Image = thumb
-                fb.Visible = true
-            end)
-            task.spawn(function()
-                pcall(function() ContentProvider:PreloadAsync({fb}) end)
-            end)
-        end
-    elseif rec.iconFallbackImage then
-        pcall(function() rec.iconFallbackImage.Visible = false end)
-    end
-
-    task.spawn(function()
-        local finalIcon = candidates[1]
-        local anyLoaded = false
-        for i, candidate in ipairs(candidates) do
-            if rec.iconToken ~= token or not img.Parent then return end
-            pcall(function()
-                _prepHUDImageLabel(img)
-                img.Image = candidate
-                if rec.iconFallbackImage then _syncHUDFallbackGeometry(img, rec.iconFallbackImage) end
-            end)
-            local preloadStatus = "Unknown"
-            local preloadOk = pcall(function()
-                ContentProvider:PreloadAsync({img}, function(_, status)
-                    preloadStatus = tostring(status):gsub("Enum.AssetFetchStatus%.", "")
-                end)
-            end)
-            task.wait(i == 1 and 0.35 or 0.45)
-            local ready, loaded, fetchStatus = _imageCandidateReady(img, candidate)
-            if preloadStatus ~= "Unknown" then fetchStatus = preloadStatus end
-            _hudDbg("image state", debugTag or "slot", "candidate=", candidate, "preload=", tostring(preloadOk), "status=", tostring(fetchStatus), "loaded=", tostring(loaded))
-            if ready then
-                anyLoaded = true
-                finalIcon = candidate
-                break
-            end
-        end
-        if rec.iconToken ~= token or not img.Parent then return end
-        if not anyLoaded and thumb then
-            finalIcon = thumb
-            pcall(function()
-                _prepHUDImageLabel(img)
-                img.Image = thumb
-                if rec.iconFallbackImage then rec.iconFallbackImage.Visible = false end
-            end)
-            task.wait(0.25)
-            local ready, loaded, fetchStatus = _imageCandidateReady(img, thumb)
-            anyLoaded = ready
-            _hudDbg("thumb fallback", debugTag or "slot", "status=", tostring(fetchStatus), "loaded=", tostring(loaded), "ready=", tostring(ready))
-        end
-        if not anyLoaded then
-            _hudDbg("image rejected", debugTag or "slot", "all candidates failed")
-            pcall(function()
-                img.Visible = false
-                if rec.iconFallbackImage then rec.iconFallbackImage.Visible = false end
-            end)
-            if onFailed then pcall(onFailed) end
-            return
-        end
-        rec.lastIcon = finalIcon
-        _hudDbg("image accepted", debugTag or "slot", "final=", tostring(finalIcon))
-        if onLoaded then pcall(onLoaded, finalIcon) end
-    end)
-    return true
-end
-
-local _applyHUDKnife
-
-local function _ensureHUDAssetViewer()
-    if HUDSkin.viewer and HUDSkin.viewer.gui and HUDSkin.viewer.gui.Parent then return HUDSkin.viewer end
-    local parent = (gethui and gethui()) or CoreGui
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "EclipseHUDAssetViewer"; gui.ResetOnSpawn = false; gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; gui.DisplayOrder = 10001; gui.Enabled = false
-    pcall(function() gui.Parent = parent end)
-
-    local frame = Instance.new("Frame", gui)
-    frame.Name = "Panel"; frame.Size = UDim2.fromOffset(430, 316); frame.Position = UDim2.new(0.5, -215, 0.5, -158)
-    frame.BackgroundColor3 = Color3.fromRGB(18,18,20); frame.BorderSizePixel = 0; frame.ZIndex = 200
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
-    local stroke = Instance.new("UIStroke", frame); stroke.Color = Color3.fromRGB(55,55,62); stroke.Thickness = 1
-
-    local title = Instance.new("TextLabel", frame)
-    title.Name = "Title"; title.BackgroundTransparency = 1; title.Position = UDim2.fromOffset(14, 10); title.Size = UDim2.new(1, -52, 0, 20)
-    title.Font = Enum.Font.Code; title.TextSize = 14; title.TextXAlignment = Enum.TextXAlignment.Left; title.TextColor3 = Color3.fromRGB(235,235,240); title.Text = "HUD ASSET VIEWER"; title.ZIndex = 201
-
-    local close = Instance.new("TextButton", frame)
-    close.Name = "Close"; close.Size = UDim2.fromOffset(24, 24); close.Position = UDim2.new(1, -32, 0, 8)
-    close.BackgroundTransparency = 1; close.Text = "×"; close.Font = Enum.Font.Code; close.TextSize = 18; close.TextColor3 = Color3.fromRGB(210,210,220); close.ZIndex = 202
-
-    local status = Instance.new("TextLabel", frame)
-    status.Name = "Status"; status.BackgroundTransparency = 1; status.Position = UDim2.fromOffset(14, 34); status.Size = UDim2.new(1, -28, 0, 34)
-    status.Font = Enum.Font.Code; status.TextSize = 12; status.TextWrapped = true; status.TextXAlignment = Enum.TextXAlignment.Left; status.TextColor3 = Color3.fromRGB(180,180,190); status.Text = ""; status.ZIndex = 201
-
-    local list = Instance.new("Frame", frame)
-    list.Name = "List"; list.BackgroundTransparency = 1; list.Position = UDim2.fromOffset(12, 76); list.Size = UDim2.new(1, -24, 0, 178); list.ZIndex = 201
-    local layout = Instance.new("UIGridLayout", list); layout.CellSize = UDim2.fromOffset(92, 82); layout.CellPadding = UDim2.fromOffset(8, 8); layout.SortOrder = Enum.SortOrder.LayoutOrder
-
-    local confirm = Instance.new("TextButton", frame)
-    confirm.Name = "Confirm"; confirm.Position = UDim2.fromOffset(12, 266); confirm.Size = UDim2.new(1, -24, 0, 36)
-    confirm.BackgroundColor3 = Color3.fromRGB(42, 115, 210); confirm.BorderSizePixel = 0; confirm.Font = Enum.Font.Code; confirm.TextSize = 13
-    confirm.TextColor3 = Color3.fromRGB(255,255,255); confirm.Text = "INJECT SELECTED HUD IMAGE"; confirm.ZIndex = 202
-    Instance.new("UICorner", confirm).CornerRadius = UDim.new(0, 5)
-
-    close.MouseButton1Click:Connect(function() gui.Enabled = false end)
-    confirm.MouseButton1Click:Connect(function()
-        local selectedIcon = _iconForWeapon(Config.Skins.SelectedKnife)
-        if not selectedIcon then
-            status.Text = "Blocked: no readable Icon found for " .. tostring(Config.Skins.SelectedKnife)
-            _hudDbg("HUD image override blocked; no Icon", Config.Skins.SelectedKnife)
-            return
-        end
-        Config.Skins.HUDIconOverrideConfirmed = true
-        Config.Skins.HUDIconConfirmedKey = _hudConfirmedKnifeKey()
-        status.Text = "Confirmed: " .. tostring(Config.Skins.SelectedKnife) .. " Icon will be injected."
-        _hudDbg("HUD image override confirmed", Config.Skins.SelectedKnife, selectedIcon)
-        pcall(_applyHUDKnife, true)
-    end)
-    table.insert(UnloadConnections, { Disconnect = function() pcall(function() gui:Destroy() end) end })
-    HUDSkin.viewer = { gui=gui, frame=frame, title=title, status=status, list=list, confirm=confirm }
-    return HUDSkin.viewer
-end
-
-local function _refreshHUDAssetViewer()
-    local v = _ensureHUDAssetViewer(); if not v then return end
-    for _, ch in ipairs(v.list:GetChildren()) do
-        if ch:IsA("Frame") then ch:Destroy() end
-    end
-    local knife = Config.Skins.SelectedKnife or "Butterfly Knife"
-    HUDSkin.infoCache[knife] = nil
-    local data = _weaponInfo(knife) or HUD_KNIFE_ASSETS[knife]
-    if not data then
-        v.title.Text = "HUD ASSET VIEWER"
-        v.status.Text = "No Icon/ReverseIcon found in dumps or runtime module for " .. tostring(knife)
-        return
-    end
-    v.title.Text = "HUD ASSET VIEWER · " .. tostring(knife)
-    v.status.Text = "Validating Icon assets. Confirm only if at least one card says success."
-    local rows = {
-        { label="Icon", asset=data.Icon },
-        { label="Icon JPG", asset=_assetThumb(data.Icon) },
-        { label="Small JPG", asset=_assetThumbSmall(data.Icon) },
-        { label="Reverse", asset=data.ReverseIcon },
-    }
-    for i, row in ipairs(rows) do
-        local card = Instance.new("Frame", v.list)
-        card.Name = "Asset_" .. tostring(i); card.BackgroundColor3 = Color3.fromRGB(26,26,30); card.BorderSizePixel = 0; card.ZIndex = 203
-        Instance.new("UICorner", card).CornerRadius = UDim.new(0, 4)
-        local img = Instance.new("ImageLabel", card)
-        img.Name = "Image"; img.BackgroundTransparency = 1; img.Position = UDim2.fromOffset(6, 4); img.Size = UDim2.new(1, -12, 0, 50)
-        img.ScaleType = Enum.ScaleType.Fit; img.ImageColor3 = Color3.fromRGB(255,255,255); img.Image = row.asset or ""; img.ZIndex = 204
-        local lbl = Instance.new("TextLabel", card)
-        lbl.BackgroundTransparency = 1; lbl.Position = UDim2.fromOffset(4, 56); lbl.Size = UDim2.new(1, -8, 0, 20)
-        lbl.Font = Enum.Font.Code; lbl.TextSize = 10; lbl.TextColor3 = Color3.fromRGB(190,190,200); lbl.TextXAlignment = Enum.TextXAlignment.Center; lbl.Text = row.label .. " · loading"; lbl.ZIndex = 204
-        task.spawn(function()
-            if not row.asset then
-                if lbl and lbl.Parent then lbl.Text = row.label .. " · missing" end
-                return
-            end
-            local finalStatus = "Unknown"
-            local ok = pcall(function()
-                ContentProvider:PreloadAsync({img}, function(_, status)
-                    finalStatus = tostring(status):gsub("Enum.AssetFetchStatus%.", "")
-                end)
-            end)
-            task.wait(0.2)
-            local ready, loaded, fetchStatus = _imageCandidateReady(img, row.asset)
-            if finalStatus ~= "Unknown" then fetchStatus = finalStatus end
-            local text = "fail"
-            if ready then text = "success" elseif ok and not _statusIsBad(fetchStatus) then text = tostring(fetchStatus):lower() end
-            if lbl and lbl.Parent then lbl.Text = row.label .. " · " .. text end
-            _hudDbg("viewer", knife, row.label, tostring(row.asset), "status=", tostring(fetchStatus), "loaded=", tostring(loaded))
-        end)
-    end
-end
-
-function ShowHUDAssetViewer()
-    local v = _ensureHUDAssetViewer(); if not v then return end
-    _refreshHUDAssetViewer()
-    v.gui.Enabled = true
-end
-
-local function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
-    if rec then rec.iconToken = (rec.iconToken or 0) + 1 end
-    if rec and rec.iconImage then pcall(function() rec.iconImage:Destroy() end); rec.iconImage = nil end
-    if rec and rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end); rec.iconFallbackImage = nil end
-    if iconLbl then
-        pcall(function()
-            if rec and rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end
-            if rec and rec.iconImageColor3 ~= nil then iconLbl.ImageColor3 = rec.iconImageColor3 end
-            if rec and rec.iconImageRectOffset ~= nil then iconLbl.ImageRectOffset = rec.iconImageRectOffset end
-            if rec and rec.iconImageRectSize ~= nil then iconLbl.ImageRectSize = rec.iconImageRectSize end
-            if rec and rec.iconScaleType ~= nil then iconLbl.ScaleType = rec.iconScaleType end
-            iconLbl.ImageTransparency = rec and rec.iconImageTransparency or iconLbl.ImageTransparency
-            if rec and rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end
-        end)
-    end
-    if iconViewport then
-        pcall(function()
-            iconViewport.BackgroundTransparency = rec and rec.iconViewportTransparency or iconViewport.BackgroundTransparency
-            if rec and rec.iconViewportVisible ~= nil then iconViewport.Visible = rec.iconViewportVisible end
-        end)
-    end
-end
-
-local function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
+local function _ensureSlotRec(slotFrame, nameLbl, iconLbl)
     local rec = HUDSkin.slots[slotFrame]
     if rec then
         if nameLbl and (not rec.nameOverlay or not rec.nameOverlay.Parent) then rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay") end
-        rec.iconLabelRef = iconLbl or rec.iconLabelRef
-        rec.iconViewportRef = iconViewport or rec.iconViewportRef
-        rec.iconAnchorRef = iconAnchor or rec.iconAnchorRef
+        if iconLbl and (not rec.iconOverlay or not rec.iconOverlay.Parent) then rec.iconOverlay = _cloneHUDOverlay(iconLbl, "EclipseHUDIconOverlay") end
         return rec
     end
     rec = {
         baseName = _cleanHUDWeaponText(nameLbl.Text) or tostring(slotFrame.Name),
-        nameText = nameLbl.Text,
         nameTextTransparency = nameLbl.TextTransparency,
         nameTextStrokeTransparency = nameLbl.TextStrokeTransparency,
-        iconLabelImage = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.Image) or nil,
-        iconImageColor3 = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageColor3) or nil,
-        iconImageRectOffset = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageRectOffset) or nil,
-        iconImageRectSize = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageRectSize) or nil,
-        iconScaleType = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ScaleType) or nil,
-        iconImageTransparency = (iconLbl and iconLbl.ImageTransparency) or nil,
-        iconLabelVisible = (iconLbl and iconLbl.Visible) or nil,
-        iconLabelRef = iconLbl,
-        iconViewportTransparency = (iconViewport and iconViewport.BackgroundTransparency) or nil,
-        iconViewportVisible = (iconViewport and iconViewport.Visible) or nil,
-        iconViewportRef = iconViewport,
-        iconAnchorRef = iconAnchor,
+        iconImageTransparency = iconLbl and iconLbl.ImageTransparency or nil,
         nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay"),
-        iconOverlay = nil,
+        iconOverlay = iconLbl and _cloneHUDOverlay(iconLbl, "EclipseHUDIconOverlay") or nil,
         iconViewport = nil,
         iconViewportKnife = nil,
-        iconImage = nil,
-        iconFallbackImage = nil,
         applying = false,
         conn = nil,
         iconConn = nil,
-        iconToken = 0,
     }
     HUDSkin.slots[slotFrame] = rec
     return rec
@@ -4592,21 +4227,13 @@ local function _slotWeaponKey(slotFrame, nameLbl)
 end
 
 local function _isHUDMeleeSlot(slotFrame, weaponKey)
-    weaponKey = _cleanHUDWeaponText(weaponKey) or weaponKey
     local sn = tostring(slotFrame and slotFrame.Name or ""):lower()
-    if sn:find("primary", 1, true) or sn:find("secondary", 1, true) or sn:find("pistol", 1, true) then return false end
     if sn:find("melee", 1, true) or sn:find("knife", 1, true) then return true end
     if weaponKey == "T Knife" or weaponKey == "CT Knife" then return true end
-    if KNIVES[weaponKey] == true then return true end
-    local wk = tostring(weaponKey or ""):lower()
-    return wk:find("knife", 1, true) ~= nil or wk:find("bayonet", 1, true) ~= nil or wk == "karambit"
+    return KNIVES[weaponKey] == true
 end
 
 local function _hudSkinForWeapon(weaponName, fallbackWeapon)
-    if type(weaponName) ~= "string" or weaponName == "" then return nil end
-    -- Preserve other/renamed weapon skins: only show/apply configured skins when
-    -- the current weapon name is an exact, known game skin folder.
-    if SkinsFolder and not SkinsFolder:FindFirstChild(weaponName) then return nil end
     local skin = Config.Skins.SelectedSkins[weaponName]
     if (not skin or skin == "") and fallbackWeapon then skin = Config.Skins.SelectedSkins[fallbackWeapon] end
     local pretty = _prettySkinName(skin)
@@ -4614,29 +4241,17 @@ local function _hudSkinForWeapon(weaponName, fallbackWeapon)
 end
 
 local function _desiredHUDForSlot(slotFrame, rawWeapon)
-    rawWeapon = _cleanHUDWeaponText(rawWeapon) or rawWeapon
     if _isHUDMeleeSlot(slotFrame, rawWeapon) then
-        local originalKnife = _localKnifeByTeam()
-        -- Override name/icon whenever the Skin Changer is enabled — do NOT
-        -- gate on SkinSystem.scriptRunning (that toggle is for the custom
-        -- viewmodel only, not for the HUD text). Matches ec_69 behavior.
-        local knifeName = _selectedHUDKnife()
-        local prettySkin = _hudSkinForWeapon(knifeName, originalKnife)
-        local base = knifeName
-        local text = prettySkin and ("\xE2\x98\x85 " .. base .. " | " .. prettySkin) or base
-        local icon = _iconForWeapon(knifeName)
-        return text, icon, originalKnife, prettySkin ~= nil
+        local knifeName = _resolveHUDKnife(); knifeName = knifeName or rawWeapon or "Knife"
+        local prettySkin = _hudSkinForWeapon(knifeName, rawWeapon)
+        local text = prettySkin and (knifeName .. " | " .. prettySkin) or knifeName
+        local icon = _iconForWeapon(knifeName, rawWeapon)
+        return text, icon, knifeName
     end
-    local weaponName = rawWeapon; if not weaponName or weaponName == "" then return nil, nil, nil, false end
-    -- Only touch weapons whose exact name matches a known skin folder — leaves
-    -- legit/renamed skins untouched. star only on melee (handled above).
-    if not (SkinsFolder and SkinsFolder:FindFirstChild(weaponName)) then
-        return nil, nil, weaponName, false
-    end
+    local weaponName = rawWeapon; if not weaponName or weaponName == "" then return nil, nil, nil end
     local prettySkin = _hudSkinForWeapon(weaponName)
-    if not prettySkin then return nil, nil, weaponName, false end
-    local text = weaponName .. " | " .. prettySkin
-    return text, nil, weaponName, true
+    local text = prettySkin and (weaponName .. " | " .. prettySkin) or weaponName
+    return text, _iconForWeapon(weaponName), weaponName
 end
 
 local function _queueHUDSlotApply(slotFrame)
@@ -4647,59 +4262,35 @@ end
 
 function _applyOneSlot(slotFrame, forceKnife)
     if not slotFrame or not slotFrame.Parent or not Config.Skins.SkinChangerEnabled then return end
-    local nameLbl, iconLbl, iconViewport, iconAnchor = _slotParts(slotFrame); if not nameLbl then return end
-    local rec = _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
+    local nameLbl, iconLbl = _slotParts(slotFrame); if not nameLbl then return end
+    local rec = _ensureSlotRec(slotFrame, nameLbl, iconLbl)
     local rawWeapon = _slotWeaponKey(slotFrame, nameLbl) or rec.baseName or tostring(slotFrame.Name)
-    if forceKnife then rawWeapon = rawWeapon or _localKnifeByTeam() end
-    local isMelee = _isHUDMeleeSlot(slotFrame, rawWeapon)
-    local text, icon, baseName, hasSkin = _desiredHUDForSlot(slotFrame, rawWeapon); if not text then return end
+    if forceKnife then rawWeapon = rawWeapon or "CT Knife" end
+    -- Only rewrite the HUD for melee slots — every other weapon keeps its
+    -- original HUD icon/name untouched (skinchanger applies to game weapons
+    -- with matching original names elsewhere).
+    if not _isHUDMeleeSlot(slotFrame, rawWeapon) then return end
+    local text, icon, baseName = _desiredHUDForSlot(slotFrame, rawWeapon); if not text then return end
     rec.baseName = baseName or rawWeapon or rec.baseName
 
+    -- Hide any leftover overlay/viewport from the previous buggy approach.
     if rec.nameOverlay then pcall(function() rec.nameOverlay.Visible = false end) end
     if rec.iconOverlay then pcall(function() rec.iconOverlay.Visible = false end) end
     if rec.iconViewport then pcall(function() rec.iconViewport.Visible = false end) end
 
     rec.applying = true
+    -- Write name + icon straight into the game's own labels. Real-time swap,
+    -- no ghost overlays, no bugged 3D viewport.
     pcall(function()
         nameLbl.Text = text
         nameLbl.TextTransparency = rec.nameTextTransparency or 0
         nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
     end)
-    _hudDbg("slot=", slotFrame.Name, "weapon=", baseName, "hasSkin=", hasSkin, "icon=", icon, "iconLbl=", iconLbl and iconLbl:GetFullName() or "nil", "vp=", iconViewport and iconViewport:GetFullName() or "nil")
-
-    if isMelee and type(icon) == "string" and icon ~= "" and _hudIconOverrideAllowed() then
-        -- Previous in-slot method: no top-level transparent GUI. We inject an
-        -- ImageLabel into the real melee slot / mutate the slot ImageLabel when
-        -- available. The chosen asset is hardcoded from dumps and converted to
-        -- rbxthumb first so Roblox renders it as a stable thumbnail image.
-        local directIcon = _assetString(icon) or icon
-        _preloadHUDIcon(directIcon)
-        local img = nil
-        local usingNativeImage = iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton"))
-        if usingNativeImage then
-            img = iconLbl
-        else
-            img = _ensureIconImage(rec, iconViewport or iconAnchor or slotFrame)
-        end
-        if img then
-            _applyHUDImageWithFallback(rec, img, directIcon, tostring(slotFrame.Name) .. ":slot-image", function(finalIcon)
-                if iconViewport then pcall(function() iconViewport.Visible = false end) end
-                if rec.iconImage then pcall(function() rec.iconImage.Visible = true end) end
-                _hudDbg("melee HUD icon injected", Config.Skins.SelectedKnife, finalIcon)
-            end, function()
-                if iconViewport then pcall(function() iconViewport.Visible = rec.iconViewportVisible ~= false end) end
-                _hudDbg("melee HUD icon failed", Config.Skins.SelectedKnife)
-            end)
-        else
-            _hudDbg("failed to create melee HUD image", slotFrame:GetFullName())
-        end
-    elseif isMelee then
-        _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
-    else
-        if rec.iconOverlay then pcall(function() rec.iconOverlay.Visible = false end) end
-        if rec.iconViewport then pcall(function() rec.iconViewport.Visible = false end) end
-        if rec.iconImage then pcall(function() rec.iconImage.Visible = false; rec.iconImage:Destroy() end); rec.iconImage = nil end
-        if rec.iconFallbackImage then pcall(function() rec.iconFallbackImage.Visible = false; rec.iconFallbackImage:Destroy() end); rec.iconFallbackImage = nil end
+    if iconLbl and type(icon) == "string" and icon ~= "" then
+        pcall(function()
+            iconLbl.Image = icon
+            iconLbl.ImageTransparency = rec.iconImageTransparency or 0
+        end)
     end
     rec.applying = false
 
@@ -4707,99 +4298,17 @@ function _applyOneSlot(slotFrame, forceKnife)
         rec.conn = nameLbl:GetPropertyChangedSignal("Text"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled then _queueHUDSlotApply(slotFrame) end end)
         table.insert(UnloadConnections, rec.conn)
     end
-    if isMelee and iconLbl and not rec.iconImgConn then
-        rec.iconImgConn = iconLbl:GetPropertyChangedSignal("Image"):Connect(function()
-            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
-            _queueHUDSlotApply(slotFrame)
-        end)
-        table.insert(UnloadConnections, rec.iconImgConn)
-    end
-    if isMelee and iconLbl and not rec.iconConn then
-        rec.iconConn = iconLbl:GetPropertyChangedSignal("Visible"):Connect(function()
-            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
-            if not iconLbl.Visible then _queueHUDSlotApply(slotFrame) end
-        end)
+    if iconLbl and not rec.iconConn then
+        rec.iconConn = iconLbl:GetPropertyChangedSignal("Image"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled then _queueHUDSlotApply(slotFrame) end end)
         table.insert(UnloadConnections, rec.iconConn)
     end
-    if isMelee and iconViewport and not rec.vpVisConn then
-        rec.vpVisConn = iconViewport:GetPropertyChangedSignal("Visible"):Connect(function()
-            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
-            if iconViewport.Visible then _queueHUDSlotApply(slotFrame) end
-        end)
-        table.insert(UnloadConnections, rec.vpVisConn)
-    end
 end
 
-
-function _restoreKnifeModuleOverride() end
-
--- Lightweight melee-only HUD override (skinchanger style).
--- • Só toca no slot Melee. Nunca em Primary/Secondary/Grenade.
--- • Sem hookmetamethod. Persistência via loop de reapply (0.25s).
--- • Restaura o Image original quando desliga.
--- NOTE: declared as globals (not `local`) to avoid exceeding the 200
--- local-register limit of the main chunk ("Out of local registers ... _HUDLite").
-_HUDLite = { originals = {} } -- [ImageLabel] = originalImage
-_HUDLiteReverseKeys = { ["reverseicon"]=true, ["reverse_icon"]=true, ["reverse"]=true, ["backicon"]=true, ["back_icon"]=true }
-
-function _hudLiteKnownIcons()
-    local set = {}
-    for _, k in pairs(HUD_KNIFE_ASSETS) do
-        if k.Icon then set[k.Icon] = true end
-        if k.ReverseIcon then set[k.ReverseIcon] = true end
-    end
-    return set
-end
-
-function _hudLiteApplyToLabel(lbl, wantIcon, wantReverse)
-    if not lbl or not lbl.Parent then return end
-    if not (lbl:IsA("ImageLabel") or lbl:IsA("ImageButton")) then return end
-    local img = lbl.Image or ""
-    if img == "" or not img:find("rbxassetid://", 1, true) then return end
-    local lname = tostring(lbl.Name):lower()
-    local isReverse = _HUDLiteReverseKeys[lname] or lname:find("reverse", 1, true) ~= nil
-    local target = isReverse and wantReverse or wantIcon
-    if not target or target == "" or target == img then return end
-    if _HUDLite.originals[lbl] == nil then _HUDLite.originals[lbl] = img end
-    pcall(function() lbl.Image = target end)
-end
-
-_applyHUDKnife = function(_force)
+local function _applyHUDKnife(_force)
     if not Config.Skins.SkinChangerEnabled then return end
     local inv = _hudInventory(); if not inv then return end
-    local slot = inv:FindFirstChild("Melee"); if not slot then return end
-    local knife = _selectedHUDKnife()
-    local asset = HUD_KNIFE_ASSETS[knife]
-    if not asset then
-        -- Faca selecionada não tem dump confirmado — cai pra faca padrão do time.
-        local fb = _localKnifeByTeam()
-        asset = HUD_KNIFE_ASSETS[fb]
-        if not asset then return end
-    end
-    local wantIcon    = asset.Icon
-    local wantReverse = asset.ReverseIcon or asset.Icon
-    for _, d in ipairs(slot:GetDescendants()) do
-        _hudLiteApplyToLabel(d, wantIcon, wantReverse)
-    end
-end
-
-
-
-function _postSkinConfigLoadApply()
-    _sanitizeSkinConfig()
-    _syncKnifeLock()
-    pcall(function()
-        if Config.Skins.SkinChangerEnabled then
-            for _, obj in pairs(Camera:GetChildren()) do
-                local skinName = Config.Skins.SelectedSkins[obj.Name]
-                if skinName then applyWeaponSkin(obj) end
-            end
-        end
-    end)
-    for _, delayT in ipairs({0, 0.2, 0.6, 1.2, 2.0}) do
-        task.delay(delayT, function()
-            if Config.Skins.SkinChangerEnabled then pcall(_applyHUDKnife, true) end
-        end)
+    for _, slotFrame in ipairs(inv:GetChildren()) do
+        if slotFrame:IsA("Frame") or slotFrame:IsA("ImageLabel") or slotFrame:IsA("ImageButton") then pcall(_applyOneSlot, slotFrame, _force and _isHUDMeleeSlot(slotFrame, nil)) end
     end
 end
 
@@ -4807,34 +4316,23 @@ function _restoreHUDKnife()
     for slotFrame, rec in pairs(HUDSkin.slots) do
         if rec.conn then pcall(function() rec.conn:Disconnect() end); rec.conn = nil end
         if rec.iconConn then pcall(function() rec.iconConn:Disconnect() end); rec.iconConn = nil end
-        if rec.iconImgConn then pcall(function() rec.iconImgConn:Disconnect() end); rec.iconImgConn = nil end
-        if rec.vpVisConn then pcall(function() rec.vpVisConn:Disconnect() end); rec.vpVisConn = nil end
         if slotFrame and slotFrame.Parent then
-            local nameLbl, iconLbl, iconViewport = _slotParts(slotFrame)
-            if nameLbl then pcall(function() if rec.nameText ~= nil then nameLbl.Text = rec.nameText end; nameLbl.TextTransparency = rec.nameTextTransparency or 0; nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1 end) end
-            if iconLbl then pcall(function() if rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end; iconLbl.ImageTransparency = rec.iconImageTransparency or 0; if rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end end) end
-            if iconViewport then pcall(function() iconViewport.BackgroundTransparency = rec.iconViewportTransparency or iconViewport.BackgroundTransparency; iconViewport.Visible = rec.iconViewportVisible ~= false end) end
+            local nameLbl, iconLbl = _slotParts(slotFrame)
+            if nameLbl then pcall(function() nameLbl.TextTransparency = rec.nameTextTransparency or 0; nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1 end) end
+            if iconLbl then pcall(function() iconLbl.ImageTransparency = rec.iconImageTransparency or 0 end) end
         end
         if rec.nameOverlay then pcall(function() rec.nameOverlay:Destroy() end) end
         if rec.iconOverlay then pcall(function() rec.iconOverlay:Destroy() end) end
-        if rec.iconImage   then pcall(function() rec.iconImage:Destroy() end)   end
-        if rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end) end
         _destroyHUDIconViewport(rec)
     end
     HUDSkin.slots = setmetatable({}, {__mode="k"})
-    -- Light melee override: restore all icon labels we touched.
-    for lbl, orig in pairs(_HUDLite.originals) do
-        if lbl and lbl.Parent and orig then pcall(function() lbl.Image = orig end) end
-    end
-    _HUDLite.originals = {}
 end
 
-function _resetHUDSlots()
+local function _resetHUDSlots()
     for slotFrame, rec in pairs(HUDSkin.slots) do
         if not slotFrame or not slotFrame.Parent then
             if rec.conn then pcall(function() rec.conn:Disconnect() end) end
             if rec.iconConn then pcall(function() rec.iconConn:Disconnect() end) end
-            if rec.iconImgConn then pcall(function() rec.iconImgConn:Disconnect() end) end
             HUDSkin.slots[slotFrame] = nil
         end
     end
@@ -5173,8 +4671,10 @@ AS.smth = AimGB:AddSlider("Aimbot_Smooth", { Text="SMOOTHNESS", Default=0.35, Mi
         else local o=_aimOverride(Config.Aimbot.SelectedWeapon); if o then o.Smoothness=v end end
     end })
 SafeAddDropdown(AimGB, "Aimbot_Part", { Text="TARGET PART", Values={"Head","Neck","Arms","Legs"}, Default="Head", Callback=function(v) Config.Aimbot.TargetPart=v end })
--- Silent Aim removed by user request.
+-- SILENT AIM removed per user request.
+Config.Aimbot.SilentAim = false
 AimGB:AddToggle("Aimbot_DrawFOV", { Text="DRAW FOV",    Default=true, Callback=function(v) Config.Aimbot.DrawFOV=v end })
+
     :AddColorPicker("Aimbot_FOVColor", { Default=Color3.fromRGB(255,255,255), Title="FOV color", Callback=function(c) Config.Aimbot.FOVColor=c end })
 -- VISIBILITY CHECK is built-in and always on (no toggle).
 
@@ -5224,7 +4724,9 @@ Config.ESP.Skeleton = false
 -- the cycle buttons under the ESP preview panel (NAME / DIST / WEP / HEALTH).
 EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=function(v) Config.ESP.Chams=v end })
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
-EspGB:AddSlider("ESP_ChamsGlow", { Text="ESP CHARMS GLOW", Default=0.35, Min=0, Max=1, Rounding=2, Callback=function(v) Config.ESP.ChamsGlow=v end })
+-- ESP CHARMS GLOW slider removed per user request. Glow is fixed at 0 (solid fill).
+Config.ESP.ChamsGlow = 0
+
 EspGB:AddDivider()
 
 local WorldEspGB = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
@@ -8481,194 +7983,4 @@ task.spawn(function()
         end)
     end
 end)
-
--- =====================================================================
--- HVH ADDENDUM
---   * Multipoint (configurable body-part sampling, adjustable via slider)
---   * Screech Vision (X-ray chams) — toggle+slider LOCKED when dead;
---     enemies fade in on ESP with a smooth animation.
---   * Local weapon ammo scanner (getgc pattern from HvH open-source ref)
---     used as a fallback for the ESP ammo bar readout.
--- =====================================================================
-;(function() -- function scope: Luau top-level "Out of local registers" fix
-
-
-Config.HVH = Config.HVH or {
-    Multipoint=false, MultipointParts=4,
-    Screech=false, ScreechAlpha=0.55, ScreechColor=Color3.fromRGB(255,60,60),
-}
-if Config.HVH.MultipointParts == nil then Config.HVH.MultipointParts = 4 end
-
-
--- Multipoint: wrap GetAimbotTargetPart -> pick closest-to-crosshair body
--- point sampled from a priority-ordered list, trimmed to the slider count.
-do
-    local _origPick = GetAimbotTargetPart
-    -- Priority order: head first, then torso, then extremities.
-    local MP_PARTS = { "Head","UpperTorso","LowerTorso","HumanoidRootPart",
-                       "LeftHand","RightHand","LeftFoot","RightFoot" }
-    GetAimbotTargetPart = function(character)
-        if not (character and Config.HVH.Multipoint) then return _origPick(character) end
-        local mp = UserInput:GetMouseLocation()
-        local n = math.clamp(math.floor(tonumber(Config.HVH.MultipointParts) or 4), 1, #MP_PARTS)
-        local best, bestD
-        for i = 1, n do
-            local p = character:FindFirstChild(MP_PARTS[i])
-            if p and p:IsA("BasePart") then
-                local sp, on = Camera:WorldToViewportPoint(p.Position)
-                if on then
-                    local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
-                    if not bestD or d < bestD then bestD, best = d, p end
-                end
-            end
-        end
-        return best or _origPick(character)
-    end
-end
-
--- Local weapon ammo scanner (mirrors the open-source HvH ref pattern):
--- walks getgc for a table with IsEquipped/Identifier/Player == the passed
--- player and returns (Rounds, Rounds+Capacity) from its Properties.
--- Roblox's client heap only holds the LocalPlayer's weapon module, so this
--- resolves ammo for LocalPlayer; enemies fall back to the existing lookups.
-local function _scanWeaponAmmoFor(plr)
-    local ok, cur, mx = pcall(function()
-        for _, obj in ipairs(getgc(true)) do
-            if type(obj) == "table" then
-                local okEq, isEq = pcall(rawget, obj, "IsEquipped")
-                if okEq and isEq then
-                    local _, ident = pcall(rawget, obj, "Identifier")
-                    local _, owner = pcall(rawget, obj, "Player")
-                    if ident and owner == plr then
-                        local _, props = pcall(rawget, obj, "Properties")
-                        if type(props) == "table" then
-                            local _, rounds = pcall(rawget, obj, "Rounds")
-                            local _, cap    = pcall(rawget, obj, "Capacity")
-                            local _, maxR   = pcall(rawget, props, "Rounds")
-                            local c = tonumber(rounds)
-                            local m = tonumber(maxR) or tonumber(cap)
-                            if c and m and m > 0 then return c, m end
-                        end
-                    end
-                end
-            end
-        end
-        return nil, nil
-    end)
-    if not ok then return nil end
-    if cur and mx then return cur, mx end
-    return nil
-end
-
--- Hook the ESP ammo readout: try attribute/tool/module first (fast path),
--- and fall back to the getgc scanner for the LocalPlayer case.
-do
-    local _origEspAmmo = _espGetPlayerAmmo
-    _espGetPlayerAmmo = function(plr, weaponName)
-        local c, m = _origEspAmmo(plr, weaponName)
-        if c and m then return c, m end
-        return _scanWeaponAmmoFor(plr)
-    end
-end
-
-
--- Screech Vision (X-ray chams w/ alive-gate + fade animation).
-do
-    local adorns = {}
-    local function aliveNow()
-        local c = LocalPlayer.Character
-        local h = c and c:FindFirstChildOfClass("Humanoid")
-        return h and h.Health > 0
-    end
-    local function clearAll()
-        for k, a in pairs(adorns) do pcall(function() a:Destroy() end); adorns[k] = nil end
-    end
-    local function ensureFor(plr)
-        local char = plr.Character; if not char then return end
-        for _, part in ipairs(char:GetChildren()) do
-            if part:IsA("BasePart") then
-                local key = tostring(plr.UserId) .. ":" .. part.Name
-                if not adorns[key] or not adorns[key].Parent then
-                    local box = Instance.new("BoxHandleAdornment")
-                    box.Name = "EclipseScreech"
-                    box.Adornee = part; box.AlwaysOnTop = true; box.ZIndex = 1
-                    box.Size = part.Size; box.Color3 = Config.HVH.ScreechColor
-                    box.Transparency = 1
-                    box.Parent = part
-                    adorns[key] = box
-                    TweenService:Create(box, TweenInfo.new(0.35),
-                        { Transparency = 1 - (Config.HVH.ScreechAlpha or 0.55) }):Play()
-                end
-            end
-        end
-    end
-    RunService.RenderStepped:Connect(function()
-        if not Config.HVH.Screech or not aliveNow() then
-            if next(adorns) then clearAll() end
-            return
-        end
-        local alpha = 1 - (Config.HVH.ScreechAlpha or 0.55)
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= LocalPlayer and IsEnemy(plr) then
-                local c = plr.Character
-                local h = c and c:FindFirstChildOfClass("Humanoid")
-                if h and h.Health > 0 then ensureFor(plr) end
-            end
-        end
-        for k, box in pairs(adorns) do
-            if not box.Parent or not box.Adornee then adorns[k] = nil
-            else box.Color3 = Config.HVH.ScreechColor; box.Transparency = alpha end
-        end
-    end)
-    LocalPlayer.CharacterAdded:Connect(function(char)
-        clearAll()
-        local hum = char:WaitForChild("Humanoid", 5)
-        if hum then hum.Died:Connect(clearAll) end
-    end)
-end
-
--- UI rows on existing tabs.
-pcall(function()
-    local G = Tabs.Aim:AddRightGroupbox("HVH", "swords")
-    G:AddToggle("HVH_Multipoint", { Text="MULTIPOINT", Default=false,
-        Callback=function(v) Config.HVH.Multipoint=v end })
-    G:AddSlider("HVH_MultipointParts", { Text="MULTIPOINT PARTS",
-        Default=Config.HVH.MultipointParts or 4, Min=1, Max=8, Rounding=0,
-        Callback=function(v) Config.HVH.MultipointParts=v end })
-end)
-
-pcall(function()
-    local G = Tabs.Visuals:AddRightGroupbox("SCREECH VISION", "eye")
-    local tgl = G:AddToggle("HVH_Screech", { Text="SCREECH VISION", Default=false,
-        Callback=function(v)
-            local c = LocalPlayer.Character; local h = c and c:FindFirstChildOfClass("Humanoid")
-            local a = h and h.Health > 0
-            if v and not a then
-                pcall(function() Library:Notify({ Title="Screech Vision", Description="Only available while alive.", Time=3 }) end)
-                pcall(function() Library.Toggles.HVH_Screech:SetValue(false) end)
-                Config.HVH.Screech = false; return
-            end
-            Config.HVH.Screech = v
-        end })
-    local sld = G:AddSlider("HVH_ScreechAlpha", { Text="OPACITY", Default=0.55, Min=0.1, Max=1.0, Rounding=2,
-        Callback=function(v) Config.HVH.ScreechAlpha=v end })
-    G:AddLabel("Locked while dead — respawn to enable.", true)
-    task.spawn(function()
-        while true do
-            local c = LocalPlayer.Character; local h = c and c:FindFirstChildOfClass("Humanoid")
-            local a = h and h.Health > 0
-            pcall(function() tgl:SetDisabled(not a) end)
-            pcall(function() sld:SetDisabled(not a) end)
-            if not a and Config.HVH.Screech then
-                Config.HVH.Screech = false
-                pcall(function() Library.Toggles.HVH_Screech:SetValue(false) end)
-            end
-            task.wait(0.5)
-        end
-    end)
-end)
-
-end)() -- end of HVH addendum scope
-
-
 
