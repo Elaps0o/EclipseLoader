@@ -5401,7 +5401,7 @@ SkinGB:AddToggle("Knife_Toggle", { Text="CUSTOM KNIFE", Default=false,
         pcall(_applyHUDKnife, true)
     end })
 SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
-    Values={"Butterfly Knife","Karambit","M9 Bayonet","Gut Knife","CT Knife","T Knife"},
+    Values={"Butterfly Knife","Karambit","M9 Bayonet","Gut Knife"},
     Default=Config.Skins.SelectedKnife,
     Callback=function(v)
         -- Refuse to change knife while Skin Changer is disabled.
@@ -8483,32 +8483,37 @@ task.spawn(function()
 end)
 
 -- =====================================================================
--- HVH ADDENDUM — ported from user's open-source HvH reference
---   * Multipoint (aim target selection samples multiple body points)
---   * No Camera Recoil (visual)                (CameraController hook)
+-- HVH ADDENDUM
+--   * Multipoint (configurable body-part sampling, adjustable via slider)
 --   * Screech Vision (X-ray chams) — toggle+slider LOCKED when dead;
 --     enemies fade in on ESP with a smooth animation.
+--   * Local weapon ammo scanner (getgc pattern from HvH open-source ref)
+--     used as a fallback for the ESP ammo bar readout.
 -- =====================================================================
 ;(function() -- function scope: Luau top-level "Out of local registers" fix
 
 
 Config.HVH = Config.HVH or {
-    Multipoint=false, NoCamRecoil=false,
+    Multipoint=false, MultipointParts=4,
     Screech=false, ScreechAlpha=0.55, ScreechColor=Color3.fromRGB(255,60,60),
 }
+if Config.HVH.MultipointParts == nil then Config.HVH.MultipointParts = 4 end
 
 
--- Multipoint: wrap GetAimbotTargetPart -> pick closest-to-crosshair body point.
+-- Multipoint: wrap GetAimbotTargetPart -> pick closest-to-crosshair body
+-- point sampled from a priority-ordered list, trimmed to the slider count.
 do
     local _origPick = GetAimbotTargetPart
+    -- Priority order: head first, then torso, then extremities.
     local MP_PARTS = { "Head","UpperTorso","LowerTorso","HumanoidRootPart",
                        "LeftHand","RightHand","LeftFoot","RightFoot" }
     GetAimbotTargetPart = function(character)
         if not (character and Config.HVH.Multipoint) then return _origPick(character) end
         local mp = UserInput:GetMouseLocation()
+        local n = math.clamp(math.floor(tonumber(Config.HVH.MultipointParts) or 4), 1, #MP_PARTS)
         local best, bestD
-        for _, n in ipairs(MP_PARTS) do
-            local p = character:FindFirstChild(n)
+        for i = 1, n do
+            local p = character:FindFirstChild(MP_PARTS[i])
             if p and p:IsA("BasePart") then
                 local sp, on = Camera:WorldToViewportPoint(p.Position)
                 if on then
@@ -8521,33 +8526,50 @@ do
     end
 end
 
--- No Camera Recoil (visual): hook CameraController.weaponKick.
-do
-    local CC, oldKick
-    local function ensure()
-        if CC then return true end
-        local ok, mod = pcall(function()
-            return require(game:GetService("ReplicatedStorage")
-                :WaitForChild("Controllers", 5)
-                :WaitForChild("CameraController", 5))
-        end)
-        if not ok or not mod then return false end
-        CC = mod; oldKick = mod.weaponKick
-        return true
-    end
-    task.spawn(function()
-        while true do
-            if Config.HVH.NoCamRecoil and ensure() then
-                CC.weaponKick = function() end
-            elseif CC and oldKick and not Config.HVH.NoCamRecoil then
-                CC.weaponKick = oldKick
+-- Local weapon ammo scanner (mirrors the open-source HvH ref pattern):
+-- walks getgc for a table with IsEquipped/Identifier/Player == the passed
+-- player and returns (Rounds, Rounds+Capacity) from its Properties.
+-- Roblox's client heap only holds the LocalPlayer's weapon module, so this
+-- resolves ammo for LocalPlayer; enemies fall back to the existing lookups.
+local function _scanWeaponAmmoFor(plr)
+    local ok, cur, mx = pcall(function()
+        for _, obj in ipairs(getgc(true)) do
+            if type(obj) == "table" then
+                local okEq, isEq = pcall(rawget, obj, "IsEquipped")
+                if okEq and isEq then
+                    local _, ident = pcall(rawget, obj, "Identifier")
+                    local _, owner = pcall(rawget, obj, "Player")
+                    if ident and owner == plr then
+                        local _, props = pcall(rawget, obj, "Properties")
+                        if type(props) == "table" then
+                            local _, rounds = pcall(rawget, obj, "Rounds")
+                            local _, cap    = pcall(rawget, obj, "Capacity")
+                            local _, maxR   = pcall(rawget, props, "Rounds")
+                            local c = tonumber(rounds)
+                            local m = tonumber(maxR) or tonumber(cap)
+                            if c and m and m > 0 then return c, m end
+                        end
+                    end
+                end
             end
-            task.wait(1)
         end
+        return nil, nil
     end)
+    if not ok then return nil end
+    if cur and mx then return cur, mx end
+    return nil
 end
 
--- (No Spread / Auto Scope / Auto Stop / Auto Peek removed per user request)
+-- Hook the ESP ammo readout: try attribute/tool/module first (fast path),
+-- and fall back to the getgc scanner for the LocalPlayer case.
+do
+    local _origEspAmmo = _espGetPlayerAmmo
+    _espGetPlayerAmmo = function(plr, weaponName)
+        local c, m = _origEspAmmo(plr, weaponName)
+        if c and m then return c, m end
+        return _scanWeaponAmmoFor(plr)
+    end
+end
 
 
 -- Screech Vision (X-ray chams w/ alive-gate + fade animation).
@@ -8608,8 +8630,11 @@ end
 -- UI rows on existing tabs.
 pcall(function()
     local G = Tabs.Aim:AddRightGroupbox("HVH", "swords")
-    G:AddToggle("HVH_Multipoint",  { Text="MULTIPOINT",       Default=false, Callback=function(v) Config.HVH.Multipoint=v end })
-    G:AddToggle("HVH_NoCamRecoil", { Text="NO CAMERA RECOIL", Default=false, Callback=function(v) Config.HVH.NoCamRecoil=v end })
+    G:AddToggle("HVH_Multipoint", { Text="MULTIPOINT", Default=false,
+        Callback=function(v) Config.HVH.Multipoint=v end })
+    G:AddSlider("HVH_MultipointParts", { Text="MULTIPOINT PARTS",
+        Default=Config.HVH.MultipointParts or 4, Min=1, Max=8, Rounding=0,
+        Callback=function(v) Config.HVH.MultipointParts=v end })
 end)
 
 pcall(function()
