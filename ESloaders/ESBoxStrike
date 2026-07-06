@@ -870,7 +870,6 @@ local Config = {
         Enabled=false, FOV=150, Smoothness=0.35, TargetPart="Head",
         DrawFOV=true, VisibilityCheck=true, FOVColor=Color3.fromRGB(255,255,255),
         Global=true, SelectedWeapon="AK-47", PerWeapon={},
-        SilentAim=false, SilentFOV=250,
     },
     TriggerBot = { Enabled=false, Delay=0.01, Mode="HitChance", HitChance=100, Spread=0 },
     ESP      = {
@@ -3329,99 +3328,8 @@ end
 function _getCurrentWeaponObj() return nil end
 function _weaponHasScope() return false end
 
--- =====================================================================
--- SILENT AIM  ·  universal __namecall hook (executor-agnostic)
--- Redirects bullet Direction / Hits[*].Position toward the closest visible
--- enemy Head within Config.Aimbot.SilentFOV pixels of the crosshair. Works
--- on the popular "ShootWeapon" remote pattern used by CS-style games —
--- transparent no-op when SilentAim is OFF or no target is in range.
--- =====================================================================
-function _silentFindTargetHead()
-    local mp = UserInput:GetMouseLocation()
-    local best, bestD = nil, Config.Aimbot.SilentFOV or 250
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer or not IsEnemy(plr) then continue end
-        local char = GetCharacter(plr); if not char then continue end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then continue end
-        local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
-        if not head then continue end
-        if Config.Aimbot.VisibilityCheck and not IsVisible(head) then continue end
-        local sp, on = Camera:WorldToViewportPoint(head.Position)
-        if on then
-            local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
-            if d < bestD then bestD = d; best = head end
-        end
-    end
-    return best
-end
-
-function _silentRewriteArgs(args)
-    if not (Config.GlobalEnable and Config.Aimbot.SilentAim) then return args end
-    local head = _silentFindTargetHead(); if not head then return args end
-    for i, v in ipairs(args) do
-        if type(v) == "table" then
-            local bullets = v.Bullets or (type(v[1]) == "table" and v[1].Bullets)
-            local origin  = v.Origin or (type(v[1]) == "table" and v[1].Origin) or Camera.CFrame.Position
-            if bullets and type(bullets) == "table" then
-                for _, b in ipairs(bullets) do
-                    if type(b) == "table" then
-                        local o = b.Origin or origin
-                        local dir = (head.Position - o).Unit
-                        b.Direction = dir
-                        if b.Hits and type(b.Hits) == "table" then
-                            for _, h in ipairs(b.Hits) do
-                                if type(h) == "table" then
-                                    h.Instance = head
-                                    h.Position = head.Position
-                                    h.Normal   = -dir
-                                    h.Distance = (head.Position - o).Magnitude
-                                end
-                            end
-                        end
-                    end
-                end
-                args[i] = v
-            end
-        end
-    end
-    return args
-end
-
-do
-    local ok = pcall(function()
-        local mt = getrawmetatable and getrawmetatable(game)
-        if not mt then return end
-        local oldNC = mt.__namecall
-        if hookmetamethod then
-            hookmetamethod(game, "__namecall", function(self, ...)
-                local method = getnamecallmethod and getnamecallmethod() or ""
-                if (method == "FireServer" or method == "InvokeServer" or method == "Fire" or method == "Send")
-                    and Config.GlobalEnable and Config.Aimbot.SilentAim then
-                    local args = _silentRewriteArgs({...})
-                    return oldNC(self, table.unpack(args))
-                end
-                return oldNC(self, ...)
-            end)
-        else
-            -- Fallback: replace __namecall directly (requires setreadonly).
-            if setreadonly then pcall(setreadonly, mt, false) end
-            mt.__namecall = function(self, ...)
-                local method = getnamecallmethod and getnamecallmethod() or ""
-                if (method == "FireServer" or method == "InvokeServer" or method == "Fire" or method == "Send")
-                    and Config.GlobalEnable and Config.Aimbot.SilentAim then
-                    local args = _silentRewriteArgs({...})
-                    return oldNC(self, table.unpack(args))
-                end
-                return oldNC(self, ...)
-            end
-            if setreadonly then pcall(setreadonly, mt, true) end
-        end
-    end)
-    if not ok then
-        pcall(function() Library:Notify({ Title="Silent Aim", Description="Unsupported executor (namecall hook unavailable)", Time=4 }) end)
-    end
-end
+-- SILENT AIM fully removed: no remote rewriting and no __namecall hook is
+-- installed from the aimbot module.
 
 
 
@@ -4805,6 +4713,34 @@ local function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnc
     return rec
 end
 
+local function _restoreHUDName(rec, nameLbl)
+    if not nameLbl then return end
+    pcall(function()
+        if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
+        nameLbl.TextTransparency = (rec and rec.nameTextTransparency ~= nil) and rec.nameTextTransparency or 0
+        nameLbl.TextStrokeTransparency = (rec and rec.nameTextStrokeTransparency ~= nil) and rec.nameTextStrokeTransparency or 1
+    end)
+end
+
+local function _applyHUDNameOverlay(rec, nameLbl, text)
+    if not (rec and nameLbl and text and text ~= "") then return end
+    if not rec.nameOverlay or not rec.nameOverlay.Parent then
+        rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay")
+    end
+    if not rec.nameOverlay then return end
+    pcall(function()
+        _syncHUDOverlayGeometry(nameLbl, rec.nameOverlay)
+        rec.nameOverlay.Text = text
+        rec.nameOverlay.TextTransparency = rec.nameTextTransparency or 0
+        rec.nameOverlay.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
+        rec.nameOverlay.Visible = nameLbl.Visible
+        -- Hide the real game label instead of writing into it. Direct Text
+        -- mutation makes the game/HUD fight us and can bug the whole inventory.
+        nameLbl.TextTransparency = 1
+        nameLbl.TextStrokeTransparency = 1
+    end)
+end
+
 local function _slotWeaponKey(slotFrame, nameLbl)
     local rec = HUDSkin.slots[slotFrame]
     local clean = _cleanHUDWeaponText(nameLbl.Text)
@@ -4838,10 +4774,13 @@ local function _desiredHUDForSlot(slotFrame, rawWeapon)
     rawWeapon = _cleanHUDWeaponText(rawWeapon) or rawWeapon
     if _isHUDMeleeSlot(slotFrame, rawWeapon) then
         local originalKnife = _localKnifeByTeam()
+        if not SkinSystem.scriptRunning then
+            return originalKnife, nil, originalKnife, false
+        end
         local knifeName = _selectedHUDKnife()
         local prettySkin = _hudSkinForWeapon(knifeName, originalKnife)
         local base = knifeName
-        local text = prettySkin and ("\xE2\x98\x85 " .. base .. " | " .. prettySkin) or base
+        local text = prettySkin and ("\xE2\x98\x85 " .. base .. " | " .. prettySkin) or originalKnife
         local icon = _iconForWeapon(knifeName)
         return text, icon, originalKnife, prettySkin ~= nil
     end
@@ -4857,12 +4796,12 @@ local function _queueHUDSlotApply(slotFrame)
     if rec then rec.queued = true end
     task.delay(0.04, function()
         if rec then rec.queued = false end
-        if scriptRunning and Config.Skins.SkinChangerEnabled and slotFrame and slotFrame.Parent then pcall(function() _applyOneSlot(slotFrame, false) end) end
+        if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() and slotFrame and slotFrame.Parent then pcall(function() _applyOneSlot(slotFrame, false) end) end
     end)
 end
 
 function _applyOneSlot(slotFrame, forceKnife)
-    if not slotFrame or not slotFrame.Parent or not Config.Skins.SkinChangerEnabled then return end
+    if not slotFrame or not slotFrame.Parent or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
     local nameLbl, iconLbl, iconViewport, iconAnchor = _slotParts(slotFrame); if not nameLbl then return end
     local rec = _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
     local rawWeapon = _slotWeaponKey(slotFrame, nameLbl) or rec.baseName or tostring(slotFrame.Name)
@@ -4871,16 +4810,15 @@ function _applyOneSlot(slotFrame, forceKnife)
     local text, icon, baseName, hasSkin = _desiredHUDForSlot(slotFrame, rawWeapon); if not text then return end
     rec.baseName = baseName or rawWeapon or rec.baseName
 
-    if rec.nameOverlay then pcall(function() rec.nameOverlay.Visible = false end) end
     if rec.iconOverlay then pcall(function() rec.iconOverlay.Visible = false end) end
     if rec.iconViewport then pcall(function() rec.iconViewport.Visible = false end) end
 
     rec.applying = true
-    pcall(function()
-        nameLbl.Text = text
-        nameLbl.TextTransparency = rec.nameTextTransparency or 0
-        nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
-    end)
+    if hasSkin then
+        _applyHUDNameOverlay(rec, nameLbl, text)
+    else
+        _restoreHUDName(rec, nameLbl)
+    end
     _hudDbg("slot=", slotFrame.Name, "weapon=", baseName, "hasSkin=", hasSkin, "icon=", icon, "iconLbl=", iconLbl and iconLbl:GetFullName() or "nil", "vp=", iconViewport and iconViewport:GetFullName() or "nil")
 
     if isMelee and SkinSystem.scriptRunning and type(icon) == "string" and icon ~= "" and _hudIconOverrideAllowed() then
@@ -4889,7 +4827,6 @@ function _applyOneSlot(slotFrame, forceKnife)
         -- available. The chosen asset is hardcoded from dumps and converted to
         -- rbxthumb first so Roblox renders it as a stable thumbnail image.
         local directIcon = _assetString(icon) or icon
-        _preloadHUDIcon(directIcon)
         local img = nil
         local usingNativeImage = iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton"))
         if usingNativeImage then
@@ -4898,20 +4835,31 @@ function _applyOneSlot(slotFrame, forceKnife)
             img = _ensureIconImage(rec, iconViewport or iconAnchor or slotFrame)
         end
         if img then
-            _applyHUDImageWithFallback(rec, img, directIcon, tostring(slotFrame.Name) .. ":slot-image", function(finalIcon)
+            local alreadyApplied = rec.iconAppliedKey == directIcon and img.Visible ~= false and (not usingNativeImage or tostring(img.Image or "") ~= tostring(rec.iconLabelImage or ""))
+            if alreadyApplied then
                 if iconViewport then pcall(function() iconViewport.Visible = false end) end
                 if rec.iconImage then pcall(function() rec.iconImage.Visible = true end) end
-                _hudDbg("melee HUD icon injected", Config.Skins.SelectedKnife, finalIcon)
-            end, function()
-                if iconViewport then pcall(function() iconViewport.Visible = rec.iconViewportVisible ~= false end) end
-                _hudDbg("melee HUD icon failed", Config.Skins.SelectedKnife)
-            end)
+            else
+                rec.iconAppliedKey = directIcon
+                _preloadHUDIcon(directIcon)
+                _applyHUDImageWithFallback(rec, img, directIcon, tostring(slotFrame.Name) .. ":slot-image", function(finalIcon)
+                    if iconViewport then pcall(function() iconViewport.Visible = false end) end
+                    if rec.iconImage then pcall(function() rec.iconImage.Visible = true end) end
+                    _hudDbg("melee HUD icon injected", Config.Skins.SelectedKnife, finalIcon)
+                end, function()
+                    rec.iconAppliedKey = nil
+                    if iconViewport then pcall(function() iconViewport.Visible = rec.iconViewportVisible ~= false end) end
+                    _hudDbg("melee HUD icon failed", Config.Skins.SelectedKnife)
+                end)
+            end
         else
             _hudDbg("failed to create melee HUD image", slotFrame:GetFullName())
         end
     elseif isMelee then
+        rec.iconAppliedKey = nil
         _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
     else
+        rec.iconAppliedKey = nil
         if rec.iconOverlay then pcall(function() rec.iconOverlay.Visible = false end) end
         if rec.iconViewport then pcall(function() rec.iconViewport.Visible = false end) end
         if rec.iconImage then pcall(function() rec.iconImage.Visible = false; rec.iconImage:Destroy() end); rec.iconImage = nil end
@@ -4920,26 +4868,30 @@ function _applyOneSlot(slotFrame, forceKnife)
     rec.applying = false
 
     if not rec.conn then
-        rec.conn = nameLbl:GetPropertyChangedSignal("Text"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled then _queueHUDSlotApply(slotFrame) end end)
+        rec.conn = nameLbl:GetPropertyChangedSignal("Text"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled and IsAlive() then _queueHUDSlotApply(slotFrame) end end)
         table.insert(UnloadConnections, rec.conn)
+    end
+    if not rec.nameVisConn then
+        rec.nameVisConn = nameLbl:GetPropertyChangedSignal("Visible"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled and IsAlive() then _queueHUDSlotApply(slotFrame) end end)
+        table.insert(UnloadConnections, rec.nameVisConn)
     end
     if isMelee and iconLbl and not rec.iconImgConn then
         rec.iconImgConn = iconLbl:GetPropertyChangedSignal("Image"):Connect(function()
-            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
+            if rec.applying or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
             _queueHUDSlotApply(slotFrame)
         end)
         table.insert(UnloadConnections, rec.iconImgConn)
     end
     if isMelee and iconLbl and not rec.iconConn then
         rec.iconConn = iconLbl:GetPropertyChangedSignal("Visible"):Connect(function()
-            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
+            if rec.applying or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
             if not iconLbl.Visible then _queueHUDSlotApply(slotFrame) end
         end)
         table.insert(UnloadConnections, rec.iconConn)
     end
     if isMelee and iconViewport and not rec.vpVisConn then
         rec.vpVisConn = iconViewport:GetPropertyChangedSignal("Visible"):Connect(function()
-            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
+            if rec.applying or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
             if iconViewport.Visible then _queueHUDSlotApply(slotFrame) end
         end)
         table.insert(UnloadConnections, rec.vpVisConn)
@@ -4968,16 +4920,10 @@ function _hudLiteKnownIcons()
 end
 
 function _hudLiteApplyToLabel(lbl, wantIcon, wantReverse)
-    if not lbl or not lbl.Parent then return end
-    if not (lbl:IsA("ImageLabel") or lbl:IsA("ImageButton")) then return end
-    local img = lbl.Image or ""
-    if img == "" or not img:find("rbxassetid://", 1, true) then return end
-    local lname = tostring(lbl.Name):lower()
-    local isReverse = _HUDLiteReverseKeys[lname] or lname:find("reverse", 1, true) ~= nil
-    local target = isReverse and wantReverse or wantIcon
-    if not target or target == "" or target == img then return end
-    if _HUDLite.originals[lbl] == nil then _HUDLite.originals[lbl] = img end
-    pcall(function() lbl.Image = target end)
+    -- Disabled: the main slot pipeline already injects one icon overlay. The
+    -- old lite pass wrote the same asset again into nested labels and caused
+    -- double icon injection/flicker.
+    return
 end
 
 function _restoreHUDLiteIcons()
@@ -4992,7 +4938,7 @@ function _scheduleHUDApply(delayT)
     HUDSkin.applyQueued = true
     task.delay(delayT or 0.08, function()
         HUDSkin.applyQueued = false
-        if scriptRunning and Config.Skins.SkinChangerEnabled then pcall(_applyHUDKnife, true) end
+        if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() then pcall(_applyHUDKnife, true) end
     end)
 end
 
@@ -5028,26 +4974,11 @@ function _hudInventorySlots(inv)
 end
 
 _applyHUDKnife = function(_force)
-    if not Config.Skins.SkinChangerEnabled then return end
+    if not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
     local inv = _hudInventory(); if not inv then return end
     _hookHUDInventory(inv)
     for _, slot in ipairs(_hudInventorySlots(inv)) do
         pcall(function() _applyOneSlot(slot, tostring(slot.Name):lower():find("melee", 1, true) ~= nil) end)
-    end
-    local slot = inv:FindFirstChild("Melee"); if not slot then return end
-    if not SkinSystem.scriptRunning then _restoreHUDLiteIcons(); return end
-    local knife = _selectedHUDKnife()
-    local asset = HUD_KNIFE_ASSETS[knife]
-    if not asset then
-        -- Faca selecionada não tem dump confirmado — cai pra faca padrão do time.
-        local fb = _localKnifeByTeam()
-        asset = HUD_KNIFE_ASSETS[fb]
-        if not asset then return end
-    end
-    local wantIcon    = asset.Icon
-    local wantReverse = asset.ReverseIcon or asset.Icon
-    for _, d in ipairs(slot:GetDescendants()) do
-        _hudLiteApplyToLabel(d, wantIcon, wantReverse)
     end
 end
 
@@ -5057,7 +4988,7 @@ function _postSkinConfigLoadApply()
     _sanitizeSkinConfig()
     _syncKnifeLock()
     pcall(function()
-        if Config.Skins.SkinChangerEnabled then
+        if Config.Skins.SkinChangerEnabled and IsAlive() then
             for _, obj in pairs(Camera:GetChildren()) do
                 local skinName = Config.Skins.SelectedSkins[obj.Name]
                 if skinName then applyWeaponSkin(obj) end
@@ -5066,7 +4997,7 @@ function _postSkinConfigLoadApply()
     end)
     for _, delayT in ipairs({0, 0.2, 0.6, 1.2, 2.0}) do
         task.delay(delayT, function()
-            if Config.Skins.SkinChangerEnabled then pcall(_applyHUDKnife, true) end
+            if Config.Skins.SkinChangerEnabled and IsAlive() then pcall(_applyHUDKnife, true) end
         end)
     end
 end
@@ -5077,12 +5008,13 @@ function _restoreHUDKnife()
     HUDSkin.inventoryRef = nil
     for slotFrame, rec in pairs(HUDSkin.slots) do
         if rec.conn then pcall(function() rec.conn:Disconnect() end); rec.conn = nil end
+        if rec.nameVisConn then pcall(function() rec.nameVisConn:Disconnect() end); rec.nameVisConn = nil end
         if rec.iconConn then pcall(function() rec.iconConn:Disconnect() end); rec.iconConn = nil end
         if rec.iconImgConn then pcall(function() rec.iconImgConn:Disconnect() end); rec.iconImgConn = nil end
         if rec.vpVisConn then pcall(function() rec.vpVisConn:Disconnect() end); rec.vpVisConn = nil end
         if slotFrame and slotFrame.Parent then
             local nameLbl, iconLbl, iconViewport = _slotParts(slotFrame)
-            if nameLbl then pcall(function() if rec.nameText ~= nil then nameLbl.Text = rec.nameText end; nameLbl.TextTransparency = rec.nameTextTransparency or 0; nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1 end) end
+            if nameLbl then pcall(function() nameLbl.TextTransparency = rec.nameTextTransparency or 0; nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1 end) end
             if iconLbl then pcall(function() if rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end; iconLbl.ImageTransparency = rec.iconImageTransparency or 0; if rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end end) end
             if iconViewport then pcall(function() iconViewport.BackgroundTransparency = rec.iconViewportTransparency or iconViewport.BackgroundTransparency; iconViewport.Visible = rec.iconViewportVisible ~= false end) end
         end
@@ -5101,6 +5033,7 @@ function _resetHUDSlots()
     for slotFrame, rec in pairs(HUDSkin.slots) do
         if not slotFrame or not slotFrame.Parent then
             if rec.conn then pcall(function() rec.conn:Disconnect() end) end
+            if rec.nameVisConn then pcall(function() rec.nameVisConn:Disconnect() end) end
             if rec.iconConn then pcall(function() rec.iconConn:Disconnect() end) end
             if rec.iconImgConn then pcall(function() rec.iconImgConn:Disconnect() end) end
             HUDSkin.slots[slotFrame] = nil
@@ -5110,8 +5043,8 @@ end
 
 task.spawn(function()
     while scriptRunning do
-        if Config.Skins.SkinChangerEnabled then pcall(_applyHUDKnife, false) end
-        task.wait(0.8)
+        if Config.Skins.SkinChangerEnabled and IsAlive() then pcall(_applyHUDKnife, false) end
+        task.wait(1.2)
     end
 end)
 
@@ -5345,7 +5278,7 @@ end)
 
 task.spawn(function()
     while scriptRunning do
-        task.wait(0.5)
+        task.wait(1.2)
         if Config.Skins.SkinChangerEnabled and IsAlive() then
             pcall(_applySelectedGloveSkin)
             for _, obj in Camera:GetChildren() do
@@ -5673,9 +5606,11 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
             -- Silently revert the custom-knife toggle when the parent goes off.
             pcall(function() if Toggles.Knife_Toggle then Toggles.Knife_Toggle:SetValue(false) end end)
         else
-            pcall(_applySelectedGloveSkin)
-            pcall(_applyHUDKnife, true)
-            for _, delayT in ipairs({0.15, 0.45, 0.9}) do task.delay(delayT, function() pcall(_applyHUDKnife, true) end) end
+            if IsAlive() then
+                pcall(_applySelectedGloveSkin)
+                pcall(_applyHUDKnife, true)
+                for _, delayT in ipairs({0.15, 0.45, 0.9}) do task.delay(delayT, function() if IsAlive() then pcall(_applyHUDKnife, true) end end) end
+            end
         end
         _syncKnifeLock()
     end })
@@ -5688,7 +5623,7 @@ SkinGB:AddToggle("Knife_Toggle", { Text="CUSTOM KNIFE", Default=false,
             return
         end
         SkinSystem.scriptRunning=v; if not v then removeViewmodel() end
-        pcall(_applyHUDKnife, true)
+        if IsAlive() then pcall(_applyHUDKnife, true) end
     end })
 SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
     Values={"Butterfly Knife","Karambit","M9 Bayonet","Gut Knife"},
@@ -5703,7 +5638,7 @@ SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
         Config.Skins.HUDIconOverrideConfirmed = false
         Config.Skins.HUDIconConfirmedKey = nil
         if SkinSystem.spawned then removeViewmodel() end
-        pcall(_applyHUDKnife, true)
+        if IsAlive() then pcall(_applyHUDKnife, true) end
     end })
 -- HUD Asset Viewer / confirmation UI removed. Injection happens automatically.
 
@@ -6123,25 +6058,44 @@ end)
 function CreateSkinDropdown(weapon, section)
     if not SkinsFolder then return end
     local folder = SkinsFolder:FindFirstChild(weapon); if not folder then return end
-    local opts = {}
+    local opts = {"None"}
     for _, s in folder:GetChildren() do if s.Name and s.Name ~= "" then table.insert(opts, s.Name) end end
-    if #opts == 0 then return end
-    if not Config.Skins.SelectedSkins[weapon] then Config.Skins.SelectedSkins[weapon] = opts[1] end
+    if #opts <= 1 then return end
+    if Config.Skins.SelectedSkins[weapon] == "" then Config.Skins.SelectedSkins[weapon] = nil end
     SafeAddDropdown(section, "Skin_"..weapon, { Text=weapon, Options=opts,
-        Default=Config.Skins.SelectedSkins[weapon],
+        Default=Config.Skins.SelectedSkins[weapon] or "None",
         Callback=function(v)
             if not Config.Skins.SkinChangerEnabled and not _EclipseConfigLoading then
-                pcall(function() Options["Skin_"..weapon]:SetValue(Config.Skins.SelectedSkins[weapon]) end)
+                pcall(function() Options["Skin_"..weapon]:SetValue(Config.Skins.SelectedSkins[weapon] or "None") end)
                 return
             end
-            Config.Skins.SelectedSkins[weapon] = v
+            if v == "None" then Config.Skins.SelectedSkins[weapon] = nil else Config.Skins.SelectedSkins[weapon] = v end
+            if v == "None" then
+                pcall(_skinPreviewClose)
+                pcall(_clearSkinChangerRuntime)
+                if Config.Skins.SkinChangerEnabled and IsAlive() then
+                    for _, obj in ipairs(Camera:GetChildren()) do
+                        local skinName = Config.Skins.SelectedSkins[obj.Name]
+                        if skinName then pcall(applyWeaponSkin, obj, skinName) end
+                    end
+                    pcall(_applySelectedGloveSkin)
+                    pcall(_applyHUDKnife, true)
+                end
+                return
+            end
             -- Skin preview now runs for gloves too (falls back to the skin's
             -- own Camera model when there's no matching weapon model).
             pcall(SetSkinPreview, weapon)
+            if Config.Skins.SkinChangerEnabled and IsAlive() then
+                for _, obj in ipairs(Camera:GetChildren()) do
+                    if obj.Name == weapon then pcall(applyWeaponSkin, obj, v) end
+                end
+                pcall(_applyHUDKnife, true)
+            end
             -- Real-time apply: if the weapon is a glove family, immediately
             -- reapply the new skin on the currently-equipped viewmodel arms
             -- without needing to re-equip.
-            if GLOVES[weapon] or weapon == "Sports Gloves" then
+            if (GLOVES[weapon] or weapon == "Sports Gloves") and IsAlive() then
                 pcall(function()
                     local sf = SkinsFolder:FindFirstChild(weapon); if not sf then return end
                     local st = sf:FindFirstChild(v)
