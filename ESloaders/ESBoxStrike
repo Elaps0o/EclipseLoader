@@ -32,7 +32,7 @@ local LocalPlayer = Players.LocalPlayer
 -- gatilho automático está off — nada de hooks CoreGui no boot, então o erro
 -- "attempt to index nil with 'Body'" em Obsidian não pode mais acontecer no
 -- 2º load. Para reativar futuramente, basta flipar isso para true.
-local ECLIPSE_BYPASS_ENABLED = false
+local ECLIPSE_BYPASS_ENABLED = true
 
 -- ============================================================
 --   DEVICE SPOOFER (built-in)
@@ -3920,17 +3920,40 @@ local function ApplyWeaponSkinsFast(model, skinName)
     applyWeaponSkin(model, skinName)
 end
 
--- ===================== HUD SKIN SYNC (SAFE OVERLAY, real-time) =====================
+-- ===================== HUD SKIN SYNC (SAFE UI REPLACE, real-time) =====================
 -- UI-only: never loads weapon modules and never edits real weapon/viewmodel
--- instances. It hides the original HUD label/icon and draws cloned overlays above
--- them, so death/respawn/equip reloads keep following the game normally.
-local HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={} }
+-- instances. It replaces only the HUD melee slot visuals and leaves the real
+-- weapon identity intact, so death/respawn/equip reloads keep following the game.
+local HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={}, viewer=nil, debugPrints=0 }
 
-local HUD_KNIFE_STATIC = {
-    ["CT Knife"]={Team="Counter-Terrorists",ReverseIcon="rbxassetid://102135209052420",Icon="rbxassetid://115204080823353"},
-    ["T Knife"]={Team="Terrorists",ReverseIcon="rbxassetid://100704390906232",Icon="rbxassetid://140484419446969"},
-    ["Stiletto Knife"]={Team="Both",ReverseIcon="rbxassetid://99694742066082",Icon="rbxassetid://71208637985987"},
-    ["Skeleton Knife"]={Team="Both",ReverseIcon="rbxassetid://131474722426757",Icon="rbxassetid://73573766861663"},
+local function _hudDbg(...)
+    -- Keep console clean: a few HUD lines for diagnosis, no constant spam.
+    HUDSkin.debugPrints = (HUDSkin.debugPrints or 0) + 1
+    if HUDSkin.debugPrints <= 6 then print("[EclipseHUD]", ...) end
+end
+
+-- Hardcoded knife HUD assets from verified weapon dumps. Do NOT put audio ids or
+-- unknown ids here: the viewer now validates AssetFetchStatus, so bad ids stay
+-- blocked instead of being shown as "ready" while rendering blank.
+-- Dumps de faca fornecidos pelo usuário (Database.Custom.Weapons.*). Tudo aqui
+-- é lido no boot para popular HUD_KNIFE_ICONS — o script NÃO faz dump direto
+-- em runtime; se uma faca não estiver listada aqui, o AssetViewer pede
+-- confirmação antes de tentar aplicar.
+local HUD_KNIFE_ASSETS = {
+    ["CT Knife"]         = { Icon="rbxassetid://115204080823353", ReverseIcon="rbxassetid://102135209052420", Team="Counter-Terrorists" },
+    ["T Knife"]          = { Icon="rbxassetid://140484419446969", ReverseIcon="rbxassetid://100704390906232", Team="Terrorists" },
+    ["Butterfly Knife"]  = { Icon="rbxassetid://78088217065173",  ReverseIcon="rbxassetid://119105180712017", Team="Both" },
+    ["Karambit"]         = { Icon="rbxassetid://85121618781867",  ReverseIcon="rbxassetid://125193639488260", Team="Both" },
+    ["Gut Knife"]        = { Icon="rbxassetid://91965772008164",  ReverseIcon="rbxassetid://71818508657433",  Team="Both" },
+    ["M9 Bayonet"]       = { Icon="rbxassetid://92481124554479",  ReverseIcon="rbxassetid://90954924716133",  Team="Both" },
+}
+
+local HUD_KNIFE_ICONS = {}
+for n, data in pairs(HUD_KNIFE_ASSETS) do HUD_KNIFE_ICONS[n] = data.Icon end
+
+local HUD_KNIFE_TEAMS = {
+    ["CT Knife"] = "Counter-Terrorists",
+    ["T Knife"]  = "Terrorists",
 }
 
 local function _hudInventory()
@@ -3954,13 +3977,69 @@ local function _assetString(v)
     end
     if type(v) == "number" then return "rbxassetid://" .. tostring(v) end
     if type(v) ~= "string" or v == "" then return nil end
+    v = v:gsub("^%s+", ""):gsub("%s+$", "")
+    if v == "" then return nil end
     if v:match("^%d+$") then return "rbxassetid://" .. v end
+    if v:match("^rbxthumb://") then return v end
+    local id = v:match("rbxassetid://(%d+)") or v:match("[?&]id=(%d+)") or v:match("[?&]assetId=(%d+)") or v:match("/library/(%d+)") or v:match("/catalog/(%d+)")
+    if id then return "rbxassetid://" .. id end
     return v
 end
 
--- IMPORTANT: prefer "Icon" over "ReverseIcon" (the HUD uses the normal Icon,
--- ReverseIcon is only a fallback for weird slot orientations).
-local HUD_ICON_KEYS = {"Icon","InventoryIcon","SlotIcon","DisplayIcon","WeaponIcon","HUDIcon","HudIcon","Image","ImageId","ImageID","TextureId","TextureID","DecalId","DecalID","Thumbnail","ThumbnailId","ReverseIcon"}
+local function _assetIdFromString(v)
+    v = _assetString(v)
+    if type(v) ~= "string" or v == "" then return nil end
+    return v:match("rbxassetid://(%d+)") or v:match("[?&]id=(%d+)") or v:match("[?&]assetId=(%d+)") or v:match("^(%d+)$")
+end
+
+local function _assetThumb(v)
+    local id = _assetIdFromString(v)
+    if not id then return nil end
+    return "rbxthumb://type=Asset&id=" .. id .. "&w=420&h=420"
+end
+
+local function _assetThumbSmall(v)
+    local id = _assetIdFromString(v)
+    if not id then return nil end
+    return "rbxthumb://type=Asset&id=" .. id .. "&w=150&h=150"
+end
+
+local function _iconCandidates(icon)
+    local out, seen = {}, {}
+    local function add(v)
+        v = _assetString(v) or v
+        if type(v) == "string" and v ~= "" and not seen[v] then
+            seen[v] = true; out[#out + 1] = v
+        end
+    end
+    local id = _assetIdFromString(icon)
+    if id then
+        -- Raster thumbnail first: this behaves like an already-rendered JPG in
+        -- ImageLabel and avoids the blank raw-asset problem.
+        add("rbxthumb://type=Asset&id=" .. id .. "&w=420&h=420")
+        add("rbxthumb://type=Asset&id=" .. id .. "&w=150&h=150")
+        add("rbxassetid://" .. id)
+    end
+    add(icon)
+    return out
+end
+
+local function _hudConfirmedKnifeKey()
+    local sel = Config.Skins.SelectedKnife or "Butterfly Knife"
+    local data = _weaponInfo(sel) or HUD_KNIFE_ASSETS[sel]
+    local id = data and (_assetIdFromString(data.Icon) or "") or ""
+    return tostring(sel) .. ":" .. tostring(id)
+end
+
+-- Confirmation GUI was removed; HUD icon override is always allowed while
+-- the skin changer is on. The apply pipeline still validates the fetched
+-- asset before swapping in, so no confirmation step is required.
+local function _hudIconOverrideAllowed()
+    return true
+end
+
+-- IMPORTANT: the inventory slot wants the normal Icon only.
+local HUD_ICON_KEYS = {"Icon","InventoryIcon","SlotIcon","DisplayIcon","WeaponIcon","HUDIcon","HudIcon","Image","ImageId","ImageID","TextureId","TextureID","DecalId","DecalID","Thumbnail","ThumbnailId"}
 
 local function _weaponModule(name)
     if type(name) ~= "string" or name == "" then return nil end
@@ -3977,21 +4056,31 @@ local function _readWeaponModuleSourceInfo(name)
     local mod = _weaponModule(name); if not mod then return nil end
     local info = {}
     for _, key in ipairs(HUD_ICON_KEYS) do
-        if key ~= "ReverseIcon" then
-            local ok, val = pcall(function() return mod:GetAttribute(key) end)
-            local a = ok and _assetString(val) or nil
-            if a then info.Icon = a; break end
-        end
+        local ok, val = pcall(function() return mod:GetAttribute(key) end)
+        local a = ok and _assetString(val) or nil
+        if a then info.Icon = a; break end
     end
     local okSrc, src = pcall(function() return mod.Source end)
     if okSrc and type(src) == "string" and src ~= "" then
         info.Team = src:match('Team%s*=%s*"([^"]+)"') or src:match("Team%s*=%s*'([^']+)'") or info.Team
-        info.ReverseIcon = _assetString(src:match('ReverseIcon%s*=%s*"([^"]+)"') or src:match("ReverseIcon%s*=%s*'([^']+)'") or info.ReverseIcon)
-        -- Use a frontier pattern so "Icon =" does NOT also match "ReverseIcon =".
-        -- Without %f[%w], src:match('Icon%s*=') would greedily match the
-        -- ReverseIcon assignment and info.Icon would be set to the reverse asset.
+        -- Use a frontier pattern so only the exact Icon field is parsed.
         info.Icon = _assetString(src:match('%f[%w]Icon%s*=%s*"([^"]+)"') or src:match("%f[%w]Icon%s*=%s*'([^']+)'") or info.Icon)
     end
+    if info.Icon or info.Team then return info end
+    return nil
+end
+
+local function _readWeaponRuntimeInfo(name)
+    local mod = _weaponModule(name); if not mod then return nil end
+    local okReq, data = pcall(function() return require(mod) end)
+    if not okReq or type(data) ~= "table" then return nil end
+    local info = {}
+    info.Team = type(rawget(data, "Team")) == "string" and rawget(data, "Team") or nil
+    for _, key in ipairs(HUD_ICON_KEYS) do
+        local a = _assetString(rawget(data, key))
+        if a then info.Icon = a; break end
+    end
+    info.ReverseIcon = _assetString(rawget(data, "ReverseIcon") or rawget(data, "ReverseHUDIcon") or rawget(data, "ReverseImage"))
     if info.Icon or info.ReverseIcon or info.Team then return info end
     return nil
 end
@@ -3999,20 +4088,25 @@ end
 local function _weaponInfo(name)
     if type(name) ~= "string" or name == "" then return nil end
     if HUDSkin.infoCache[name] ~= nil then return HUDSkin.infoCache[name] or nil end
-    local src = HUD_KNIFE_STATIC[name]
-    local info = src and {Team=src.Team,Icon=src.Icon,ReverseIcon=src.ReverseIcon} or _readWeaponModuleSourceInfo(name)
-    HUDSkin.infoCache[name] = info or false
+    local hardcoded = HUD_KNIFE_ASSETS[name]
+    local runtime = _readWeaponRuntimeInfo(name)
+    local source = _readWeaponModuleSourceInfo(name)
+    local info = runtime or source or hardcoded
+    if info and hardcoded then
+        info.Icon = info.Icon or hardcoded.Icon
+        info.ReverseIcon = info.ReverseIcon or hardcoded.ReverseIcon
+        info.Team = info.Team or hardcoded.Team
+    end
+    if info then HUDSkin.infoCache[name] = info end
     return info
 end
 
 local function _iconFromModule(name)
     local mod = _weaponModule(name); if not mod then return nil end
     for _, key in ipairs(HUD_ICON_KEYS) do
-        if key ~= "ReverseIcon" then
-            local ok, val = pcall(function() return mod:GetAttribute(key) end)
-            local a = ok and _assetString(val) or nil
-            if a then return a end
-        end
+        local ok, val = pcall(function() return mod:GetAttribute(key) end)
+        local a = ok and _assetString(val) or nil
+        if a then return a end
     end
     for _, d in ipairs(mod:GetDescendants()) do
         local dn = tostring(d.Name):lower()
@@ -4027,29 +4121,78 @@ local function _iconFromModule(name)
     return nil
 end
 
+local function _iconFromAssetsFolder(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    local ok, root = pcall(function()
+        local assets = ReplicatedSt:FindFirstChild("Assets")
+        local weapons = assets and assets:FindFirstChild("Weapons")
+        return weapons and weapons:FindFirstChild(name)
+    end)
+    if not ok or not root then return nil end
+    -- Check attributes first.
+    for _, key in ipairs(HUD_ICON_KEYS) do
+        local okA, val = pcall(function() return root:GetAttribute(key) end)
+        local a = okA and _assetString(val) or nil
+        if a then return a end
+    end
+    -- Then look for descendant named Icon/Image/Thumbnail (skip reverse).
+    for _, d in ipairs(root:GetDescendants()) do
+        local dn = tostring(d.Name):lower()
+        if not dn:find("reverse", 1, true) then
+            if dn == "icon" or dn:find("^icon") or dn:find("image", 1, true) or dn:find("thumbnail", 1, true) then
+                local a = _assetString(d); if a then return a end
+            end
+        end
+    end
+    return nil
+end
+
 local function _iconForWeapon(name, fallbackName)
+    -- If the selected thing is a knife, do not ever borrow the T/CT Knife icon.
+    -- Missing custom icon means keep the game's original visible instead.
     local function read(n)
         if type(n) ~= "string" or n == "" then return nil end
         local info = _weaponInfo(n)
-        -- Always prefer the primary Icon; only fall back to ReverseIcon when Icon is missing.
-        return (info and info.Icon) or _iconFromModule(n) or (info and info.ReverseIcon)
+        return (info and info.Icon)
+            or _iconFromModule(n)
+            or _iconFromAssetsFolder(n)
     end
-    return read(name) or read(fallbackName)
+    local direct = read(name)
+    if direct then return direct end
+    if KNIVES[name] or tostring(name or ""):lower():find("knife", 1, true) then return nil end
+    return read(fallbackName)
 end
 
-local function _resolveHUDKnife()
-    local sel = Config.Skins.SelectedKnife or "Butterfly Knife"
-    local myTeam = LocalPlayer.Team and LocalPlayer.Team.Name or nil
-    local info = _weaponInfo(sel)
-    if info and info.Team and info.Team ~= "Both" and myTeam then
-        local wantCT = (info.Team == "Counter-Terrorists")
-        local iAmCT = (myTeam == "Counter-Terrorists")
-        if wantCT ~= iAmCT then
-            sel = iAmCT and "CT Knife" or "T Knife"
-            info = _weaponInfo(sel)
-        end
+local function _localKnifeByTeam()
+    -- Original slot identity: CT side owns CT Knife, T side owns T Knife.
+    -- Check CT first because "Counter-Terrorists" contains "Terrorists".
+    local teamName = ""
+    pcall(function()
+        teamName = tostring((LocalPlayer.Team and LocalPlayer.Team.Name)
+            or (LocalPlayer.TeamColor and LocalPlayer.TeamColor.Name)
+            or "")
+    end)
+    local function fromText(txt)
+        txt = tostring(txt or ""):lower()
+        if txt:find("counter", 1, true) or txt == "ct" or txt:find("counter%-terrorists") then return "CT Knife" end
+        if txt:find("terrorists", 1, true) or txt == "t" then return "T Knife" end
+        return nil
     end
-    return sel, info
+    local byTeam = fromText(teamName); if byTeam then return byTeam end
+    local ch = LocalPlayer.Character
+    local parentName = ch and ch.Parent and ch.Parent.Name
+    local byParent = fromText(parentName); if byParent then return byParent end
+    if Camera then
+        if Camera:FindFirstChild("CT Knife") then return "CT Knife" end
+        if Camera:FindFirstChild("T Knife") then return "T Knife" end
+    end
+    return "T Knife"
+end
+
+local function _selectedHUDKnife()
+    local sel = Config.Skins.SelectedKnife or "Butterfly Knife"
+    if KNIVES[sel] or tostring(sel):lower():find("knife", 1, true) or tostring(sel):lower():find("bayonet", 1, true) then return sel end
+    return _localKnifeByTeam()
 end
 
 local function _prettySkinName(raw)
@@ -4075,18 +4218,46 @@ local function _slotParts(slotFrame)
         end
     end
     if not (nameLbl and nameLbl:IsA("TextLabel")) then return nil end
-    local iconLbl = w:FindFirstChild(slotFrame.Name)
-    if not (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton"))) then
-        for _, d in ipairs(w:GetDescendants()) do
-            if (d:IsA("ImageLabel") or d:IsA("ImageButton")) and not tostring(d.Name):find("^EclipseHUD") then iconLbl = d; break end
+    -- The child named after the slot ("Melee", "Primary", "Secondary") can be
+    -- either an ImageLabel/ImageButton (regular weapons) OR a ViewportFrame
+    -- showing the 3D knife model (melee). We must handle BOTH so the icon we
+    -- apply is actually visible.
+    local iconLbl, iconViewport, iconAnchor = nil, nil, nil
+    local named = w:FindFirstChild(slotFrame.Name)
+    if named then
+        iconAnchor = named:IsA("GuiObject") and named or nil
+        if named:IsA("ImageLabel") or named:IsA("ImageButton") then iconLbl = named
+        elseif named:IsA("ViewportFrame") then iconViewport = named end
+        if not iconLbl and not iconViewport then
+            for _, d in ipairs(named:GetDescendants()) do
+                if tostring(d.Name):find("^EclipseHUD") then
+                    -- ignore our own replacement images
+                elseif (d:IsA("ImageLabel") or d:IsA("ImageButton")) and not iconLbl then
+                    iconLbl = d
+                elseif d:IsA("ViewportFrame") and not iconViewport then
+                    iconViewport = d
+                end
+            end
         end
     end
-    return nameLbl, iconLbl
+    if not iconLbl and not iconViewport then
+        for _, d in ipairs(w:GetDescendants()) do
+            if tostring(d.Name):find("^EclipseHUD") then
+                -- ignore our own overlays
+            elseif (d:IsA("ImageLabel") or d:IsA("ImageButton")) and not iconLbl then
+                iconLbl = d
+            elseif d:IsA("ViewportFrame") and not iconViewport then
+                iconViewport = d
+            end
+        end
+    end
+    return nameLbl, iconLbl, iconViewport, iconAnchor
 end
 
 local function _cleanHUDWeaponText(t)
     if type(t) ~= "string" then return nil end
     local pipe = t:find(" | ", 1, true); if pipe then t = t:sub(1, pipe - 1) end
+    if t:sub(1, 3) == "\xE2\x98\x85" then t = t:sub(4) end
     t = t:gsub("^%s+", ""):gsub("%s+$", "")
     if t == "" then return nil end
     return t
@@ -4195,25 +4366,414 @@ local function _showKnifeViewportIcon(rec, iconLbl, knifeName)
     return true
 end
 
-local function _ensureSlotRec(slotFrame, nameLbl, iconLbl)
+local function _ensureIconImage(rec, anchor)
+    if not (rec and anchor and anchor.Parent) then return nil end
+    local parent = anchor.Parent
+    local img = rec.iconImage
+    if not (img and img.Parent) then
+        local old = parent:FindFirstChild("EclipseHUDIcon"); if old then pcall(function() old:Destroy() end) end
+        img = Instance.new("ImageLabel")
+        img.Name = "EclipseHUDIcon"; img.BackgroundTransparency = 1; img.BorderSizePixel = 0
+        img.ScaleType = Enum.ScaleType.Fit; img.Active = false; img.Selectable = false
+        img.ClipsDescendants = false
+        img.Parent = parent
+        rec.iconImage = img
+    elseif img.Parent ~= parent then
+        img.Parent = parent
+    end
+    pcall(function()
+        if anchor:IsA("GuiObject") then
+            img.AnchorPoint = anchor.AnchorPoint
+            img.Position    = anchor.Position
+            img.Size        = anchor.Size
+            img.Rotation    = anchor.Rotation
+            img.ZIndex      = math.max((anchor.ZIndex or 1) + 100, 150)
+        else
+            img.AnchorPoint = Vector2.new(0.5, 0.5)
+            img.Position    = UDim2.fromScale(0.5, 0.5)
+            img.Size        = UDim2.fromScale(1, 1)
+            img.Rotation    = 0
+            img.ZIndex      = 150
+        end
+        img.ImageColor3 = Color3.fromRGB(255,255,255)
+        img.ImageTransparency = 0
+        img.BackgroundTransparency = 1
+        img.Visible = true
+        img.ScaleType = Enum.ScaleType.Fit
+    end)
+    return img
+end
+
+local function _syncHUDFallbackGeometry(source, fallback)
+    if not (source and fallback) then return end
+    pcall(function()
+        fallback.AnchorPoint = source.AnchorPoint
+        fallback.Position = source.Position
+        fallback.Size = source.Size
+        fallback.Rotation = source.Rotation
+        fallback.ZIndex = math.max((source.ZIndex or 2) - 1, 1)
+        fallback.Visible = source.Visible
+    end)
+end
+
+local function _ensureIconFallbackImage(rec, source)
+    if not (rec and source and source.Parent) then return nil end
+    local parent = source.Parent
+    local img = rec.iconFallbackImage
+    if not (img and img.Parent) then
+        local old = parent:FindFirstChild("EclipseHUDIconThumbFallback"); if old then pcall(function() old:Destroy() end) end
+        img = Instance.new("ImageLabel")
+        img.Name = "EclipseHUDIconThumbFallback"
+        img.BackgroundTransparency = 1; img.BorderSizePixel = 0
+        img.ScaleType = Enum.ScaleType.Fit; img.Active = false; img.Selectable = false
+        img.ClipsDescendants = false
+        img.Parent = parent
+        rec.iconFallbackImage = img
+    elseif img.Parent ~= parent then
+        img.Parent = parent
+    end
+    _syncHUDFallbackGeometry(source, img)
+    pcall(function()
+        img.ImageColor3 = Color3.fromRGB(255,255,255)
+        img.ImageTransparency = 0
+        img.BackgroundTransparency = 1
+        img.ScaleType = Enum.ScaleType.Fit
+        img.ImageRectOffset = Vector2.new(0,0)
+        img.ImageRectSize = Vector2.new(0,0)
+    end)
+    return img
+end
+
+local function _preloadHUDIcon(icon)
+    local candidates = _iconCandidates(icon)
+    if #candidates == 0 then return end
+    task.spawn(function()
+        for _, candidate in ipairs(candidates) do
+            local tmp = Instance.new("ImageLabel")
+            tmp.BackgroundTransparency = 1
+            tmp.Image = candidate
+            local finalStatus = "Unknown"
+            local ok, err = pcall(function()
+                ContentProvider:PreloadAsync({tmp}, function(_, status)
+                    finalStatus = tostring(status):gsub("Enum.AssetFetchStatus%.", "")
+                end)
+            end)
+            if ok then
+                pcall(function()
+                    finalStatus = tostring(ContentProvider:GetAssetFetchStatus(candidate)):gsub("Enum.AssetFetchStatus%.", "")
+                end)
+            end
+            _hudDbg("preload", candidate, ok and finalStatus or tostring(err))
+            pcall(function() tmp:Destroy() end)
+        end
+    end)
+end
+
+local function _prepHUDImageLabel(img)
+    if not img then return end
+    pcall(function()
+        img.BackgroundTransparency = 1
+        img.ImageColor3 = Color3.fromRGB(255,255,255)
+        img.ImageTransparency = 0
+        img.ImageRectOffset = Vector2.new(0,0)
+        img.ImageRectSize = Vector2.new(0,0)
+        img.ScaleType = Enum.ScaleType.Fit
+        img.Visible = true
+    end)
+end
+
+local function _isImageLoaded(img)
+    local loaded = false
+    pcall(function() loaded = img.IsLoaded == true end)
+    return loaded
+end
+
+local function _assetFetchStatus(candidate)
+    local status = "Unknown"
+    pcall(function()
+        status = tostring(ContentProvider:GetAssetFetchStatus(candidate)):gsub("Enum.AssetFetchStatus%.", "")
+    end)
+    return status
+end
+
+local function _statusIsGood(status)
+    status = tostring(status or "")
+    return status:find("Success", 1, true) ~= nil or status:find("Loaded", 1, true) ~= nil
+end
+
+local function _statusIsBad(status)
+    status = tostring(status or "")
+    return status:find("Failure", 1, true) ~= nil or status:find("Failed", 1, true) ~= nil
+        or status:find("Error", 1, true) ~= nil or status:find("TimedOut", 1, true) ~= nil
+end
+
+local function _imageCandidateReady(img, candidate)
+    local loaded = _isImageLoaded(img)
+    local status = _assetFetchStatus(candidate)
+    return (loaded or _statusIsGood(status)) and not _statusIsBad(status), loaded, status
+end
+
+local function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed)
+    if not (rec and img and img.Parent) then return false end
+    local candidates = _iconCandidates(icon)
+    if #candidates == 0 then return false end
+    rec.iconToken = (rec.iconToken or 0) + 1
+    local token = rec.iconToken
+    _prepHUDImageLabel(img)
+    img.Image = candidates[1]
+    rec.lastIcon = candidates[1]
+    _hudDbg("image try", debugTag or "slot", "candidate=", candidates[1], "target=", img:GetFullName())
+
+    -- Roblox can report ImageLabel.IsLoaded=false even after PreloadAsync says ok.
+    -- To avoid the blank/invisible HUD state, keep a thumbnail from the SAME asset
+    -- rendered underneath the direct icon. If the direct rbxassetid renders, it wins;
+    -- if it stays blank, the thumb is already visible and the original slot is never
+    -- destructively hidden as a "failure" fallback.
+    local thumb = _assetThumb(icon)
+    if thumb then
+        local fb = _ensureIconFallbackImage(rec, img)
+        if fb then
+            pcall(function()
+                fb.Image = thumb
+                fb.Visible = true
+            end)
+            task.spawn(function()
+                pcall(function() ContentProvider:PreloadAsync({fb}) end)
+            end)
+        end
+    elseif rec.iconFallbackImage then
+        pcall(function() rec.iconFallbackImage.Visible = false end)
+    end
+
+    task.spawn(function()
+        local finalIcon = candidates[1]
+        local anyLoaded = false
+        for i, candidate in ipairs(candidates) do
+            if rec.iconToken ~= token or not img.Parent then return end
+            pcall(function()
+                _prepHUDImageLabel(img)
+                img.Image = candidate
+                if rec.iconFallbackImage then _syncHUDFallbackGeometry(img, rec.iconFallbackImage) end
+            end)
+            local preloadStatus = "Unknown"
+            local preloadOk = pcall(function()
+                ContentProvider:PreloadAsync({img}, function(_, status)
+                    preloadStatus = tostring(status):gsub("Enum.AssetFetchStatus%.", "")
+                end)
+            end)
+            task.wait(i == 1 and 0.35 or 0.45)
+            local ready, loaded, fetchStatus = _imageCandidateReady(img, candidate)
+            if preloadStatus ~= "Unknown" then fetchStatus = preloadStatus end
+            _hudDbg("image state", debugTag or "slot", "candidate=", candidate, "preload=", tostring(preloadOk), "status=", tostring(fetchStatus), "loaded=", tostring(loaded))
+            if ready then
+                anyLoaded = true
+                finalIcon = candidate
+                break
+            end
+        end
+        if rec.iconToken ~= token or not img.Parent then return end
+        if not anyLoaded and thumb then
+            finalIcon = thumb
+            pcall(function()
+                _prepHUDImageLabel(img)
+                img.Image = thumb
+                if rec.iconFallbackImage then rec.iconFallbackImage.Visible = false end
+            end)
+            task.wait(0.25)
+            local ready, loaded, fetchStatus = _imageCandidateReady(img, thumb)
+            anyLoaded = ready
+            _hudDbg("thumb fallback", debugTag or "slot", "status=", tostring(fetchStatus), "loaded=", tostring(loaded), "ready=", tostring(ready))
+        end
+        if not anyLoaded then
+            _hudDbg("image rejected", debugTag or "slot", "all candidates failed")
+            pcall(function()
+                img.Visible = false
+                if rec.iconFallbackImage then rec.iconFallbackImage.Visible = false end
+            end)
+            if onFailed then pcall(onFailed) end
+            return
+        end
+        rec.lastIcon = finalIcon
+        _hudDbg("image accepted", debugTag or "slot", "final=", tostring(finalIcon))
+        if onLoaded then pcall(onLoaded, finalIcon) end
+    end)
+    return true
+end
+
+local _applyHUDKnife
+
+local function _ensureHUDAssetViewer()
+    if HUDSkin.viewer and HUDSkin.viewer.gui and HUDSkin.viewer.gui.Parent then return HUDSkin.viewer end
+    local parent = (gethui and gethui()) or CoreGui
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "EclipseHUDAssetViewer"; gui.ResetOnSpawn = false; gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; gui.DisplayOrder = 10001; gui.Enabled = false
+    pcall(function() gui.Parent = parent end)
+
+    local frame = Instance.new("Frame", gui)
+    frame.Name = "Panel"; frame.Size = UDim2.fromOffset(430, 316); frame.Position = UDim2.new(0.5, -215, 0.5, -158)
+    frame.BackgroundColor3 = Color3.fromRGB(18,18,20); frame.BorderSizePixel = 0; frame.ZIndex = 200
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    local stroke = Instance.new("UIStroke", frame); stroke.Color = Color3.fromRGB(55,55,62); stroke.Thickness = 1
+
+    local title = Instance.new("TextLabel", frame)
+    title.Name = "Title"; title.BackgroundTransparency = 1; title.Position = UDim2.fromOffset(14, 10); title.Size = UDim2.new(1, -52, 0, 20)
+    title.Font = Enum.Font.Code; title.TextSize = 14; title.TextXAlignment = Enum.TextXAlignment.Left; title.TextColor3 = Color3.fromRGB(235,235,240); title.Text = "HUD ASSET VIEWER"; title.ZIndex = 201
+
+    local close = Instance.new("TextButton", frame)
+    close.Name = "Close"; close.Size = UDim2.fromOffset(24, 24); close.Position = UDim2.new(1, -32, 0, 8)
+    close.BackgroundTransparency = 1; close.Text = "×"; close.Font = Enum.Font.Code; close.TextSize = 18; close.TextColor3 = Color3.fromRGB(210,210,220); close.ZIndex = 202
+
+    local status = Instance.new("TextLabel", frame)
+    status.Name = "Status"; status.BackgroundTransparency = 1; status.Position = UDim2.fromOffset(14, 34); status.Size = UDim2.new(1, -28, 0, 34)
+    status.Font = Enum.Font.Code; status.TextSize = 12; status.TextWrapped = true; status.TextXAlignment = Enum.TextXAlignment.Left; status.TextColor3 = Color3.fromRGB(180,180,190); status.Text = ""; status.ZIndex = 201
+
+    local list = Instance.new("Frame", frame)
+    list.Name = "List"; list.BackgroundTransparency = 1; list.Position = UDim2.fromOffset(12, 76); list.Size = UDim2.new(1, -24, 0, 178); list.ZIndex = 201
+    local layout = Instance.new("UIGridLayout", list); layout.CellSize = UDim2.fromOffset(92, 82); layout.CellPadding = UDim2.fromOffset(8, 8); layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local confirm = Instance.new("TextButton", frame)
+    confirm.Name = "Confirm"; confirm.Position = UDim2.fromOffset(12, 266); confirm.Size = UDim2.new(1, -24, 0, 36)
+    confirm.BackgroundColor3 = Color3.fromRGB(42, 115, 210); confirm.BorderSizePixel = 0; confirm.Font = Enum.Font.Code; confirm.TextSize = 13
+    confirm.TextColor3 = Color3.fromRGB(255,255,255); confirm.Text = "INJECT SELECTED HUD IMAGE"; confirm.ZIndex = 202
+    Instance.new("UICorner", confirm).CornerRadius = UDim.new(0, 5)
+
+    close.MouseButton1Click:Connect(function() gui.Enabled = false end)
+    confirm.MouseButton1Click:Connect(function()
+        local selectedIcon = _iconForWeapon(Config.Skins.SelectedKnife)
+        if not selectedIcon then
+            status.Text = "Blocked: no readable Icon found for " .. tostring(Config.Skins.SelectedKnife)
+            _hudDbg("HUD image override blocked; no Icon", Config.Skins.SelectedKnife)
+            return
+        end
+        Config.Skins.HUDIconOverrideConfirmed = true
+        Config.Skins.HUDIconConfirmedKey = _hudConfirmedKnifeKey()
+        status.Text = "Confirmed: " .. tostring(Config.Skins.SelectedKnife) .. " Icon will be injected."
+        _hudDbg("HUD image override confirmed", Config.Skins.SelectedKnife, selectedIcon)
+        pcall(_applyHUDKnife, true)
+    end)
+    table.insert(UnloadConnections, { Disconnect = function() pcall(function() gui:Destroy() end) end })
+    HUDSkin.viewer = { gui=gui, frame=frame, title=title, status=status, list=list, confirm=confirm }
+    return HUDSkin.viewer
+end
+
+local function _refreshHUDAssetViewer()
+    local v = _ensureHUDAssetViewer(); if not v then return end
+    for _, ch in ipairs(v.list:GetChildren()) do
+        if ch:IsA("Frame") then ch:Destroy() end
+    end
+    local knife = Config.Skins.SelectedKnife or "Butterfly Knife"
+    HUDSkin.infoCache[knife] = nil
+    local data = _weaponInfo(knife) or HUD_KNIFE_ASSETS[knife]
+    if not data then
+        v.title.Text = "HUD ASSET VIEWER"
+        v.status.Text = "No Icon/ReverseIcon found in dumps or runtime module for " .. tostring(knife)
+        return
+    end
+    v.title.Text = "HUD ASSET VIEWER · " .. tostring(knife)
+    v.status.Text = "Validating Icon assets. Confirm only if at least one card says success."
+    local rows = {
+        { label="Icon", asset=data.Icon },
+        { label="Icon JPG", asset=_assetThumb(data.Icon) },
+        { label="Small JPG", asset=_assetThumbSmall(data.Icon) },
+        { label="Reverse", asset=data.ReverseIcon },
+    }
+    for i, row in ipairs(rows) do
+        local card = Instance.new("Frame", v.list)
+        card.Name = "Asset_" .. tostring(i); card.BackgroundColor3 = Color3.fromRGB(26,26,30); card.BorderSizePixel = 0; card.ZIndex = 203
+        Instance.new("UICorner", card).CornerRadius = UDim.new(0, 4)
+        local img = Instance.new("ImageLabel", card)
+        img.Name = "Image"; img.BackgroundTransparency = 1; img.Position = UDim2.fromOffset(6, 4); img.Size = UDim2.new(1, -12, 0, 50)
+        img.ScaleType = Enum.ScaleType.Fit; img.ImageColor3 = Color3.fromRGB(255,255,255); img.Image = row.asset or ""; img.ZIndex = 204
+        local lbl = Instance.new("TextLabel", card)
+        lbl.BackgroundTransparency = 1; lbl.Position = UDim2.fromOffset(4, 56); lbl.Size = UDim2.new(1, -8, 0, 20)
+        lbl.Font = Enum.Font.Code; lbl.TextSize = 10; lbl.TextColor3 = Color3.fromRGB(190,190,200); lbl.TextXAlignment = Enum.TextXAlignment.Center; lbl.Text = row.label .. " · loading"; lbl.ZIndex = 204
+        task.spawn(function()
+            if not row.asset then
+                if lbl and lbl.Parent then lbl.Text = row.label .. " · missing" end
+                return
+            end
+            local finalStatus = "Unknown"
+            local ok = pcall(function()
+                ContentProvider:PreloadAsync({img}, function(_, status)
+                    finalStatus = tostring(status):gsub("Enum.AssetFetchStatus%.", "")
+                end)
+            end)
+            task.wait(0.2)
+            local ready, loaded, fetchStatus = _imageCandidateReady(img, row.asset)
+            if finalStatus ~= "Unknown" then fetchStatus = finalStatus end
+            local text = "fail"
+            if ready then text = "success" elseif ok and not _statusIsBad(fetchStatus) then text = tostring(fetchStatus):lower() end
+            if lbl and lbl.Parent then lbl.Text = row.label .. " · " .. text end
+            _hudDbg("viewer", knife, row.label, tostring(row.asset), "status=", tostring(fetchStatus), "loaded=", tostring(loaded))
+        end)
+    end
+end
+
+function ShowHUDAssetViewer()
+    local v = _ensureHUDAssetViewer(); if not v then return end
+    _refreshHUDAssetViewer()
+    v.gui.Enabled = true
+end
+
+local function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
+    if rec then rec.iconToken = (rec.iconToken or 0) + 1 end
+    if rec and rec.iconImage then pcall(function() rec.iconImage:Destroy() end); rec.iconImage = nil end
+    if rec and rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end); rec.iconFallbackImage = nil end
+    if iconLbl then
+        pcall(function()
+            if rec and rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end
+            if rec and rec.iconImageColor3 ~= nil then iconLbl.ImageColor3 = rec.iconImageColor3 end
+            if rec and rec.iconImageRectOffset ~= nil then iconLbl.ImageRectOffset = rec.iconImageRectOffset end
+            if rec and rec.iconImageRectSize ~= nil then iconLbl.ImageRectSize = rec.iconImageRectSize end
+            if rec and rec.iconScaleType ~= nil then iconLbl.ScaleType = rec.iconScaleType end
+            iconLbl.ImageTransparency = rec and rec.iconImageTransparency or iconLbl.ImageTransparency
+            if rec and rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end
+        end)
+    end
+    if iconViewport then
+        pcall(function()
+            iconViewport.BackgroundTransparency = rec and rec.iconViewportTransparency or iconViewport.BackgroundTransparency
+            if rec and rec.iconViewportVisible ~= nil then iconViewport.Visible = rec.iconViewportVisible end
+        end)
+    end
+end
+
+local function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
     local rec = HUDSkin.slots[slotFrame]
     if rec then
         if nameLbl and (not rec.nameOverlay or not rec.nameOverlay.Parent) then rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay") end
-        if iconLbl and (not rec.iconOverlay or not rec.iconOverlay.Parent) then rec.iconOverlay = _cloneHUDOverlay(iconLbl, "EclipseHUDIconOverlay") end
+        rec.iconLabelRef = iconLbl or rec.iconLabelRef
+        rec.iconViewportRef = iconViewport or rec.iconViewportRef
+        rec.iconAnchorRef = iconAnchor or rec.iconAnchorRef
         return rec
     end
     rec = {
         baseName = _cleanHUDWeaponText(nameLbl.Text) or tostring(slotFrame.Name),
+        nameText = nameLbl.Text,
         nameTextTransparency = nameLbl.TextTransparency,
         nameTextStrokeTransparency = nameLbl.TextStrokeTransparency,
-        iconImageTransparency = iconLbl and iconLbl.ImageTransparency or nil,
+        iconLabelImage = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.Image) or nil,
+        iconImageColor3 = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageColor3) or nil,
+        iconImageRectOffset = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageRectOffset) or nil,
+        iconImageRectSize = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageRectSize) or nil,
+        iconScaleType = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ScaleType) or nil,
+        iconImageTransparency = (iconLbl and iconLbl.ImageTransparency) or nil,
+        iconLabelVisible = (iconLbl and iconLbl.Visible) or nil,
+        iconLabelRef = iconLbl,
+        iconViewportTransparency = (iconViewport and iconViewport.BackgroundTransparency) or nil,
+        iconViewportVisible = (iconViewport and iconViewport.Visible) or nil,
+        iconViewportRef = iconViewport,
+        iconAnchorRef = iconAnchor,
         nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay"),
-        iconOverlay = iconLbl and _cloneHUDOverlay(iconLbl, "EclipseHUDIconOverlay") or nil,
+        iconOverlay = nil,
         iconViewport = nil,
         iconViewportKnife = nil,
+        iconImage = nil,
+        iconFallbackImage = nil,
         applying = false,
         conn = nil,
         iconConn = nil,
+        iconToken = 0,
     }
     HUDSkin.slots[slotFrame] = rec
     return rec
@@ -4227,13 +4787,21 @@ local function _slotWeaponKey(slotFrame, nameLbl)
 end
 
 local function _isHUDMeleeSlot(slotFrame, weaponKey)
+    weaponKey = _cleanHUDWeaponText(weaponKey) or weaponKey
     local sn = tostring(slotFrame and slotFrame.Name or ""):lower()
+    if sn:find("primary", 1, true) or sn:find("secondary", 1, true) or sn:find("pistol", 1, true) then return false end
     if sn:find("melee", 1, true) or sn:find("knife", 1, true) then return true end
     if weaponKey == "T Knife" or weaponKey == "CT Knife" then return true end
-    return KNIVES[weaponKey] == true
+    if KNIVES[weaponKey] == true then return true end
+    local wk = tostring(weaponKey or ""):lower()
+    return wk:find("knife", 1, true) ~= nil or wk:find("bayonet", 1, true) ~= nil or wk == "karambit"
 end
 
 local function _hudSkinForWeapon(weaponName, fallbackWeapon)
+    if type(weaponName) ~= "string" or weaponName == "" then return nil end
+    -- Preserve other/renamed weapon skins: only show/apply configured skins when
+    -- the current weapon name is an exact, known game skin folder.
+    if SkinsFolder and not SkinsFolder:FindFirstChild(weaponName) then return nil end
     local skin = Config.Skins.SelectedSkins[weaponName]
     if (not skin or skin == "") and fallbackWeapon then skin = Config.Skins.SelectedSkins[fallbackWeapon] end
     local pretty = _prettySkinName(skin)
@@ -4241,17 +4809,23 @@ local function _hudSkinForWeapon(weaponName, fallbackWeapon)
 end
 
 local function _desiredHUDForSlot(slotFrame, rawWeapon)
+    rawWeapon = _cleanHUDWeaponText(rawWeapon) or rawWeapon
     if _isHUDMeleeSlot(slotFrame, rawWeapon) then
-        local knifeName = _resolveHUDKnife(); knifeName = knifeName or rawWeapon or "Knife"
-        local prettySkin = _hudSkinForWeapon(knifeName, rawWeapon)
-        local text = prettySkin and (knifeName .. " | " .. prettySkin) or knifeName
-        local icon = _iconForWeapon(knifeName, rawWeapon)
-        return text, icon, knifeName
+        local originalKnife = _localKnifeByTeam()
+        if not SkinSystem.scriptRunning then
+            return originalKnife, nil, originalKnife, false
+        end
+        local knifeName = _selectedHUDKnife()
+        local prettySkin = _hudSkinForWeapon(knifeName, originalKnife)
+        local base = knifeName
+        local text = prettySkin and ("\xE2\x98\x85 " .. base .. " | " .. prettySkin) or base
+        local icon = _iconForWeapon(knifeName)
+        return text, icon, originalKnife, prettySkin ~= nil
     end
-    local weaponName = rawWeapon; if not weaponName or weaponName == "" then return nil, nil, nil end
+    local weaponName = rawWeapon; if not weaponName or weaponName == "" then return nil, nil, nil, false end
     local prettySkin = _hudSkinForWeapon(weaponName)
-    local text = prettySkin and (weaponName .. " | " .. prettySkin) or weaponName
-    return text, _iconForWeapon(weaponName), weaponName
+    local text = prettySkin and ("\xE2\x98\x85 " .. weaponName .. " | " .. prettySkin) or weaponName
+    return text, nil, weaponName, prettySkin ~= nil
 end
 
 local function _queueHUDSlotApply(slotFrame)
@@ -4262,35 +4836,59 @@ end
 
 function _applyOneSlot(slotFrame, forceKnife)
     if not slotFrame or not slotFrame.Parent or not Config.Skins.SkinChangerEnabled then return end
-    local nameLbl, iconLbl = _slotParts(slotFrame); if not nameLbl then return end
-    local rec = _ensureSlotRec(slotFrame, nameLbl, iconLbl)
+    local nameLbl, iconLbl, iconViewport, iconAnchor = _slotParts(slotFrame); if not nameLbl then return end
+    local rec = _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
     local rawWeapon = _slotWeaponKey(slotFrame, nameLbl) or rec.baseName or tostring(slotFrame.Name)
-    if forceKnife then rawWeapon = rawWeapon or "CT Knife" end
-    -- Only rewrite the HUD for melee slots — every other weapon keeps its
-    -- original HUD icon/name untouched (skinchanger applies to game weapons
-    -- with matching original names elsewhere).
-    if not _isHUDMeleeSlot(slotFrame, rawWeapon) then return end
-    local text, icon, baseName = _desiredHUDForSlot(slotFrame, rawWeapon); if not text then return end
+    if forceKnife then rawWeapon = rawWeapon or _localKnifeByTeam() end
+    local isMelee = _isHUDMeleeSlot(slotFrame, rawWeapon)
+    local text, icon, baseName, hasSkin = _desiredHUDForSlot(slotFrame, rawWeapon); if not text then return end
     rec.baseName = baseName or rawWeapon or rec.baseName
 
-    -- Hide any leftover overlay/viewport from the previous buggy approach.
     if rec.nameOverlay then pcall(function() rec.nameOverlay.Visible = false end) end
     if rec.iconOverlay then pcall(function() rec.iconOverlay.Visible = false end) end
     if rec.iconViewport then pcall(function() rec.iconViewport.Visible = false end) end
 
     rec.applying = true
-    -- Write name + icon straight into the game's own labels. Real-time swap,
-    -- no ghost overlays, no bugged 3D viewport.
     pcall(function()
         nameLbl.Text = text
         nameLbl.TextTransparency = rec.nameTextTransparency or 0
         nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
     end)
-    if iconLbl and type(icon) == "string" and icon ~= "" then
-        pcall(function()
-            iconLbl.Image = icon
-            iconLbl.ImageTransparency = rec.iconImageTransparency or 0
-        end)
+    _hudDbg("slot=", slotFrame.Name, "weapon=", baseName, "hasSkin=", hasSkin, "icon=", icon, "iconLbl=", iconLbl and iconLbl:GetFullName() or "nil", "vp=", iconViewport and iconViewport:GetFullName() or "nil")
+
+    if isMelee and type(icon) == "string" and icon ~= "" and _hudIconOverrideAllowed() then
+        -- Previous in-slot method: no top-level transparent GUI. We inject an
+        -- ImageLabel into the real melee slot / mutate the slot ImageLabel when
+        -- available. The chosen asset is hardcoded from dumps and converted to
+        -- rbxthumb first so Roblox renders it as a stable thumbnail image.
+        local directIcon = _assetString(icon) or icon
+        _preloadHUDIcon(directIcon)
+        local img = nil
+        local usingNativeImage = iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton"))
+        if usingNativeImage then
+            img = iconLbl
+        else
+            img = _ensureIconImage(rec, iconViewport or iconAnchor or slotFrame)
+        end
+        if img then
+            _applyHUDImageWithFallback(rec, img, directIcon, tostring(slotFrame.Name) .. ":slot-image", function(finalIcon)
+                if iconViewport then pcall(function() iconViewport.Visible = false end) end
+                if rec.iconImage then pcall(function() rec.iconImage.Visible = true end) end
+                _hudDbg("melee HUD icon injected", Config.Skins.SelectedKnife, finalIcon)
+            end, function()
+                if iconViewport then pcall(function() iconViewport.Visible = rec.iconViewportVisible ~= false end) end
+                _hudDbg("melee HUD icon failed", Config.Skins.SelectedKnife)
+            end)
+        else
+            _hudDbg("failed to create melee HUD image", slotFrame:GetFullName())
+        end
+    elseif isMelee then
+        _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
+    else
+        if rec.iconOverlay then pcall(function() rec.iconOverlay.Visible = false end) end
+        if rec.iconViewport then pcall(function() rec.iconViewport.Visible = false end) end
+        if rec.iconImage then pcall(function() rec.iconImage.Visible = false; rec.iconImage:Destroy() end); rec.iconImage = nil end
+        if rec.iconFallbackImage then pcall(function() rec.iconFallbackImage.Visible = false; rec.iconFallbackImage:Destroy() end); rec.iconFallbackImage = nil end
     end
     rec.applying = false
 
@@ -4298,17 +4896,99 @@ function _applyOneSlot(slotFrame, forceKnife)
         rec.conn = nameLbl:GetPropertyChangedSignal("Text"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled then _queueHUDSlotApply(slotFrame) end end)
         table.insert(UnloadConnections, rec.conn)
     end
-    if iconLbl and not rec.iconConn then
-        rec.iconConn = iconLbl:GetPropertyChangedSignal("Image"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled then _queueHUDSlotApply(slotFrame) end end)
+    if isMelee and iconLbl and not rec.iconImgConn then
+        rec.iconImgConn = iconLbl:GetPropertyChangedSignal("Image"):Connect(function()
+            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
+            _queueHUDSlotApply(slotFrame)
+        end)
+        table.insert(UnloadConnections, rec.iconImgConn)
+    end
+    if isMelee and iconLbl and not rec.iconConn then
+        rec.iconConn = iconLbl:GetPropertyChangedSignal("Visible"):Connect(function()
+            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
+            if not iconLbl.Visible then _queueHUDSlotApply(slotFrame) end
+        end)
         table.insert(UnloadConnections, rec.iconConn)
+    end
+    if isMelee and iconViewport and not rec.vpVisConn then
+        rec.vpVisConn = iconViewport:GetPropertyChangedSignal("Visible"):Connect(function()
+            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
+            if iconViewport.Visible then _queueHUDSlotApply(slotFrame) end
+        end)
+        table.insert(UnloadConnections, rec.vpVisConn)
     end
 end
 
-local function _applyHUDKnife(_force)
+
+function _restoreKnifeModuleOverride() end
+
+-- Lightweight melee-only HUD override (skinchanger style).
+-- • Só toca no slot Melee. Nunca em Primary/Secondary/Grenade.
+-- • Sem hookmetamethod. Persistência via loop de reapply (0.25s).
+-- • Restaura o Image original quando desliga.
+-- NOTE: declared as globals (not `local`) to avoid exceeding the 200
+-- local-register limit of the main chunk ("Out of local registers ... _HUDLite").
+_HUDLite = { originals = {} } -- [ImageLabel] = originalImage
+_HUDLiteReverseKeys = { ["reverseicon"]=true, ["reverse_icon"]=true, ["reverse"]=true, ["backicon"]=true, ["back_icon"]=true }
+
+function _hudLiteKnownIcons()
+    local set = {}
+    for _, k in pairs(HUD_KNIFE_ASSETS) do
+        if k.Icon then set[k.Icon] = true end
+        if k.ReverseIcon then set[k.ReverseIcon] = true end
+    end
+    return set
+end
+
+function _hudLiteApplyToLabel(lbl, wantIcon, wantReverse)
+    if not lbl or not lbl.Parent then return end
+    if not (lbl:IsA("ImageLabel") or lbl:IsA("ImageButton")) then return end
+    local img = lbl.Image or ""
+    if img == "" or not img:find("rbxassetid://", 1, true) then return end
+    local lname = tostring(lbl.Name):lower()
+    local isReverse = _HUDLiteReverseKeys[lname] or lname:find("reverse", 1, true) ~= nil
+    local target = isReverse and wantReverse or wantIcon
+    if not target or target == "" or target == img then return end
+    if _HUDLite.originals[lbl] == nil then _HUDLite.originals[lbl] = img end
+    pcall(function() lbl.Image = target end)
+end
+
+_applyHUDKnife = function(_force)
     if not Config.Skins.SkinChangerEnabled then return end
     local inv = _hudInventory(); if not inv then return end
-    for _, slotFrame in ipairs(inv:GetChildren()) do
-        if slotFrame:IsA("Frame") or slotFrame:IsA("ImageLabel") or slotFrame:IsA("ImageButton") then pcall(_applyOneSlot, slotFrame, _force and _isHUDMeleeSlot(slotFrame, nil)) end
+    local slot = inv:FindFirstChild("Melee"); if not slot then return end
+    local knife = _selectedHUDKnife()
+    local asset = HUD_KNIFE_ASSETS[knife]
+    if not asset then
+        -- Faca selecionada não tem dump confirmado — cai pra faca padrão do time.
+        local fb = _localKnifeByTeam()
+        asset = HUD_KNIFE_ASSETS[fb]
+        if not asset then return end
+    end
+    local wantIcon    = asset.Icon
+    local wantReverse = asset.ReverseIcon or asset.Icon
+    for _, d in ipairs(slot:GetDescendants()) do
+        _hudLiteApplyToLabel(d, wantIcon, wantReverse)
+    end
+end
+
+
+
+function _postSkinConfigLoadApply()
+    _sanitizeSkinConfig()
+    _syncKnifeLock()
+    pcall(function()
+        if Config.Skins.SkinChangerEnabled then
+            for _, obj in pairs(Camera:GetChildren()) do
+                local skinName = Config.Skins.SelectedSkins[obj.Name]
+                if skinName then applyWeaponSkin(obj) end
+            end
+        end
+    end)
+    for _, delayT in ipairs({0, 0.2, 0.6, 1.2, 2.0}) do
+        task.delay(delayT, function()
+            if Config.Skins.SkinChangerEnabled then pcall(_applyHUDKnife, true) end
+        end)
     end
 end
 
@@ -4316,23 +4996,34 @@ function _restoreHUDKnife()
     for slotFrame, rec in pairs(HUDSkin.slots) do
         if rec.conn then pcall(function() rec.conn:Disconnect() end); rec.conn = nil end
         if rec.iconConn then pcall(function() rec.iconConn:Disconnect() end); rec.iconConn = nil end
+        if rec.iconImgConn then pcall(function() rec.iconImgConn:Disconnect() end); rec.iconImgConn = nil end
+        if rec.vpVisConn then pcall(function() rec.vpVisConn:Disconnect() end); rec.vpVisConn = nil end
         if slotFrame and slotFrame.Parent then
-            local nameLbl, iconLbl = _slotParts(slotFrame)
-            if nameLbl then pcall(function() nameLbl.TextTransparency = rec.nameTextTransparency or 0; nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1 end) end
-            if iconLbl then pcall(function() iconLbl.ImageTransparency = rec.iconImageTransparency or 0 end) end
+            local nameLbl, iconLbl, iconViewport = _slotParts(slotFrame)
+            if nameLbl then pcall(function() if rec.nameText ~= nil then nameLbl.Text = rec.nameText end; nameLbl.TextTransparency = rec.nameTextTransparency or 0; nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1 end) end
+            if iconLbl then pcall(function() if rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end; iconLbl.ImageTransparency = rec.iconImageTransparency or 0; if rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end end) end
+            if iconViewport then pcall(function() iconViewport.BackgroundTransparency = rec.iconViewportTransparency or iconViewport.BackgroundTransparency; iconViewport.Visible = rec.iconViewportVisible ~= false end) end
         end
         if rec.nameOverlay then pcall(function() rec.nameOverlay:Destroy() end) end
         if rec.iconOverlay then pcall(function() rec.iconOverlay:Destroy() end) end
+        if rec.iconImage   then pcall(function() rec.iconImage:Destroy() end)   end
+        if rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end) end
         _destroyHUDIconViewport(rec)
     end
     HUDSkin.slots = setmetatable({}, {__mode="k"})
+    -- Light melee override: restore all icon labels we touched.
+    for lbl, orig in pairs(_HUDLite.originals) do
+        if lbl and lbl.Parent and orig then pcall(function() lbl.Image = orig end) end
+    end
+    _HUDLite.originals = {}
 end
 
-local function _resetHUDSlots()
+function _resetHUDSlots()
     for slotFrame, rec in pairs(HUDSkin.slots) do
         if not slotFrame or not slotFrame.Parent then
             if rec.conn then pcall(function() rec.conn:Disconnect() end) end
             if rec.iconConn then pcall(function() rec.iconConn:Disconnect() end) end
+            if rec.iconImgConn then pcall(function() rec.iconImgConn:Disconnect() end) end
             HUDSkin.slots[slotFrame] = nil
         end
     end
@@ -4352,10 +5043,152 @@ pcall(function()
     end)
 end)
 
+-- ============================================================
+--   NAME OVERLAY SYSTEM (from-scratch, no direct name hook)
+--   Cria um TextLabel filho de cada nameLbl de slot HUD e mostra
+--   "★ <Weapon> | <Skin>" por cima. Não escreve em nameLbl.Text —
+--   apenas oculta o original (TextTransparency=1) enquanto o
+--   overlay estiver ativo. Não toca no sistema de icon já embutido.
+--   Persistência via loop 0.35s + ChildAdded no Inventory.
+--   Ativado junto com Enable Skin Changer, sem toggle próprio.
+-- ============================================================
+_NameOverlay = { labels = setmetatable({}, {__mode = "k"}) }
+
+local function _nameOverlay_desiredText(slotFrame, nameLbl)
+    local rawWeapon = _slotWeaponKey(slotFrame, nameLbl) or tostring(slotFrame.Name)
+    local isMelee = _isHUDMeleeSlot(slotFrame, rawWeapon)
+    local displayName, skin
+    if isMelee then
+        displayName = _selectedHUDKnife() or rawWeapon
+        skin = _hudSkinForWeapon(displayName, rawWeapon)
+    else
+        displayName = rawWeapon
+        if not displayName or displayName == "" then return nil end
+        skin = _hudSkinForWeapon(displayName)
+    end
+    if not skin or skin == "" then return nil end
+    local prefix = isMelee and "\xE2\x98\x85 " or ""
+    return prefix .. tostring(displayName) .. " | " .. tostring(skin)
+end
+
+local function _nameOverlay_ensure(nameLbl)
+    local rec = _NameOverlay.labels[nameLbl]
+    if rec and rec.overlay and rec.overlay.Parent then return rec end
+    rec = rec or {
+        origTransparency        = nameLbl.TextTransparency,
+        origStrokeTransparency  = nameLbl.TextStrokeTransparency,
+    }
+    local ov = Instance.new("TextLabel")
+    ov.Name = "EclipseNameOverlay"
+    ov.BackgroundTransparency = 1
+    ov.BorderSizePixel = 0
+    ov.Size = UDim2.fromScale(1, 1)
+    ov.Position = UDim2.fromScale(0, 0)
+    ov.ZIndex = (nameLbl.ZIndex or 1) + 10
+    pcall(function()
+        ov.Font                  = nameLbl.Font
+        ov.TextSize              = nameLbl.TextSize
+        ov.TextScaled            = nameLbl.TextScaled
+        ov.TextColor3            = nameLbl.TextColor3
+        ov.TextStrokeColor3      = nameLbl.TextStrokeColor3
+        ov.TextStrokeTransparency= nameLbl.TextStrokeTransparency
+        ov.TextXAlignment        = nameLbl.TextXAlignment
+        ov.TextYAlignment        = nameLbl.TextYAlignment
+        ov.RichText              = nameLbl.RichText
+    end)
+    ov.Text = ""
+    ov.Parent = nameLbl
+    rec.overlay = ov
+    _NameOverlay.labels[nameLbl] = rec
+    return rec
+end
+
+local function _nameOverlay_hideOriginal(nameLbl, rec)
+    if rec.origTransparency == nil then rec.origTransparency = nameLbl.TextTransparency end
+    if rec.origStrokeTransparency == nil then rec.origStrokeTransparency = nameLbl.TextStrokeTransparency end
+    pcall(function()
+        nameLbl.TextTransparency = 1
+        nameLbl.TextStrokeTransparency = 1
+    end)
+end
+
+local function _nameOverlay_restore(nameLbl, rec)
+    if rec and rec.overlay then pcall(function() rec.overlay:Destroy() end) end
+    if nameLbl and nameLbl.Parent then
+        pcall(function()
+            nameLbl.TextTransparency = rec and rec.origTransparency or 0
+            nameLbl.TextStrokeTransparency = rec and rec.origStrokeTransparency or 1
+        end)
+    end
+    if nameLbl then _NameOverlay.labels[nameLbl] = nil end
+end
+
+function _nameOverlayApplyOne(slotFrame)
+    if not slotFrame or not slotFrame.Parent then return end
+    if not Config.Skins.SkinChangerEnabled then return end
+    local nameLbl = select(1, _slotParts(slotFrame)); if not nameLbl then return end
+    local text = _nameOverlay_desiredText(slotFrame, nameLbl)
+    if not text then
+        local existing = _NameOverlay.labels[nameLbl]
+        if existing then _nameOverlay_restore(nameLbl, existing) end
+        return
+    end
+    local rec = _nameOverlay_ensure(nameLbl)
+    _nameOverlay_hideOriginal(nameLbl, rec)
+    if rec.overlay.Text ~= text then rec.overlay.Text = text end
+end
+
+function _nameOverlayApplyAll()
+    local inv = _hudInventory(); if not inv then return end
+    for _, slotFrame in ipairs(inv:GetChildren()) do
+        if slotFrame:IsA("GuiObject") then
+            pcall(_nameOverlayApplyOne, slotFrame)
+        end
+    end
+end
+
+function _nameOverlayRestoreAll()
+    for nameLbl, rec in pairs(_NameOverlay.labels) do
+        _nameOverlay_restore(nameLbl, rec)
+    end
+    _NameOverlay.labels = setmetatable({}, {__mode = "k"})
+end
+
+task.spawn(function()
+    while scriptRunning do
+        if Config.Skins.SkinChangerEnabled then
+            pcall(_nameOverlayApplyAll)
+        end
+        task.wait(0.35)
+    end
+end)
+
+pcall(function()
+    local inv = _hudInventory()
+    if inv then
+        table.insert(UnloadConnections, inv.ChildAdded:Connect(function(child)
+            task.delay(0.15, function()
+                if Config.Skins.SkinChangerEnabled and child:IsA("GuiObject") then
+                    pcall(_nameOverlayApplyOne, child)
+                end
+            end)
+        end))
+    end
+    table.insert(UnloadConnections, LocalPlayer.CharacterAdded:Connect(function()
+        for _, dt in ipairs({0.4, 1.0, 2.0}) do
+            task.delay(dt, function()
+                if Config.Skins.SkinChangerEnabled then pcall(_nameOverlayApplyAll) end
+            end)
+        end
+    end))
+end)
+
+
 function CleanupScript()
     scriptRunning = false
     sendWebhook("unloaded", "Script unloaded")
     pcall(_restoreHUDKnife)
+    pcall(_nameOverlayRestoreAll)
     pcall(_restoreKnifeModuleOverride)
     -- Unapply bypass on reload/unload to avoid CoreGui bugs the next session.
     pcall(UninstallDeviceSpoofer)
@@ -4671,10 +5504,8 @@ AS.smth = AimGB:AddSlider("Aimbot_Smooth", { Text="SMOOTHNESS", Default=0.35, Mi
         else local o=_aimOverride(Config.Aimbot.SelectedWeapon); if o then o.Smoothness=v end end
     end })
 SafeAddDropdown(AimGB, "Aimbot_Part", { Text="TARGET PART", Values={"Head","Neck","Arms","Legs"}, Default="Head", Callback=function(v) Config.Aimbot.TargetPart=v end })
--- SILENT AIM removed per user request.
-Config.Aimbot.SilentAim = false
+-- SILENT AIM removed per user request. Config.Aimbot.SilentAim stays false.
 AimGB:AddToggle("Aimbot_DrawFOV", { Text="DRAW FOV",    Default=true, Callback=function(v) Config.Aimbot.DrawFOV=v end })
-
     :AddColorPicker("Aimbot_FOVColor", { Default=Color3.fromRGB(255,255,255), Title="FOV color", Callback=function(c) Config.Aimbot.FOVColor=c end })
 -- VISIBILITY CHECK is built-in and always on (no toggle).
 
@@ -4724,9 +5555,7 @@ Config.ESP.Skeleton = false
 -- the cycle buttons under the ESP preview panel (NAME / DIST / WEP / HEALTH).
 EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=function(v) Config.ESP.Chams=v end })
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
--- ESP CHARMS GLOW slider removed per user request. Glow is fixed at 0 (solid fill).
-Config.ESP.ChamsGlow = 0
-
+EspGB:AddSlider("ESP_ChamsGlow", { Text="ESP CHARMS GLOW", Default=0.35, Min=0, Max=1, Rounding=2, Callback=function(v) Config.ESP.ChamsGlow=v end })
 EspGB:AddDivider()
 
 local WorldEspGB = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
@@ -4880,6 +5709,7 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
             SkinSystem.scriptRunning=false; removeViewmodel()
             _restoreAppliedSkins()
             pcall(_restoreHUDKnife)
+            pcall(_nameOverlayRestoreAll)
             pcall(_restoreKnifeModuleOverride)
             Config.Skins.HUDIconOverrideConfirmed = false
             Config.Skins.HUDIconConfirmedKey = nil
