@@ -4326,11 +4326,29 @@ local function _showKnifeViewportIcon(rec, iconLbl, knifeName)
     return true
 end
 
+-- Sweep the entire slot subtree for duplicate Eclipse overlays with the given
+-- name, destroying every match except `keep`. Prevents double-injection when
+-- the game re-parents / rebuilds slot elements between apply passes.
+local function _sweepDuplicateOverlays(slotFrame, overlayName, keep)
+    if not (slotFrame and slotFrame.Parent) then return end
+    pcall(function()
+        for _, d in ipairs(slotFrame:GetDescendants()) do
+            if d ~= keep and d.Name == overlayName and d:GetAttribute("EclipseHUD") then
+                pcall(function() d:Destroy() end)
+            end
+        end
+    end)
+end
+
 local function _ensureIconImage(rec, anchor)
+
     if not (rec and anchor and anchor.Parent) then return nil end
     local parent = anchor.Parent
+    -- Sweep any stale duplicates from previous passes BEFORE creating/reusing.
+    _sweepDuplicateOverlays(rec.slotFrame, "EclipseHUDIcon", rec.iconImage)
     local img = rec.iconImage
     if not (img and img.Parent == parent) then
+        if img then pcall(function() img:Destroy() end); rec.iconImage = nil end
         local old = parent:FindFirstChild("EclipseHUDIcon")
         if old then pcall(function() old:Destroy() end) end
         img = Instance.new("ImageLabel")
@@ -4341,6 +4359,7 @@ local function _ensureIconImage(rec, anchor)
         pcall(function() img.Parent = parent end)
         rec.iconImage = img
     end
+
     pcall(function()
         if anchor:IsA("GuiObject") then
             img.AnchorPoint = anchor.AnchorPoint
@@ -4379,8 +4398,10 @@ end
 local function _ensureIconFallbackImage(rec, source)
     if not (rec and source and source.Parent) then return nil end
     local parent = source.Parent
+    _sweepDuplicateOverlays(rec.slotFrame, "EclipseHUDIconThumbFallback", rec.iconFallbackImage)
     local img = rec.iconFallbackImage
     if not (img and img.Parent == parent) then
+        if img then pcall(function() img:Destroy() end); rec.iconFallbackImage = nil end
         local old = parent:FindFirstChild("EclipseHUDIconThumbFallback")
         if old then pcall(function() old:Destroy() end) end
         img = Instance.new("ImageLabel")
@@ -4392,6 +4413,7 @@ local function _ensureIconFallbackImage(rec, source)
         pcall(function() img.Parent = parent end)
         rec.iconFallbackImage = img
     end
+
     _syncHUDFallbackGeometry(source, img)
     pcall(function()
         img.ImageColor3 = Color3.fromRGB(255,255,255)
@@ -4721,8 +4743,10 @@ local function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnc
         conn = nil,
         iconConn = nil,
         iconToken = 0,
+        slotFrame = slotFrame,
     }
     HUDSkin.slots[slotFrame] = rec
+
     return rec
 end
 
