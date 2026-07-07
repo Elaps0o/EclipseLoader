@@ -32,7 +32,7 @@ local LocalPlayer = Players.LocalPlayer
 -- gatilho automático está off — nada de hooks CoreGui no boot, então o erro
 -- "attempt to index nil with 'Body'" em Obsidian não pode mais acontecer no
 -- 2º load. Para reativar futuramente, basta flipar isso para true.
-local ECLIPSE_BYPASS_ENABLED = true
+local ECLIPSE_BYPASS_ENABLED = false
 
 -- ============================================================
 --   DEVICE SPOOFER (built-in)
