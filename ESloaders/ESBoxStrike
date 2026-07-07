@@ -2622,10 +2622,10 @@ function C4Show(status, timeText, sub, color)
 
     local rich
     if status == "PLANTED" then
-        rich = string.format("<b>C4</b>  %s s", tostring(timeText or ""))
+        rich = string.format("<b>C4</b>  %s", tostring(timeText or ""))
     elseif status == "DEFUSING" then
         local who = (sub and sub ~= "" and (" · " .. sub)) or ""
-        rich = string.format("<b>DEFUSING</b>  %s s%s", tostring(timeText or ""), who)
+        rich = string.format("<b>DEFUSING</b>  %s%s", tostring(timeText or ""), who)
     elseif status == "BOMB DEFUSED"   then rich = "<b>BOMB DEFUSED</b>"
     elseif status == "BOMB DETONATED" then rich = "<b>BOMB DETONATED</b>"
     elseif status == "BOMB LOST"      then rich = "<b>BOMB LOST</b>  signal lost"
@@ -3607,13 +3607,21 @@ end
 function _clearSkinChangerRuntime()
     pcall(_restoreAppliedSkins)
     pcall(restoreOriginalKnife)
+    -- Fallback glove/weapon cleanup: strip any SurfaceAppearance we injected
+    -- (tagged with EclipseSkinSource) even if the weak _skinRestore entry
+    -- was GC'd. Prevents "gloves still skinned after disable/unload".
     pcall(function()
         for _, obj in ipairs(Camera:GetChildren()) do
             obj:SetAttribute("SkinApplied", nil)
             obj:SetAttribute("EclipseSkinSource", nil)
             for _, d in ipairs(obj:GetDescendants()) do
                 d:SetAttribute("SkinApplied", nil)
-                d:SetAttribute("EclipseSkinSource", nil)
+                if d:IsA("BasePart") and d:GetAttribute("EclipseSkinSource") ~= nil then
+                    for _, ch in ipairs(d:GetChildren()) do
+                        if ch:IsA("SurfaceAppearance") then pcall(function() ch:Destroy() end) end
+                    end
+                    d:SetAttribute("EclipseSkinSource", nil)
+                end
             end
         end
     end)
@@ -3675,19 +3683,27 @@ local function handleAction(actionName, state)
         local ok = pcall(function() SkinSystem.inspectAnim:Play() end)
         if ok then _signalOnce(SkinSystem.inspectAnim.Stopped, function() SkinSystem.inspecting = false end)
         else SkinSystem.inspecting = false end
-    elseif actionName == "AttackKnifeAction" then
+    elseif actionName == "AttackKnifeAction" or actionName == "RightAttackKnifeAction" then
         local now = os.clock()
         if now - SkinSystem.lastAttackTime < 1 then return Enum.ContextActionResult.Pass end
         SkinSystem.lastAttackTime = now
         if SkinSystem.inspecting then SkinSystem.inspecting=false; if SkinSystem.inspectAnim then pcall(function() SkinSystem.inspectAnim:Stop() end) end end
         SkinSystem.swinging = true
         if SkinSystem.idleAnim then pcall(function() SkinSystem.idleAnim:Stop() end) end
-        local anims = { SkinSystem.HeavySwingAnim, SkinSystem.Swing1Anim, SkinSystem.Swing2Anim }
-        local live = {}
-        for _, tr in ipairs(anims) do if tr then table.insert(live, tr) end end
-        if #live == 0 then SkinSystem.swinging = false; return Enum.ContextActionResult.Pass end
-        local chosen = live[math.random(1,#live)]
-        local sf = (chosen == SkinSystem.HeavySwingAnim and "HitOne") or (chosen == SkinSystem.Swing1Anim and "HitTwo") or "HitThree"
+        local chosen, sf
+        if actionName == "RightAttackKnifeAction" then
+            -- Right click = heavy stab.
+            chosen = SkinSystem.HeavySwingAnim or SkinSystem.Swing1Anim or SkinSystem.Swing2Anim
+            sf = "HitOne"
+        else
+            local anims = { SkinSystem.HeavySwingAnim, SkinSystem.Swing1Anim, SkinSystem.Swing2Anim }
+            local live = {}
+            for _, tr in ipairs(anims) do if tr then table.insert(live, tr) end end
+            if #live == 0 then SkinSystem.swinging = false; return Enum.ContextActionResult.Pass end
+            chosen = live[math.random(1,#live)]
+            sf = (chosen == SkinSystem.HeavySwingAnim and "HitOne") or (chosen == SkinSystem.Swing1Anim and "HitTwo") or "HitThree"
+        end
+        if not chosen then SkinSystem.swinging = false; return Enum.ContextActionResult.Pass end
         local ok = pcall(function() chosen:Play() end)
         if ok then
             playSound(sf, "1")
@@ -3703,6 +3719,7 @@ local function removeViewmodel()
     SkinSystem.spawned = false
     pcall(function() ContextAction:UnbindAction("InspectKnifeAction") end)
     pcall(function() ContextAction:UnbindAction("AttackKnifeAction") end)
+    pcall(function() ContextAction:UnbindAction("RightAttackKnifeAction") end)
     for _, tr in ipairs({SkinSystem.equipAnim, SkinSystem.idleAnim, SkinSystem.inspectAnim, SkinSystem.HeavySwingAnim, SkinSystem.Swing1Anim, SkinSystem.Swing2Anim}) do
         if tr then pcall(function() tr:Stop() end) end
     end
@@ -3770,8 +3787,10 @@ local function spawnViewmodel(knife)
     SkinSystem.spawned = true
     pcall(function() ContextAction:UnbindAction("InspectKnifeAction") end)
     pcall(function() ContextAction:UnbindAction("AttackKnifeAction") end)
+    pcall(function() ContextAction:UnbindAction("RightAttackKnifeAction") end)
     ContextAction:BindAction("InspectKnifeAction", handleAction, false, Enum.KeyCode.F)
     ContextAction:BindAction("AttackKnifeAction", handleAction, false, Enum.UserInputType.MouseButton1)
+    ContextAction:BindAction("RightAttackKnifeAction", handleAction, false, Enum.UserInputType.MouseButton2)
     end)
     if not ok then warn("[Eclipse] Custom knife spawn failed: " .. tostring(err)) end
     if not SkinSystem.spawned and SkinSystem.vm then pcall(function() SkinSystem.vm:Destroy() end); SkinSystem.vm=nil; restoreOriginalKnife() end
@@ -5017,7 +5036,16 @@ function _restoreHUDKnife()
         if rec.vpVisConn then pcall(function() rec.vpVisConn:Disconnect() end); rec.vpVisConn = nil end
         if slotFrame and slotFrame.Parent then
             local nameLbl, iconLbl, iconViewport = _slotParts(slotFrame)
-            if nameLbl then pcall(function() nameLbl.TextTransparency = rec.nameTextTransparency or 0; nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1 end) end
+            if nameLbl then pcall(function()
+                if rec.nameOverlay then rec.nameOverlay.Visible = false end
+                nameLbl.TextTransparency = rec.nameTextTransparency or 0
+                nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
+                -- Restore the raw game-name text so the label never keeps our
+                -- "★ Knife | Skin" string after cleanup. Also force Visible so
+                -- unloads never leave a blank slot.
+                if rec.nameText ~= nil and nameLbl.Text ~= rec.nameText then nameLbl.Text = rec.nameText end
+                nameLbl.Visible = true
+            end) end
             if iconLbl then pcall(function() if rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end; iconLbl.ImageTransparency = rec.iconImageTransparency or 0; if rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end end) end
             if iconViewport then pcall(function() iconViewport.BackgroundTransparency = rec.iconViewportTransparency or iconViewport.BackgroundTransparency; iconViewport.Visible = rec.iconViewportVisible ~= false end) end
         end
@@ -5447,7 +5475,8 @@ Config.ESP.Skeleton = false
 -- the cycle buttons under the ESP preview panel (NAME / DIST / WEP / HEALTH).
 EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=function(v) Config.ESP.Chams=v end })
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
-EspGB:AddSlider("ESP_ChamsGlow", { Text="ESP CHARMS GLOW", Default=0.35, Min=0, Max=1, Rounding=2, Callback=function(v) Config.ESP.ChamsGlow=v end })
+-- ESP CHAMS GLOW slider removed per request. Config.ESP.ChamsGlow keeps its
+-- default (0.35) so the fill still receives its standard glow blend.
 EspGB:AddDivider()
 
 local WorldEspGB = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
@@ -6346,15 +6375,23 @@ local Header = Instance.new("Frame", SpecFrame)
 Header.BackgroundTransparency = 1
 Header.Size = UDim2.new(1, 0, 0, 20)
 Header.ZIndex = 51
+local HeaderDot = Instance.new("Frame", Header)
+HeaderDot.BackgroundColor3 = Color3.fromRGB(140, 95, 255)
+HeaderDot.BorderSizePixel = 0
+HeaderDot.Position = UDim2.fromOffset(8, 6)
+HeaderDot.Size = UDim2.fromOffset(8, 8)
+HeaderDot.ZIndex = 52
+Instance.new("UICorner", HeaderDot).CornerRadius = UDim.new(1, 0)
 local TitleLbl = Instance.new("TextLabel", Header)
 TitleLbl.BackgroundTransparency = 1
-TitleLbl.Position = UDim2.fromOffset(8, 0)
-TitleLbl.Size = UDim2.new(1, -16, 1, 0)
-TitleLbl.Font = Enum.Font.GothamBold
-TitleLbl.TextSize = 11
+TitleLbl.Position = UDim2.fromOffset(22, 0)
+TitleLbl.Size = UDim2.new(1, -30, 1, 0)
+TitleLbl.Font = Enum.Font.Code
+TitleLbl.TextSize = 13
 TitleLbl.TextColor3 = Color3.new(1, 1, 1)
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
-TitleLbl.Text = "Spectators (0)"
+TitleLbl.RichText = true
+TitleLbl.Text = "<b>SPEC</b>  0"
 TitleLbl.ZIndex = 52
 
 local RowList = Instance.new("Frame", SpecFrame)
@@ -6552,7 +6589,7 @@ task.spawn(function()
             local attrCount
             pcall(function() attrCount = LocalPlayer:GetAttribute("Spectators") end)
             local count = math.max(#names, tonumber(attrCount) or 0)
-            TitleLbl.Text = string.format("Spectators (%d)", count)
+            TitleLbl.Text = string.format("<b>SPEC</b>  %d", count)
             specRebuild(names)
             SpecFrame.Size = UDim2.fromOffset(200, 26 + math.max(1, #names) * 22)
             local shouldShow = isGuiOpen() or (count > 0)
@@ -8651,8 +8688,6 @@ end)() -- UI CREATION
                 end)
                 if _charConn then _charConn:Disconnect() end
                 _charConn = LocalPlayer.CharacterAdded:Connect(function()
-                    -- Recapture base FOV on respawn so we don't lock in the
-                    -- spectator/death-cam FOV and drag it into the new life.
                     task.wait(0.5)
                     if ST.Enabled then
                         _origFOV = Camera.FieldOfView
@@ -8666,17 +8701,38 @@ end)() -- UI CREATION
 
     StretchGB:AddSlider("Stretch_Ratio", { Text="ASPECT RATIO", Default=1.30, Min=0.60, Max=2.20, Rounding=2,
         Callback=function(v)
-            -- Only allow adjusting aspect ratio while the local player is
-            -- alive; snap the slider back otherwise (avoids FOV changes on
-            -- the spectator/death cam that stick after respawn).
-            local char = LocalPlayer.Character
-            local hum  = char and char:FindFirstChildOfClass("Humanoid")
-            if not (hum and hum.Health > 0) then
+            if not _isAlive() then
                 pcall(function() Options.Stretch_Ratio:SetValue(ST.Ratio) end)
                 return
             end
             ST.Ratio = v; _applyStretch()
         end })
+    -- Small "must be alive" hint under the toggle/slider (via AddLabel if the
+    -- lib exposes it; else fall back to Notify-less silent gating).
+    pcall(function()
+        if type(StretchGB.AddLabel) == "function" then
+            StretchGB:AddLabel("must be alive", true)
+        end
+    end)
+    -- Live gate: while dead, restore original FOV, disable toggle/slider UI,
+    -- and re-enable them once the humanoid respawns. No popups.
+    task.spawn(function()
+        local wasAlive
+        while scriptRunning do
+            local alive = _isAlive()
+            if alive ~= wasAlive then
+                wasAlive = alive
+                if not alive and ST.Enabled then
+                    pcall(function() Toggles.Stretch_Enable:SetValue(false) end)
+                    ST.Enabled = false
+                    _restoreStretch()
+                end
+                pcall(function() _uiSetDisabled(Toggles.Stretch_Enable, not alive) end)
+                pcall(function() _uiSetDisabled(Options.Stretch_Ratio, not alive) end)
+            end
+            task.wait(0.35)
+        end
+    end)
     -- Reapply every RenderStep too — some games rewrite FieldOfView per-tick
     -- (weapon zoom, scripted cutscenes). This is what makes it PERSISTENT.
     RunService.RenderStepped:Connect(function()
