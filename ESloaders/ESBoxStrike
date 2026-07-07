@@ -32,7 +32,7 @@ local LocalPlayer = Players.LocalPlayer
 -- gatilho automático está off — nada de hooks CoreGui no boot, então o erro
 -- "attempt to index nil with 'Body'" em Obsidian não pode mais acontecer no
 -- 2º load. Para reativar futuramente, basta flipar isso para true.
-local ECLIPSE_BYPASS_ENABLED = false
+local ECLIPSE_BYPASS_ENABLED = true
 
 -- ============================================================
 --   DEVICE SPOOFER (built-in)
@@ -5106,6 +5106,20 @@ function _restoreHUDName(rec, nameLbl)
     if not nameLbl then return end
     pcall(function()
         if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
+        -- If the native label still holds OUR override string, write back the
+        -- best known original (game-owned baseName / inferred weapon / cached
+        -- raw nameText). Never stomp when the game already refreshed it to a
+        -- real value — that would revert legitimate updates.
+        if rec and rec.eclNameApplied and rec.eclNameText and nameLbl.Text == rec.eclNameText then
+            local base = _inferHUDSlotWeapon(rec.slotFrame, nameLbl)
+            if not base or base == "" then base = rec.baseName end
+            if (not base or base == "") and rec.nameText and rec.nameText ~= rec.eclNameText then
+                base = rec.nameText
+            end
+            if base and base ~= "" then
+                pcall(function() nameLbl.Text = base end)
+            end
+        end
         if rec then
             rec.currentOverlayText = nil
             rec.eclNameApplied = false
@@ -5117,29 +5131,31 @@ end
 
 function _applyHUDNameOverlay(rec, nameLbl, text)
     if not (rec and nameLbl and text and text ~= "") then return end
-    -- Clone-overlay path: write the override into OUR sibling clone (which the
-    -- game HUD never touches) and hide the native label. Direct writes to the
-    -- native label were reverted every frame by the game script, leaving the
-    -- original text on screen. The clone survives all game rewrites because
-    -- it is a separate instance tagged EclipseHUD.
+    -- Direct in-place write into the native HUD label. No sibling overlay —
+    -- the game HUD renders our text without any extra ScreenGui / clone,
+    -- avoiding the "non RobloxScript" require path entirely. Restore is
+    -- handled by _restoreHUDName using the cached baseName / raw nameText.
     pcall(function()
-        if not rec.nameOverlay or not rec.nameOverlay.Parent then
-            rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay")
+        if rec.nameOverlay then rec.nameOverlay.Visible = false end
+        -- Snapshot the current label BEFORE we overwrite it, so restore has a
+        -- fresh original to write back even if the game rebuilt the HUD.
+        local current = nameLbl.Text
+        if current and current ~= "" and current ~= text and current ~= rec.eclNameText then
+            local clean = _cleanHUDWeaponText(current)
+            if clean then rec.baseName = clean end
+            rec.nameText = current
+            if type(nameLbl.TextTransparency) == "number" and nameLbl.TextTransparency < 0.95 then
+                rec.nameTextTransparency = nameLbl.TextTransparency
+            end
+            rec.nameTextStrokeTransparency = nameLbl.TextStrokeTransparency
         end
-        local ov = rec.nameOverlay
-        if not ov then return end
-        _syncHUDOverlayGeometry(nameLbl, ov)
-        ov.Text = text
-        ov.TextTransparency = 0
-        ov.TextStrokeTransparency = 1
-        ov.Visible = true
-        ov.ZIndex = math.max((nameLbl.ZIndex or 1) + 5, 6)
         rec.currentOverlayText = text
         rec.eclNameApplied = true
         rec.eclNameText = text
-        -- Hide the native label so only our clone shows the override.
-        nameLbl.TextTransparency = 1
+        nameLbl.Text = text
+        nameLbl.TextTransparency = 0
         nameLbl.TextStrokeTransparency = 1
+        nameLbl.Visible = true
     end)
 end
 
@@ -5356,6 +5372,12 @@ function _recoverNativeHUDSlot(slotFrame, rec)
     if nameLbl then
         pcall(function()
             if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
+            if rec and rec.eclNameApplied and rec.eclNameText and nameLbl.Text == rec.eclNameText then
+                local base = _inferHUDSlotWeapon(slotFrame, nameLbl)
+                if (not base or base == "") then base = rec.baseName end
+                if (not base or base == "") and rec.nameText and rec.nameText ~= rec.eclNameText then base = rec.nameText end
+                if base and base ~= "" then pcall(function() nameLbl.Text = base end) end
+            end
             _restoreHUDNameVisibility(rec, nameLbl)
         end)
     end
