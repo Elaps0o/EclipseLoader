@@ -4055,20 +4055,40 @@ local function attachAsset(folder, arm, model, name, offset)
     local src = folder:WaitForChild(model, 5); if not src then return end
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
-    -- Encolhe uniformemente as luvas para nao "engolir" a mao/faca, mantendo
-    -- as proporcoes originais do modelo (sem distorcer). Sleeves ficam intactas.
+    -- Ajuste uniforme (sem distorcer) para a luva ficar JUSTA no arm sem engolir
+    -- a mao/faca. Alvo = tamanho do arm * 1.02 (bem justo, so folga minima),
+    -- clampado entre 0.55 e 1.0 para nao sumir nem estourar.
     if name == "Glove" and mesh:IsA("BasePart") and target:IsA("BasePart") then
         local ts, ms = target.Size, mesh.Size
         if ms.X > 0 and ms.Y > 0 and ms.Z > 0 then
-            local factor = math.min(ts.X / ms.X, ts.Y / ms.Y, ts.Z / ms.Z, 0.75)
-            if factor > 0.35 and factor < 1 then
-                pcall(function() mesh.Size = ms * factor end)
-            elseif factor >= 1 then
-                pcall(function() mesh.Size = ms * 0.75 end)
-            end
+            local tX, tY, tZ = ts.X * 1.02, ts.Y * 1.02, ts.Z * 1.02
+            local factor = math.min(tX/ms.X, tY/ms.Y, tZ/ms.Z, 1.0)
+            if factor < 0.55 then factor = 0.55 end
+            pcall(function() mesh.Size = ms * factor end)
+            -- Guarda o menor fator observado para o calculo do offset da faca.
+            local prev = SkinSystem.gloveScale or 1.0
+            if factor < prev then SkinSystem.gloveScale = factor end
         end
     end
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
+end
+
+-- Empurra a faca (e demais partes presas ao Right Arm que nao sao luva/manga)
+-- um pouco para fora, proporcional ao quanto a luva encolheu — assim a faca
+-- nao fica "afundada" na luva menor, mas tambem nao voa longe.
+local function _pushKnifeOutward()
+    local vm = SkinSystem.vm; if not vm then return end
+    local scale = SkinSystem.gloveScale or 1.0
+    if scale >= 0.98 then return end
+    local push = (1 - scale) * 0.6  -- 0.24 a 0.27 studs no pior caso
+    for _, d in ipairs(vm:GetDescendants()) do
+        if d:IsA("Motor6D") and d.Part0 and (d.Part0.Name == "Right Arm" or d.Part0.Name == "Left Arm") then
+            local n = d.Part1 and d.Part1.Name or ""
+            if n ~= "Glove" and n ~= "Sleeve" then
+                pcall(function() d.C0 = d.C0 * CFrame.new(0, push * 0.5, -push) end)
+            end
+        end
+    end
 end
 
 -- Sound lookup order:
@@ -4217,6 +4237,7 @@ local function spawnViewmodel(knife)
     SkinSystem.vm = camTpl:Clone()
     SkinSystem.vm.Name = Config.Skins.SelectedKnife; SkinSystem.vm.Parent = Camera
     disableCollisions(SkinSystem.vm); hideOriginalKnife(knife)
+    SkinSystem.gloveScale = 1.0
     if me.Parent.Name == "Terrorists" then
         local g = weapons:WaitForChild("T Glove", 5)
         attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5))
@@ -4230,6 +4251,7 @@ local function spawnViewmodel(knife)
         attachAsset(sl,"Right Arm","Right Arm","Sleeve",CFrame.new(0,0,0.5))
         attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5))
     end
+    pcall(_pushKnifeOutward)
 
     local ac = SkinSystem.vm:FindFirstChildOfClass("AnimationController") or SkinSystem.vm:FindFirstChildOfClass("Animator")
     if not ac then return end
