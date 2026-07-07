@@ -897,6 +897,7 @@ local Config = {
         ChamsColor     = Color3.fromRGB(255, 60, 60),
         ChamsGlowColor = Color3.fromRGB(255, 180, 180),
         ChamsGlow      = 0.35, -- 0 = solid, 1 = only outline glow
+        Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
     },
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={} },
@@ -4815,9 +4816,11 @@ function _applyHUDNameOverlay(rec, nameLbl, text)
         _syncHUDOverlayGeometry(nameLbl, rec.nameOverlay)
         rec.nameOverlay.Text = text
         rec.currentOverlayText = text
-        rec.nameOverlay.TextTransparency = rec.nameTextTransparency or 0
-        rec.nameOverlay.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
-        rec.nameOverlay.Visible = nameLbl.Visible
+        rec.nameOverlay.TextColor3 = nameLbl.TextColor3
+        rec.nameOverlay.TextTransparency = 0
+        rec.nameOverlay.TextStrokeTransparency = 1
+        rec.nameOverlay.Visible = true
+        rec.nameOverlay.ZIndex = math.max((nameLbl.ZIndex or 1) + 5, 10)
         -- Hide the real game label instead of writing into it. Direct Text
         -- mutation makes the game/HUD fight us and can bug the whole inventory.
         nameLbl.TextTransparency = 1
@@ -5550,6 +5553,8 @@ EspGB:AddToggle("ESP_Target",    { Text="TARGET LINE",Default=true,  Callback=fu
     :AddColorPicker("ESP_LineCol", { Default=Config.ESP.LineColor,     Title="Target line color", Callback=function(c) Config.ESP.LineColor=c end })
 EspGB:AddToggle("ESP_Weapon",    { Text="ESP WEAPON", Default=false, Callback=function(v) Config.ESP.WeaponName=v end })
     :AddColorPicker("ESP_WepNCol", { Default=Config.ESP.WeaponNameColor, Title="Weapon name color", Callback=function(c) Config.ESP.WeaponNameColor=c end })
+EspGB:AddToggle("ESP_Ammo",      { Text="ESP AMMO",   Default=false, Callback=function(v) Config.ESP.Ammo=v end })
+    :AddColorPicker("ESP_AmmoCol", { Default=Config.ESP.AmmoColor, Title="Ammo bar color", Callback=function(c) Config.ESP.AmmoColor=c end })
 -- HEAD DOT + SKELETON removed by user request (were causing FPS drop).
 Config.ESP.HeadDot = false
 Config.ESP.Skeleton = false
@@ -6461,7 +6466,8 @@ Header.ZIndex = 51
 local HeaderDot = Instance.new("Frame", Header)
 HeaderDot.BackgroundColor3 = Color3.fromRGB(140, 95, 255)
 HeaderDot.BorderSizePixel = 0
-HeaderDot.Position = UDim2.fromOffset(7, 6)
+HeaderDot.AnchorPoint = Vector2.new(0, 0.5)
+HeaderDot.Position = UDim2.new(0, 8, 0.5, 0)
 HeaderDot.Size = UDim2.fromOffset(5, 5)
 HeaderDot.ZIndex = 52
 Instance.new("UICorner", HeaderDot).CornerRadius = UDim.new(1, 0)
@@ -6474,15 +6480,27 @@ TitleLbl.TextSize = 11
 TitleLbl.TextColor3 = Color3.new(1, 1, 1)
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 TitleLbl.RichText = true
-TitleLbl.Text = "<b>SPEC</b>  0"
+TitleLbl.Text = "<b>Spectators</b>"
 TitleLbl.ZIndex = 52
+
+-- Fine divider between header and rows
+local Divider = Instance.new("Frame", SpecFrame)
+Divider.Name = "Divider"
+Divider.BackgroundColor3 = Color3.new(1, 1, 1)
+Divider.BackgroundTransparency = 0.75
+Divider.BorderSizePixel = 0
+Divider.Position = UDim2.new(0, 6, 0, 18)
+Divider.Size = UDim2.new(1, -12, 0, 1)
+Divider.ZIndex = 52
 
 local RowList = Instance.new("Frame", SpecFrame)
 RowList.BackgroundTransparency = 1
-RowList.Position = UDim2.fromOffset(7, 18)
-RowList.Size = UDim2.new(1, -14, 1, -20); RowList.ZIndex = 51
+RowList.Position = UDim2.fromOffset(7, 21)
+RowList.Size = UDim2.new(1, -14, 1, -23); RowList.ZIndex = 51
 local RowLay = Instance.new("UIListLayout", RowList)
-RowLay.SortOrder = Enum.SortOrder.LayoutOrder; RowLay.Padding = UDim.new(0, 0)
+RowLay.SortOrder = Enum.SortOrder.LayoutOrder
+RowLay.HorizontalAlignment = Enum.HorizontalAlignment.Center
+RowLay.Padding = UDim.new(0, 0)
 
 do
     local D = {a=false}
@@ -6658,9 +6676,9 @@ task.spawn(function()
             local attrCount
             pcall(function() attrCount = LocalPlayer:GetAttribute("Spectators") end)
             local count = math.max(#names, tonumber(attrCount) or 0)
-            TitleLbl.Text = string.format("<b>SPEC</b>  %d", count)
+            TitleLbl.Text = string.format("<b>Spectators</b>  <font color='rgb(180,180,180)'>%d</font>", count)
             specRebuild(names)
-            SpecFrame.Size = UDim2.fromOffset(150, 20 + math.max(0, #names) * 16)
+            SpecFrame.Size = UDim2.fromOffset(150, 23 + math.max(0, #names) * 16)
             local shouldShow = isGuiOpen() or (count > 0)
             if shouldShow and not wasVisible then
                 SpecFrame.Visible = true; wasVisible = true
@@ -8866,8 +8884,107 @@ end)() -- UI CREATION
 end)() -- SCREEN STRETCH + LOGGING
 
 
+-- ================================================================
+-- SCREECH / STRETCH BYPASS (client-side FOV cloak)
+-- Hooks Camera.__index so the game/anti-cheat continues to read the
+-- ORIGINAL FieldOfView while the local render uses our stretched value.
+-- Only active while Config.Stretch.Enabled and player is alive.
+-- ================================================================
+;(function()
+    local ok_meta, mt = pcall(getrawmetatable, Camera)
+    if not ok_meta or type(mt) ~= "table" then return end
+    local hookmm = rawget(getfenv(0), "hookmetamethod") or hookmetamethod
+    local newccl = rawget(getfenv(0), "newcclosure") or function(f) return f end
+    if type(hookmm) ~= "function" then return end
+    local oldIndex
+    local okHook, err = pcall(function()
+        oldIndex = hookmm(Camera, "__index", newccl(function(self, k)
+            if self == Camera and (k == "FieldOfView" or k == "ViewportSize") and Config.Stretch and Config.Stretch.Enabled then
+                if k == "FieldOfView" then
+                    return OriginalCameraFOV or 70
+                end
+            end
+            return oldIndex(self, k)
+        end))
+    end)
+    if not okHook then return end
+end)()
+
+-- ================================================================
+-- ESP AMMO — thin white bar at the bottom of the screen.
+-- Empties from CENTER outward as ammo depletes.
+-- Standalone toggle (no longer embedded inside ESP WEAPON).
+-- ================================================================
+;(function()
+    local BarGui = Instance.new("ScreenGui")
+    BarGui.Name = "EclipseAmmoBar"
+    BarGui.ResetOnSpawn = false
+    BarGui.IgnoreGuiInset = true
+    BarGui.DisplayOrder = 9999
+    BarGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    pcall(function() BarGui.Parent = gethui() end)
+
+    local Track = Instance.new("Frame", BarGui)
+    Track.Name = "Track"
+    Track.AnchorPoint = Vector2.new(0.5, 1)
+    Track.Position = UDim2.new(0.5, 0, 1, 0)
+    Track.Size = UDim2.new(0.35, 0, 0, 2)
+    Track.BackgroundColor3 = Color3.new(0, 0, 0)
+    Track.BackgroundTransparency = 0.65
+    Track.BorderSizePixel = 0
+    Track.Visible = false
+
+    local Fill = Instance.new("Frame", Track)
+    Fill.Name = "Fill"
+    Fill.AnchorPoint = Vector2.new(0.5, 0.5)
+    Fill.Position = UDim2.new(0.5, 0, 0.5, 0)
+    Fill.Size = UDim2.new(1, 0, 1, 0)
+    Fill.BackgroundColor3 = Color3.new(1, 1, 1)
+    Fill.BorderSizePixel = 0
+
+    table.insert(UnloadConnections, { Disconnect = function() pcall(function() BarGui:Destroy() end) end })
+
+    local function _localHeldTool()
+        local ch = LocalPlayer and LocalPlayer.Character
+        if not ch then return nil end
+        for _, c in ipairs(ch:GetChildren()) do
+            if c:IsA("Tool") or c:IsA("Model") then
+                local n = c.Name
+                if n ~= "Arms" and n ~= "Arms1" and n ~= "Arms2" and n ~= "Viewmodel" then
+                    return c
+                end
+            end
+        end
+        return nil
+    end
+
+    local _maxCache = {}
+    RunService.RenderStepped:Connect(function()
+        if not scriptRunning then return end
+        if not Config.ESP.Ammo then
+            if Track.Visible then Track.Visible = false end
+            return
+        end
+        local held = _localHeldTool()
+        if not held then Track.Visible = false; return end
+        local cur = held:GetAttribute("Ammo") or held:GetAttribute("Bullets") or held:GetAttribute("CurrentAmmo")
+        if type(cur) ~= "number" then Track.Visible = false; return end
+        local maxA = held:GetAttribute("MaxAmmo") or held:GetAttribute("ClipSize") or held:GetAttribute("Magazine")
+        if type(maxA) ~= "number" or maxA <= 0 then
+            local key = held.Name
+            local prev = _maxCache[key] or 0
+            if cur > prev then _maxCache[key] = cur; prev = cur end
+            maxA = math.max(prev, cur, 1)
+        end
+        local frac = math.clamp(cur / maxA, 0, 1)
+        Fill.Size = UDim2.new(frac, 0, 1, 0)
+        Fill.BackgroundColor3 = Config.ESP.AmmoColor or Color3.new(1,1,1)
+        Track.Visible = true
+    end)
+end)()
 
 UpdateWeather(Config.World.Weather)
+
 
 task.spawn(function()
     if getgenv().Eclipse.sessionSeen then
