@@ -907,6 +907,7 @@ local Config = {
         ChamsGlow      = 0.35, -- 0 = solid, 1 = only outline glow
         Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
         IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90), -- MoneyColor kept for back-compat but not user-editable; only shown during warmup
+        C4Carrier      = false, C4CarrierColor = Color3.fromRGB(255, 90, 60),
     },
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={} },
@@ -1933,9 +1934,10 @@ end
 -- Phase attributes on workspace + ReplicatedStorage, Status value, and the
 -- MatchLogging / RoundHandler / GameLogic modules). Cached for perf.
 local _warmT, _warmVal = 0, false
+local _warmModule, _warmModuleT = nil, 0
 function _isWarmup()
     local t = tick()
-    if t - _warmT < 0.35 then return _warmVal end
+    if t - _warmT < 0.5 then return _warmVal end
     _warmT = t
     local hits = {}
     local function _push(v) if v ~= nil then hits[#hits+1] = tostring(v):lower() end end
@@ -1949,17 +1951,25 @@ function _isWarmup()
         local status = ReplicatedSt:FindFirstChild("Status", true) or ReplicatedSt:FindFirstChild("GameStatus", true)
         if status and (status:IsA("StringValue") or status:IsA("IntValue")) then _push(status.Value) end
     end)
-    pcall(function()
-        for _, m in ipairs(ReplicatedSt:GetDescendants()) do
-            if m:IsA("ModuleScript") and (m.Name == "MatchLogging" or m.Name == "RoundHandler" or m.Name == "GameLogic") then
-                local ok, mod = pcall(require, m)
-                if ok and type(mod) == "table" then
-                    _push(mod.State); _push(mod.CurrentState); _push(mod.Phase); _push(mod.RoundState)
-                end
-                break
+    -- Cache the match/round module so we don't iterate GetDescendants() every tick
+    -- (this was the source of the "Identity Money" lag reported by the user).
+    if not _warmModule or (t - _warmModuleT) > 8 then
+        _warmModuleT = t
+        pcall(function()
+            for _, name in ipairs({"MatchLogging","RoundHandler","GameLogic"}) do
+                local m = ReplicatedSt:FindFirstChild(name, true)
+                if m and m:IsA("ModuleScript") then _warmModule = m; break end
             end
-        end
-    end)
+        end)
+    end
+    if _warmModule then
+        pcall(function()
+            local ok, mod = pcall(require, _warmModule)
+            if ok and type(mod) == "table" then
+                _push(mod.State); _push(mod.CurrentState); _push(mod.Phase); _push(mod.RoundState)
+            end
+        end)
+    end
     pcall(function() _push(LocalPlayer:GetAttribute("Warmup")) end)
     pcall(function() if LocalPlayer:GetAttribute("BuyMenu") == true then hits[#hits+1] = "warmup" end end)
     local match = false
@@ -2067,7 +2077,7 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
         data.MoneyText.Color = Color3.fromRGB(60,220,90)
         data.MoneyText.Transparency = trBase
         local lineH = (data.TagText.Size or 12) + 2
-        data.MoneyText.Position = Vector2.new(cx, topTextY + lineH * #lines)
+        data.MoneyText.Position = Vector2.new(cx, topTextY + lineH * #lines + 8)
         data.MoneyText.Visible = true
     elseif data.MoneyText then
         data.MoneyText.Visible = false
@@ -2706,12 +2716,17 @@ function ensureC4UI()
     lay.VerticalAlignment = Enum.VerticalAlignment.Center
     lay.Padding = UDim.new(0, 6)
 
-    local dot = Instance.new("Frame", f)
+    -- Dot as a glyph: shares font/size with body text → perfect baseline alignment.
+    local dot = Instance.new("TextLabel", f)
     dot.Name = "Dot"; dot.LayoutOrder = 1
-    dot.Size = UDim2.fromOffset(8, 8)
-    dot.BackgroundColor3 = Color3.fromRGB(255, 90, 60)
-    dot.BorderSizePixel = 0; dot.ZIndex = 61
-    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+    dot.BackgroundTransparency = 1
+    dot.AutomaticSize = Enum.AutomaticSize.X
+    dot.Size = UDim2.fromOffset(0, 22)
+    dot.Font = Enum.Font.Code; dot.TextSize = 13
+    dot.TextColor3 = Color3.fromRGB(255, 90, 60)
+    dot.TextXAlignment = Enum.TextXAlignment.Left
+    dot.Text = "●"
+    dot.ZIndex = 61
 
     local text = Instance.new("TextLabel", f)
     text.Name = "Body"; text.LayoutOrder = 2
@@ -2804,7 +2819,7 @@ function C4Show(status, timeText, sub, color)
                    or status == "BOMB LOST" or status == "TIME UP")
 
     if color then
-        C4UI.dot.BackgroundColor3 = color
+        C4UI.dot.TextColor3 = color
         C4UI.stroke.Color = color; C4UI.stroke.Transparency = 0.45
     else
         C4UI.stroke.Color = Color3.new(1,1,1); C4UI.stroke.Transparency = 0.6
@@ -5173,10 +5188,28 @@ function _desiredHUDForSlot(slotFrame, rawWeapon)
         return text, icon, originalKnife, true
     end
     local weaponName = rawWeapon; if not weaponName or weaponName == "" then return nil, nil, nil, false end
+    -- HUD override fallback list: for weapons where the icon/asset override
+    -- cannot be resolved reliably (gloves and Sawed-Off), keep the original
+    -- HUD name AND original icon untouched — never write "Weapon | Skin".
+    if HUD_OVERRIDE_UNSUPPORTED and HUD_OVERRIDE_UNSUPPORTED[weaponName] then
+        return weaponName, nil, weaponName, false
+    end
     local prettySkin = _hudSkinForWeapon(weaponName)
     local text = prettySkin and (weaponName .. " | " .. prettySkin) or weaponName
     return text, nil, weaponName, prettySkin ~= nil
 end
+
+-- Weapons whose HUD name/icon override we intentionally skip because the
+-- resolver can't find a stable asset (mirrors SKIN_PREVIEW_BLOCKED for the
+-- HUD path). Keep original slot content untouched.
+HUD_OVERRIDE_UNSUPPORTED = {
+    ["Sports Gloves"]=true, ["Specialist Gloves"]=true, ["Driver Gloves"]=true,
+    ["Hand Wraps"]=true, ["Moto Gloves"]=true, ["Bloodhound Gloves"]=true,
+    ["Broken Fang Gloves"]=true, ["Hydra Gloves"]=true, ["Operator Gloves"]=true,
+    ["Gloves"]=true, ["T Glove"]=true, ["CT Glove"]=true,
+    ["Sawed-Off"]=true, ["Sawed Off"]=true, ["SawedOff"]=true,
+    ["Hellfire"]=true,
+}
 
 function _queueHUDSlotApply(slotFrame)
     local rec = slotFrame and HUDSkin.slots[slotFrame]
@@ -5972,6 +6005,10 @@ local WorldEspGB = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
 WorldEspGB:AddToggle("World_Bomb",    { Text="ESP C4",          Default=false, Callback=function(v) Config.ESP.WorldBomb=v; for _,e in pairs(WorldEspPool) do hideWorldEntry(e) end end })
     :AddColorPicker("World_BombCol", { Default=Config.ESP.BombColor,    Title="C4 color",      Callback=function(c) Config.ESP.BombColor=c end })
 WorldEspGB:AddToggle("ESP_C4Timer",   { Text="C4 PANEL",         Default=true,  Callback=function(v) Config.Misc.C4Timer=v end })
+-- C4 CARRIER ESP: puts a red marker above any player who has a C4 tool in
+-- their Backpack or Character. Lightweight: 1 Hz scan, cached BillboardGui.
+WorldEspGB:AddToggle("ESP_C4Carrier", { Text="ESP C4 CARRIER", Default=false, Callback=function(v) Config.ESP.C4Carrier=v end })
+    :AddColorPicker("ESP_C4CarrierCol", { Default=Color3.fromRGB(255,90,60), Title="C4 carrier color", Callback=function(c) Config.ESP.C4CarrierColor=c end })
 WorldEspGB:AddToggle("World_Weapons", { Text="DROPPED WEAPONS", Default=false, Callback=function(v) Config.ESP.WorldWeapons=v end })
     :AddColorPicker("World_WepCol",  { Default=Config.ESP.WeaponColor,  Title="Weapon color",  Callback=function(c) Config.ESP.WeaponColor=c end })
 WorldEspGB:AddToggle("World_Molotov", { Text="MOLOTOVS",        Default=false, Callback=function(v) Config.ESP.WorldMolotov=v end })
@@ -6834,7 +6871,7 @@ MiscGB:AddToggle("IdentifyMoney_Toggle", { Text="IDENTIFY MONEY", Default=false,
             pcall(function() if d.MoneyText then d.MoneyText.Visible = false end end)
         end
     end
-end }):AddKeyPicker("IdentifyMoney_Key", { Default="N", SyncToggleState=true, Mode="Toggle", Text="Identify Money" })
+end })
 
 
 
@@ -6914,24 +6951,19 @@ local Header = Instance.new("Frame", SpecFrame)
 Header.BackgroundTransparency = 1
 Header.Size = UDim2.new(1, 0, 0, 18)
 Header.ZIndex = 51
-local HeaderDot = Instance.new("Frame", Header)
-HeaderDot.BackgroundColor3 = Color3.fromRGB(140, 95, 255)
-HeaderDot.BorderSizePixel = 0
-HeaderDot.AnchorPoint = Vector2.new(0, 0.5)
-HeaderDot.Position = UDim2.new(0, 8, 0.5, 0)
-HeaderDot.Size = UDim2.fromOffset(5, 5)
-HeaderDot.ZIndex = 52
-Instance.new("UICorner", HeaderDot).CornerRadius = UDim.new(1, 0)
+-- Header: dot rendered as a glyph inside the label so font metrics guarantee
+-- perfect vertical alignment with the text (no more pixel drift).
 local TitleLbl = Instance.new("TextLabel", Header)
 TitleLbl.BackgroundTransparency = 1
-TitleLbl.Position = UDim2.fromOffset(18, 0)
-TitleLbl.Size = UDim2.new(1, -24, 1, 0)
+TitleLbl.Position = UDim2.fromOffset(8, 0)
+TitleLbl.Size = UDim2.new(1, -14, 1, 0)
 TitleLbl.Font = Enum.Font.Code
 TitleLbl.TextSize = 11
 TitleLbl.TextColor3 = Color3.new(1, 1, 1)
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
+TitleLbl.TextYAlignment = Enum.TextYAlignment.Center
 TitleLbl.RichText = true
-TitleLbl.Text = "<b>Spectators</b>"
+TitleLbl.Text = '<font color="rgb(140,95,255)">●</font> <b>Spectators</b>'
 TitleLbl.ZIndex = 52
 
 -- Fine divider between header and rows
@@ -7204,30 +7236,52 @@ pcall(function()
         return ok, err
     end
 
-    -- Force SaveManager's Configuration groupbox into the LEFT column by
-    -- temporarily aliasing AddRightGroupbox → AddLeftGroupbox on this tab.
-    do
-        local realRight = Tabs.Configs.AddRightGroupbox
-        Tabs.Configs.AddRightGroupbox = Tabs.Configs.AddLeftGroupbox
-        local ok = pcall(function() SaveManager:BuildConfigSection(Tabs.Configs) end)
-        Tabs.Configs.AddRightGroupbox = realRight
-        if not ok then pcall(function() SaveManager:BuildConfigSection(Tabs.Configs) end) end
-    end
-    ThemeManager:ApplyToTab(Tabs.Configs)
-    -- Right column info panel.
+    -- Configuration tab: build a minimal Save/Load/Delete panel WITHOUT the
+    -- autoload dropdown and WITHOUT the "ECLIPSE HUB" / "Open Configs Folder"
+    -- info block (removed by user request).
     pcall(function()
-        local InfoGB = Tabs.Configs:AddRightGroupbox("ECLIPSE HUB", "info")
-        InfoGB:AddLabel("Version : " .. tostring(ECLIPSE and ECLIPSE.Version or "n/a"))
-        InfoGB:AddLabel("Toggle GUI : RightShift")
-        InfoGB:AddLabel("Configs are saved locally by name.")
-        InfoGB:AddDivider()
-        InfoGB:AddButton({ Text="Open Configs Folder", Func=function()
-            pcall(function()
-                if type(makefolder) == "function" then makefolder("EclipseHub/configs") end
-            end)
-            Library:Notify({Title="Eclipse Hub", Description="Configs live under EclipseHub/", Time=3})
+        local CfgGB = Tabs.Configs:AddLeftGroupbox("CONFIGURATION")
+        CfgGB:AddInput("SaveManager_ConfigName", { Text = "Config name", Default = "" })
+        SafeAddDropdown(CfgGB, "SaveManager_ConfigList", {
+            Text = "Config list", Values = SaveManager:RefreshConfigList(),
+            AllowNull = true, Default = 1,
+        })
+        local function refreshList()
+            local list = Library.Options and Library.Options.SaveManager_ConfigList
+            if list then list:SetValues(SaveManager:RefreshConfigList()); list:SetValue(nil) end
+        end
+        CfgGB:AddButton({ Text = "Create config", Func = function()
+            local name = Library.Options.SaveManager_ConfigName.Value
+            if not name or name:gsub(" ", "") == "" then
+                Library:Notify({ Title="Eclipse Hub", Description="Invalid config name.", Time=3 }); return
+            end
+            local ok, err = SaveManager:Save(name)
+            if not ok then Library:Notify({ Title="Eclipse Hub", Description="Save failed: "..tostring(err), Time=4 }); return end
+            Library:Notify({ Title="Eclipse Hub", Description="Saved '"..name.."'", Time=3 })
+            refreshList()
         end })
+        CfgGB:AddButton({ Text = "Load config", Func = function()
+            local name = Library.Options.SaveManager_ConfigList.Value
+            if not name then return end
+            local ok, err = SaveManager:Load(name)
+            if not ok then Library:Notify({ Title="Eclipse Hub", Description="Load failed: "..tostring(err), Time=4 }); return end
+            Library:Notify({ Title="Eclipse Hub", Description="Loaded '"..name.."'", Time=3 })
+        end })
+        CfgGB:AddButton({ Text = "Overwrite config", Func = function()
+            local name = Library.Options.SaveManager_ConfigList.Value
+            if not name then return end
+            SaveManager:Save(name); refreshList()
+            Library:Notify({ Title="Eclipse Hub", Description="Overwrote '"..name.."'", Time=3 })
+        end })
+        CfgGB:AddButton({ Text = "Delete config", Func = function()
+            local name = Library.Options.SaveManager_ConfigList.Value
+            if not name then return end
+            SaveManager:Delete(name); refreshList()
+            Library:Notify({ Title="Eclipse Hub", Description="Deleted '"..name.."'", Time=3 })
+        end })
+        CfgGB:AddButton({ Text = "Refresh list", Func = refreshList })
     end)
+    ThemeManager:ApplyToTab(Tabs.Configs)
     SaveManager:SetIgnoreIndexes({
         "SaveManager_ConfigList",
         "SaveManager_ConfigName",
@@ -7829,14 +7883,18 @@ end)() -- helpers + panels
             local capW = math.max(20, #keyStr * 7 + 10)
             cap.Size = UDim2.fromOffset(capW, 16)
 
-            local dot = Instance.new("Frame", row)
-            dot.BackgroundColor3 = on and Color3.fromRGB(140, 95, 255) or Color3.fromRGB(210,210,215)
-            dot.BackgroundTransparency = on and 0 or 0.4
-            dot.BorderSizePixel = 0
-            dot.Position = UDim2.fromOffset(capW + 6, 8)
-            dot.Size = UDim2.fromOffset(4, 4)
+            -- Dot as a glyph in the same font/size as the row label: baseline
+            -- alignment is automatic (no pixel drift across fonts/DPI).
+            local dot = Instance.new("TextLabel", row)
+            dot.BackgroundTransparency = 1
+            dot.Position = UDim2.fromOffset(capW + 4, 0)
+            dot.Size = UDim2.fromOffset(10, 20)
+            dot.Font = Enum.Font.GothamSemibold; dot.TextSize = 11
+            dot.TextColor3 = on and Color3.fromRGB(140, 95, 255) or Color3.fromRGB(210,210,215)
+            dot.TextTransparency = on and 0 or 0.4
+            dot.TextXAlignment = Enum.TextXAlignment.Center
+            dot.Text = "●"
             dot.ZIndex = 54
-            Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
             local lbl = Instance.new("TextLabel", row)
             lbl.BackgroundTransparency = 1
@@ -9274,21 +9332,97 @@ end)() -- SCREEN STRETCH + LOGGING
 -- The old local bottom-screen bar is intentionally disabled so the ammo
 -- toggle stays distinct from ESP Weapon and never draws in the wrong place.
 
+-- =====================================================================
+-- C4 CARRIER ESP · marker above the head of whoever holds the bomb.
+-- Lightweight: scans Backpack + Character for a Tool whose name contains
+-- "C4" or "Bomb" once per second, caches a BillboardGui per player.
+-- =====================================================================
+do
+    local C4Markers = {}
+    local function _hasC4(plr)
+        local function check(container)
+            if not container then return false end
+            for _, child in ipairs(container:GetChildren()) do
+                if child:IsA("Tool") or child:IsA("Model") then
+                    local n = child.Name:lower()
+                    if n:find("c4") or n:find("bomb") then return true end
+                end
+            end
+            return false
+        end
+        return check(plr:FindFirstChildOfClass("Backpack")) or check(plr.Character)
+    end
+    local function _clearMarker(plr)
+        local m = C4Markers[plr]
+        if m then pcall(function() m:Destroy() end); C4Markers[plr] = nil end
+    end
+    local function _makeMarker(plr)
+        local char = plr.Character; if not char then return nil end
+        local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+        if not head then return nil end
+        local bb = Instance.new("BillboardGui")
+        bb.Name = "EclipseC4Carrier"
+        bb.Adornee = head
+        bb.AlwaysOnTop = true
+        bb.Size = UDim2.fromOffset(32, 32)
+        bb.StudsOffset = Vector3.new(0, 3.2, 0)
+        bb.ResetOnSpawn = false
+        pcall(function() bb.Parent = (gethui and gethui()) or CoreGui end)
+        local pill = Instance.new("Frame", bb)
+        pill.AnchorPoint = Vector2.new(0.5, 0.5)
+        pill.Position = UDim2.new(0.5, 0, 0.5, 0)
+        pill.Size = UDim2.fromOffset(28, 14)
+        pill.BackgroundColor3 = Config.ESP.C4CarrierColor or Color3.fromRGB(255,90,60)
+        pill.BorderSizePixel = 0
+        Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+        local lbl = Instance.new("TextLabel", pill)
+        lbl.BackgroundTransparency = 1
+        lbl.Size = UDim2.fromScale(1, 1)
+        lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 10
+        lbl.TextColor3 = Color3.new(1, 1, 1)
+        lbl.Text = "C4"
+        return bb
+    end
+    task.spawn(function()
+        while scriptRunning do
+            if Config.ESP.C4Carrier then
+                local seen = {}
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= LocalPlayer and (not Config.TeamCheck or not IsAlly(plr)) and _hasC4(plr) then
+                        seen[plr] = true
+                        local m = C4Markers[plr]
+                        if not m or not m.Parent or not m.Adornee or not m.Adornee.Parent then
+                            _clearMarker(plr)
+                            C4Markers[plr] = _makeMarker(plr)
+                        else
+                            local pill = m:FindFirstChildOfClass("Frame")
+                            if pill then pill.BackgroundColor3 = Config.ESP.C4CarrierColor or Color3.fromRGB(255,90,60) end
+                        end
+                    end
+                end
+                for plr, _ in pairs(C4Markers) do
+                    if not seen[plr] then _clearMarker(plr) end
+                end
+            else
+                for plr, _ in pairs(C4Markers) do _clearMarker(plr) end
+            end
+            task.wait(1)
+        end
+    end)
+end
+
 UpdateWeather(Config.World.Weather)
 
 
 task.spawn(function()
     if getgenv().Eclipse.sessionSeen then
-        SaveManager:LoadAutoloadConfig()
-        pcall(_postSkinConfigLoadApply)
+        -- Autoload removed by user request.
         loadingComplete = true
         revealWindow()
         Library:Notify({ Title="Eclipse Hub", Description="<b>Eclipse has been loaded.</b> RightShift to open/hide.", Time=6 })
     else
         showTermsModal(function()
             markSessionSeen()
-            SaveManager:LoadAutoloadConfig()
-            pcall(_postSkinConfigLoadApply)
             loadingComplete = true
             revealWindow()
             Library:Notify({ Title="Eclipse Hub", Description="<b>Eclipse has been loaded.</b> RightShift to open/hide.", Time=6 })
