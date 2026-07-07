@@ -8885,30 +8885,57 @@ end)() -- SCREEN STRETCH + LOGGING
 
 
 -- ================================================================
--- SCREECH / STRETCH BYPASS (client-side FOV cloak)
--- Hooks Camera.__index so the game/anti-cheat continues to read the
--- ORIGINAL FieldOfView while the local render uses our stretched value.
--- Only active while Config.Stretch.Enabled and player is alive.
+-- SCREECH / STRETCH BYPASS
+-- Anti-cheat kicks with "Custom FieldOfView's Are Not Allowed" because
+-- the game listens to Camera:GetPropertyChangedSignal("FieldOfView") /
+-- Camera.Changed. Signals fire at the C engine level, so a plain
+-- __index hook is not enough — we also swap the signal calls so the
+-- game's connections never fire while stretch is on.
+-- Layers:
+--   1. __index: any read of Camera.FieldOfView returns the ORIGINAL value.
+--   2. __namecall: GetPropertyChangedSignal("FieldOfView") returns a
+--      dummy BindableEvent.Event that never fires.
+--   3. __namecall: block :Kick(...) calls whose message mentions FOV.
 -- ================================================================
 ;(function()
-    local ok_meta, mt = pcall(getrawmetatable, Camera)
-    if not ok_meta or type(mt) ~= "table" then return end
-    local hookmm = rawget(getfenv(0), "hookmetamethod") or hookmetamethod
-    local newccl = rawget(getfenv(0), "newcclosure") or function(f) return f end
-    if type(hookmm) ~= "function" then return end
+    local hookmm  = rawget(getfenv(0), "hookmetamethod")
+    local newccl  = rawget(getfenv(0), "newcclosure") or function(f) return f end
+    local getns   = rawget(getfenv(0), "getnamecallmethod")
+    if type(hookmm) ~= "function" or type(getns) ~= "function" then return end
+
+    local dummySignal = Instance.new("BindableEvent").Event
+
     local oldIndex
-    local okHook, err = pcall(function()
+    pcall(function()
         oldIndex = hookmm(Camera, "__index", newccl(function(self, k)
-            if self == Camera and (k == "FieldOfView" or k == "ViewportSize") and Config.Stretch and Config.Stretch.Enabled then
-                if k == "FieldOfView" then
-                    return OriginalCameraFOV or 70
-                end
+            if self == Camera and k == "FieldOfView" and Config.Stretch and Config.Stretch.Enabled then
+                return OriginalCameraFOV or 70
             end
             return oldIndex(self, k)
         end))
     end)
-    if not okHook then return end
+
+    local oldNamecall
+    pcall(function()
+        oldNamecall = hookmm(game, "__namecall", newccl(function(self, ...)
+            local method = getns()
+            if method == "GetPropertyChangedSignal" then
+                local prop = (...)
+                if self == Camera and prop == "FieldOfView" and Config.Stretch and Config.Stretch.Enabled then
+                    return dummySignal
+                end
+            elseif method == "Kick" then
+                local msg = tostring((...) or "")
+                if msg:lower():find("fieldofview") or msg:lower():find("custom fov") or msg:find("267") then
+                    return nil
+                end
+            end
+            return oldNamecall(self, ...)
+        end))
+    end)
 end)()
+
+
 
 -- ================================================================
 -- ESP AMMO — thin white bar at the bottom of the screen.
