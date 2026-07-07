@@ -4055,6 +4055,19 @@ local function attachAsset(folder, arm, model, name, offset)
     local src = folder:WaitForChild(model, 5); if not src then return end
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
+    -- Encolhe uniformemente as luvas para nao "engolir" a mao/faca, mantendo
+    -- as proporcoes originais do modelo (sem distorcer). Sleeves ficam intactas.
+    if name == "Glove" and mesh:IsA("BasePart") and target:IsA("BasePart") then
+        local ts, ms = target.Size, mesh.Size
+        if ms.X > 0 and ms.Y > 0 and ms.Z > 0 then
+            local factor = math.min(ts.X / ms.X, ts.Y / ms.Y, ts.Z / ms.Z, 0.75)
+            if factor > 0.35 and factor < 1 then
+                pcall(function() mesh.Size = ms * factor end)
+            elseif factor >= 1 then
+                pcall(function() mesh.Size = ms * 0.75 end)
+            end
+        end
+    end
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
@@ -5740,9 +5753,36 @@ end)
 
 
 pcall(function()
-    LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function() pcall(_applyHUDKnife, true) end)
-    LocalPlayer.CharacterAdded:Connect(function()
-        for _, delayT in ipairs({0.35, 0.85, 1.5}) do task.delay(delayT, function() pcall(_applyHUDKnife, true) end) end
+    local function _reapplyHUDStaggered()
+        for _, delayT in ipairs({0.15, 0.5, 1.0, 1.8, 2.8}) do
+            task.delay(delayT, function()
+                if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() and not _isSpectatingOther() then
+                    pcall(_applyHUDKnife, true)
+                end
+            end)
+        end
+    end
+    LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function()
+        pcall(_hideAllHUDOverlays)
+        _reapplyHUDStaggered()
+    end)
+    LocalPlayer:GetPropertyChangedSignal("TeamColor"):Connect(_reapplyHUDStaggered)
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        _reapplyHUDStaggered()
+        pcall(function()
+            local hum = char:WaitForChild("Humanoid", 5)
+            if hum then
+                hum.Died:Connect(function()
+                    pcall(_hideAllHUDOverlays)
+                end)
+            end
+        end)
+    end)
+    -- Se ja existe personagem vivo, conecta o Died atual tambem
+    pcall(function()
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.Died:Connect(function() pcall(_hideAllHUDOverlays) end) end
     end)
     -- Spectator gate: quando o CameraSubject muda (morre / troca de alvo /
     -- respawn), esconde ou reaplica na hora.
@@ -5751,7 +5791,7 @@ pcall(function()
             if _isSpectatingOther() or not IsAlive() then
                 pcall(_hideAllHUDOverlays)
             else
-                task.delay(0.15, function() pcall(_applyHUDKnife, true) end)
+                _reapplyHUDStaggered()
             end
         end)
     end
