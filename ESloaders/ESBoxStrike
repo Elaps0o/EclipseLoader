@@ -3447,7 +3447,7 @@ function UpdateWeather(t)
     end
 end
 
-local SkinSystem = { scriptRunning=false, spawned=false, inspecting=false, swinging=false, lastAttackTime=0, vm=nil, animator=nil, _hidden=nil, _skinRestore=setmetatable({}, {__mode="k"}), _hiddenOwner=nil }
+local SkinSystem = { scriptRunning=false, spawned=false, inspecting=false, swinging=false, lastAttackTime=0, vm=nil, animator=nil, _hidden=nil, _skinRestore={}, _hiddenOwner=nil }
 local knives = {
     ["Karambit"]={Offset=CFrame.new(0,-1.5,1.5)}, ["Butterfly Knife"]={Offset=CFrame.new(0,-1.5,1.5)},
     ["M9 Bayonet"]={Offset=CFrame.new(0,-1.5,1)}, ["Flip Knife"]={Offset=CFrame.new(0,-1.5,1.25)},
@@ -3545,7 +3545,7 @@ local function _restoreAppliedSkins()
             end)
         end
     end
-    SkinSystem._skinRestore = setmetatable({}, {__mode="k"})
+    SkinSystem._skinRestore = {}
 end
 
 function _restoreSkinTarget(target)
@@ -4340,6 +4340,28 @@ function _sweepDuplicateOverlays(slotFrame, overlayName, keep)
     end)
 end
 
+function _purgeHUDOverlays(slotFrame)
+    if not (slotFrame and slotFrame.Parent) then return end
+    pcall(function()
+        for _, d in ipairs(slotFrame:GetDescendants()) do
+            local n = tostring(d.Name or "")
+            if d:GetAttribute("EclipseHUD") or n:find("^EclipseHUD") then
+                pcall(function() d:Destroy() end)
+            end
+        end
+    end)
+end
+
+function _purgeAllHUDOverlays()
+    local inv = _hudInventory and _hudInventory() or nil
+    if not inv then return end
+    for _, slot in ipairs(_hudInventorySlots(inv)) do _purgeHUDOverlays(slot) end
+end
+
+function _hudIconTint(rec)
+    return (rec and rec.iconImageColor3) or Color3.fromRGB(188, 196, 208)
+end
+
 function _ensureIconImage(rec, anchor)
 
     if not (rec and anchor and anchor.Parent) then return nil end
@@ -4374,7 +4396,7 @@ function _ensureIconImage(rec, anchor)
             img.Rotation    = 0
             img.ZIndex      = 2
         end
-        img.ImageColor3 = Color3.fromRGB(255,255,255)
+        img.ImageColor3 = _hudIconTint(rec)
         img.ImageTransparency = 0
         img.BackgroundTransparency = 1
         img.Visible = true
@@ -4416,7 +4438,7 @@ function _ensureIconFallbackImage(rec, source)
 
     _syncHUDFallbackGeometry(source, img)
     pcall(function()
-        img.ImageColor3 = Color3.fromRGB(255,255,255)
+        img.ImageColor3 = _hudIconTint(rec)
         img.ImageTransparency = 0
         img.BackgroundTransparency = 1
         img.ScaleType = Enum.ScaleType.Fit
@@ -4451,16 +4473,16 @@ function _preloadHUDIcon(icon)
     end)
 end
 
-function _prepHUDImageLabel(img)
+function _prepHUDImageLabel(img, rec)
     if not img then return end
     pcall(function()
         img.BackgroundTransparency = 1
-        img.ImageColor3 = Color3.fromRGB(255,255,255)
+        img.ImageColor3 = _hudIconTint(rec)
         img.ImageTransparency = 0
         img.ImageRectOffset = Vector2.new(0,0)
         img.ImageRectSize = Vector2.new(0,0)
         img.ScaleType = Enum.ScaleType.Fit
-        img.Visible = true
+        img.Visible = false
     end)
 end
 
@@ -4501,8 +4523,9 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
     if #candidates == 0 then return false end
     rec.iconToken = (rec.iconToken or 0) + 1
     local token = rec.iconToken
-    _prepHUDImageLabel(img)
+    _prepHUDImageLabel(img, rec)
     img.Image = candidates[1]
+    img.Visible = false
     rec.lastIcon = candidates[1]
     _hudDbg("image try", debugTag or "slot", "candidate=", candidates[1], "target=", img:GetFullName())
 
@@ -4519,8 +4542,9 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
         for i, candidate in ipairs(candidates) do
             if rec.iconToken ~= token or not img.Parent then return end
             pcall(function()
-                _prepHUDImageLabel(img)
+                _prepHUDImageLabel(img, rec)
                 img.Image = candidate
+                img.Visible = false
                 if rec.iconFallbackImage then _syncHUDFallbackGeometry(img, rec.iconFallbackImage) end
             end)
             local preloadStatus = "Unknown"
@@ -4544,8 +4568,9 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
         if not anyLoaded and thumb then
             finalIcon = thumb
             pcall(function()
-                _prepHUDImageLabel(img)
+                _prepHUDImageLabel(img, rec)
                 img.Image = thumb
+                img.Visible = false
             end)
             task.wait(0.25)
             local ready, loaded, fetchStatus = _imageCandidateReady(img, thumb)
@@ -4562,6 +4587,7 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
             return
         end
         if rec.iconFallbackImage then pcall(function() rec.iconFallbackImage.Visible = false end) end
+        pcall(function() img.Visible = true; img.ImageColor3 = _hudIconTint(rec) end)
         rec.lastIcon = finalIcon
         _hudDbg("image accepted", debugTag or "slot", "final=", tostring(finalIcon))
         if onLoaded then pcall(onLoaded, finalIcon) end
@@ -4710,17 +4736,35 @@ end
 function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
     local rec = HUDSkin.slots[slotFrame]
     if rec then
+        if nameLbl and rec.nameLblRef ~= nameLbl and nameLbl:GetAttribute("EclipseHUD") ~= true then
+            rec.nameLblRef = nameLbl
+            if not rec.applying and nameLbl.Text ~= rec.currentOverlayText then
+                rec.nameText = nameLbl.Text
+                rec.nameTextTransparency = nameLbl.TextTransparency
+                rec.nameTextStrokeTransparency = nameLbl.TextStrokeTransparency
+            end
+        end
         if nameLbl and (not rec.nameOverlay or not rec.nameOverlay.Parent) then rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay") end
         rec.iconLabelRef = iconLbl or rec.iconLabelRef
         rec.iconViewportRef = iconViewport or rec.iconViewportRef
         rec.iconAnchorRef = iconAnchor or rec.iconAnchorRef
         return rec
     end
+    local rawText = nameLbl.Text
+    local cleanText = _cleanHUDWeaponText(rawText) or tostring(slotFrame.Name)
+    local slotNameLower = tostring(slotFrame and slotFrame.Name or ""):lower()
+    local restoreText = rawText
+    if (rawText ~= cleanText) and (slotNameLower:find("melee", 1, true) or slotNameLower:find("knife", 1, true)) then
+        restoreText = _localKnifeByTeam()
+    elseif rawText ~= cleanText then
+        restoreText = cleanText
+    end
     rec = {
-        baseName = _cleanHUDWeaponText(nameLbl.Text) or tostring(slotFrame.Name),
-        nameText = nameLbl.Text,
+        baseName = cleanText,
+        nameText = restoreText,
         nameTextTransparency = nameLbl.TextTransparency,
         nameTextStrokeTransparency = nameLbl.TextStrokeTransparency,
+        nameLblRef = nameLbl,
         iconLabelImage = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.Image) or nil,
         iconImageColor3 = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageColor3) or nil,
         iconImageRectOffset = (iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageRectOffset) or nil,
@@ -4754,6 +4798,8 @@ function _restoreHUDName(rec, nameLbl)
     if not nameLbl then return end
     pcall(function()
         if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
+        if rec then rec.currentOverlayText = nil end
+        if rec and rec.nameText ~= nil then nameLbl.Text = rec.nameText end
         nameLbl.TextTransparency = (rec and rec.nameTextTransparency ~= nil) and rec.nameTextTransparency or 0
         nameLbl.TextStrokeTransparency = (rec and rec.nameTextStrokeTransparency ~= nil) and rec.nameTextStrokeTransparency or 1
     end)
@@ -4768,6 +4814,7 @@ function _applyHUDNameOverlay(rec, nameLbl, text)
     pcall(function()
         _syncHUDOverlayGeometry(nameLbl, rec.nameOverlay)
         rec.nameOverlay.Text = text
+        rec.currentOverlayText = text
         rec.nameOverlay.TextTransparency = rec.nameTextTransparency or 0
         rec.nameOverlay.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
         rec.nameOverlay.Visible = nameLbl.Visible
@@ -4781,7 +4828,15 @@ end
 function _slotWeaponKey(slotFrame, nameLbl)
     local rec = HUDSkin.slots[slotFrame]
     local clean = _cleanHUDWeaponText(nameLbl.Text)
-    if clean and clean ~= "" then if rec then rec.baseName = clean end; return clean end
+    if clean and clean ~= "" then
+        if rec and nameLbl.Text ~= rec.currentOverlayText then
+            rec.baseName = clean
+            rec.nameText = nameLbl.Text
+            rec.nameTextTransparency = nameLbl.TextTransparency
+            rec.nameTextStrokeTransparency = nameLbl.TextStrokeTransparency
+        end
+        return clean
+    end
     return rec and rec.baseName or nil
 end
 
@@ -4877,18 +4932,20 @@ function _applyOneSlot(slotFrame, forceKnife)
         local usingNativeImage = false
         img = _ensureIconImage(rec, iconLbl or iconViewport or iconAnchor or slotFrame)
         if img then
-            if iconViewport then pcall(function() iconViewport.Visible = false end) end
-            if iconLbl then pcall(function() iconLbl.Visible = false end) end
             if rec.iconViewport then pcall(function() rec.iconViewport.Visible = false end) end
             local alreadyApplied = rec.iconAppliedKey == directIcon and img.Visible ~= false and (not usingNativeImage or tostring(img.Image or "") ~= tostring(rec.iconLabelImage or ""))
             if alreadyApplied then
                 if iconViewport then pcall(function() iconViewport.Visible = false end) end
+                if iconLbl then pcall(function() iconLbl.Visible = false end) end
                 if rec.iconImage then pcall(function() rec.iconImage.Visible = true end) end
             else
                 rec.iconAppliedKey = directIcon
+                if iconLbl then pcall(function() iconLbl.Visible = rec.iconLabelVisible ~= false end) end
+                if iconViewport then pcall(function() iconViewport.Visible = rec.iconViewportVisible ~= false end) end
                 _preloadHUDIcon(directIcon)
                 _applyHUDImageWithFallback(rec, img, directIcon, tostring(slotFrame.Name) .. ":slot-image", function(finalIcon)
                     if iconViewport then pcall(function() iconViewport.Visible = false end) end
+                    if iconLbl then pcall(function() iconLbl.Visible = false end) end
                     if rec.iconImage then pcall(function() rec.iconImage.Visible = true end) end
                     _hudDbg("melee HUD icon injected", Config.Skins.SelectedKnife, finalIcon)
                 end, function()
@@ -5077,9 +5134,11 @@ function _restoreHUDKnife()
         if rec.iconOverlay then pcall(function() rec.iconOverlay:Destroy() end) end
         if rec.iconImage   then pcall(function() rec.iconImage:Destroy() end)   end
         if rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end) end
+        if slotFrame and slotFrame.Parent then _purgeHUDOverlays(slotFrame) end
         _destroyHUDIconViewport(rec)
     end
     HUDSkin.slots = setmetatable({}, {__mode="k"})
+    pcall(_purgeAllHUDOverlays)
     -- Light melee override: restore all icon labels we touched.
     _restoreHUDLiteIcons()
 end
@@ -6381,7 +6440,7 @@ local FONT    = SchemeColor("FontColor",       Color3.fromRGB(255,255,255))
 -- 1px white border 0.6 transp, corner 4px, top-right.
 local SpecFrame = Instance.new("Frame")
 SpecFrame.Name = "SpecFrame"
-SpecFrame.Size = UDim2.fromOffset(200, 44)
+SpecFrame.Size = UDim2.fromOffset(150, 24)
 SpecFrame.AnchorPoint = Vector2.new(1, 0)
 SpecFrame.Position = UDim2.new(1, -12, 0, 12)
 SpecFrame.BackgroundColor3 = Color3.new(0, 0, 0)
@@ -6397,21 +6456,21 @@ Instance.new("UICorner", SpecFrame).CornerRadius = UDim.new(0, 4)
 
 local Header = Instance.new("Frame", SpecFrame)
 Header.BackgroundTransparency = 1
-Header.Size = UDim2.new(1, 0, 0, 20)
+Header.Size = UDim2.new(1, 0, 0, 18)
 Header.ZIndex = 51
 local HeaderDot = Instance.new("Frame", Header)
 HeaderDot.BackgroundColor3 = Color3.fromRGB(140, 95, 255)
 HeaderDot.BorderSizePixel = 0
-HeaderDot.Position = UDim2.fromOffset(8, 6)
-HeaderDot.Size = UDim2.fromOffset(8, 8)
+HeaderDot.Position = UDim2.fromOffset(7, 6)
+HeaderDot.Size = UDim2.fromOffset(5, 5)
 HeaderDot.ZIndex = 52
 Instance.new("UICorner", HeaderDot).CornerRadius = UDim.new(1, 0)
 local TitleLbl = Instance.new("TextLabel", Header)
 TitleLbl.BackgroundTransparency = 1
-TitleLbl.Position = UDim2.fromOffset(22, 0)
-TitleLbl.Size = UDim2.new(1, -30, 1, 0)
+TitleLbl.Position = UDim2.fromOffset(18, 0)
+TitleLbl.Size = UDim2.new(1, -24, 1, 0)
 TitleLbl.Font = Enum.Font.Code
-TitleLbl.TextSize = 13
+TitleLbl.TextSize = 11
 TitleLbl.TextColor3 = Color3.new(1, 1, 1)
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 TitleLbl.RichText = true
@@ -6420,10 +6479,10 @@ TitleLbl.ZIndex = 52
 
 local RowList = Instance.new("Frame", SpecFrame)
 RowList.BackgroundTransparency = 1
-RowList.Position = UDim2.fromOffset(8, 22)
-RowList.Size = UDim2.new(1, -16, 1, -28); RowList.ZIndex = 51
+RowList.Position = UDim2.fromOffset(7, 18)
+RowList.Size = UDim2.new(1, -14, 1, -20); RowList.ZIndex = 51
 local RowLay = Instance.new("UIListLayout", RowList)
-RowLay.SortOrder = Enum.SortOrder.LayoutOrder; RowLay.Padding = UDim.new(0, 2)
+RowLay.SortOrder = Enum.SortOrder.LayoutOrder; RowLay.Padding = UDim.new(0, 0)
 
 do
     local D = {a=false}
@@ -6478,7 +6537,7 @@ function parchmentHide(frame)
 end
 
 function setSpecWindowVisible(v)
-    if v then parchmentReveal(SpecFrame, UDim2.fromOffset(200, 42))
+    if v then parchmentReveal(SpecFrame, UDim2.fromOffset(150, 24))
     else parchmentHide(SpecFrame) end
 end
 
@@ -6553,49 +6612,35 @@ local function specRebuild(names)
         if not row then
             row = Instance.new("Frame")
             row.Name = nm
-            row.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
-            row.BackgroundTransparency = 0.2
+            row.BackgroundColor3 = Color3.new(0, 0, 0)
+            row.BackgroundTransparency = 1
             row.BorderSizePixel = 0
-            row.Size = UDim2.new(1, 0, 0, 22)
+            row.Size = UDim2.new(1, 0, 0, 16)
             row.Parent = RowList; row.ZIndex = 52
-            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 3)
-            local st = Instance.new("UIStroke", row)
-            st.Color = Color3.fromRGB(70,70,78); st.Thickness = 1; st.Transparency = 0.4
-
-            local img = Instance.new("ImageLabel", row)
-            img.Name = "Avatar"
-            img.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
-            img.BackgroundTransparency = 0.2
-            img.BorderSizePixel = 0
-            img.Size = UDim2.fromOffset(18, 18)
-            img.Position = UDim2.fromOffset(2, 2)
-            img.ZIndex = 53
-            Instance.new("UICorner", img).CornerRadius = UDim.new(1, 0)
-            local plr = Players:FindFirstChild(nm)
-            img.Image = specAvatarUrl(plr)
 
             local dot = Instance.new("Frame", row)
             dot.BackgroundColor3 = Color3.fromRGB(140, 95, 255)
             dot.BorderSizePixel = 0
-            dot.Position = UDim2.fromOffset(24, 9)
-            dot.Size = UDim2.fromOffset(4, 4); dot.ZIndex = 53
+            dot.Position = UDim2.fromOffset(0, 6)
+            dot.Size = UDim2.fromOffset(3, 3); dot.ZIndex = 53
             Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
             local lbl = Instance.new("TextLabel", row)
             lbl.BackgroundTransparency = 1
-            lbl.Position = UDim2.fromOffset(32, 0)
-            lbl.Size = UDim2.new(1, -34, 1, 0)
-            lbl.Font = Enum.Font.GothamSemibold
-            lbl.TextSize = 12
+            lbl.Position = UDim2.fromOffset(8, 0)
+            lbl.Size = UDim2.new(1, -8, 1, 0)
+            lbl.Font = Enum.Font.Code
+            lbl.TextSize = 10
             lbl.TextColor3 = Color3.new(1, 1, 1)
             lbl.TextXAlignment = Enum.TextXAlignment.Left
+            lbl.TextTruncate = Enum.TextTruncate.AtEnd
             lbl.Text = nm; lbl.ZIndex = 53
 
             -- Slide-in acrílico 0.18s.
             row.Position = UDim2.new(0.15, 0, 0, 0)
             row.BackgroundTransparency = 1; lbl.TextTransparency = 1
             TweenService:Create(row, TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
-                { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0.2 }):Play()
+                { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1 }):Play()
             TweenService:Create(lbl, TweenInfo.new(0.18), { TextTransparency = 0 }):Play()
             SpecRows[nm] = row
         end
@@ -6615,7 +6660,7 @@ task.spawn(function()
             local count = math.max(#names, tonumber(attrCount) or 0)
             TitleLbl.Text = string.format("<b>SPEC</b>  %d", count)
             specRebuild(names)
-            SpecFrame.Size = UDim2.fromOffset(200, 26 + math.max(1, #names) * 22)
+            SpecFrame.Size = UDim2.fromOffset(150, 20 + math.max(0, #names) * 16)
             local shouldShow = isGuiOpen() or (count > 0)
             if shouldShow and not wasVisible then
                 SpecFrame.Visible = true; wasVisible = true
@@ -8671,9 +8716,7 @@ end)() -- UI CREATION
     local StretchGB = Tabs.Misc:AddRightGroupbox("SCREEN STRETCH", "maximize")
     local _origFOV, _fovConn, _charConn
     local function _isAlive()
-        local char = LocalPlayer.Character
-        local hum  = char and char:FindFirstChildOfClass("Humanoid")
-        return hum and hum.Health > 0
+        return IsAlive and IsAlive() ~= nil
     end
     local function _applyStretch()
         if not ST.Enabled then return end
@@ -8735,7 +8778,7 @@ end)() -- UI CREATION
     -- lib exposes it; else fall back to Notify-less silent gating).
     pcall(function()
         if type(StretchGB.AddLabel) == "function" then
-            StretchGB:AddLabel("must be alive", true)
+            StretchGB:AddLabel("You almost to be alived.", true)
         end
     end)
     -- Live gate: while dead, restore original FOV, disable toggle/slider UI,
