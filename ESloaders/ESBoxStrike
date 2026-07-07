@@ -921,6 +921,13 @@ local Config = {
     -- === Screen Stretch (matrix aspect ratio) + Logging module ==========
     Stretch   = { Enabled=false, Ratio=1.30 },
     Logging   = { Enabled=false },
+    WeaponsVisual = {
+        Enabled = false,
+        FillColor          = Color3.fromRGB(160, 80, 255),
+        OutlineColor       = Color3.fromRGB(255, 255, 255),
+        FillTransparency   = 0.35,
+        OutlineTransparency= 0,
+    },
 
 }
 
@@ -4001,21 +4008,23 @@ end
 -- offset stays original.
 local function _uniformScale(inst, factor)
     if not inst or not factor or factor == 1 then return end
-    if inst:IsA("BasePart") then
-        local visualMeshes = {}
-        for _, ch in ipairs(inst:GetChildren()) do
-            if ch:IsA("SpecialMesh") or ch:IsA("BlockMesh") or ch:IsA("CylinderMesh") then
-                table.insert(visualMeshes, ch)
-            end
-        end
-        if #visualMeshes > 0 then
-            for _, ch in ipairs(visualMeshes) do
-                pcall(function() ch.Scale = ch.Scale * factor end)
-            end
-        else
-            pcall(function() inst.Size = inst.Size * factor end)
+    if not inst:IsA("BasePart") then return end
+    local visualMeshes = {}
+    for _, ch in ipairs(inst:GetChildren()) do
+        if ch:IsA("SpecialMesh") or ch:IsA("BlockMesh") or ch:IsA("CylinderMesh") then
+            table.insert(visualMeshes, ch)
         end
     end
+    if #visualMeshes > 0 then
+        for _, ch in ipairs(visualMeshes) do
+            pcall(function() ch.Scale = ch.Scale * factor end)
+        end
+    elseif inst:IsA("MeshPart") then
+        -- MeshPart keeps its MeshId when Size scales (Roblox stretches the mesh).
+        pcall(function() inst.Size = inst.Size * factor end)
+    end
+    -- If it's a plain Part with no visual mesh, do NOT touch Size — resizing a
+    -- bare Part just makes a bigger/smaller cube (that was the "glove virou cubo" bug).
 end
 
 local function _findArmPart(root, armName)
@@ -6101,6 +6110,57 @@ end))
 _frameN = 0
 _lastFrameT = tick()
 _emaDt = 1/60
+
+-- ==========================================================================
+-- WEAPONS VISUAL (Highlight-based chams on LocalPlayer's viewmodel / tool)
+-- ==========================================================================
+local _WV = { hl = nil, host = nil }
+
+local function _weaponsVisual_currentHost()
+    -- Prefer the active viewmodel in Camera (matches what the player sees).
+    for _, ch in ipairs(Camera:GetChildren()) do
+        if ch:IsA("Model") and (ch:FindFirstChild("Right Arm") or ch:FindFirstChildWhichIsA("BasePart", true)) then
+            return ch
+        end
+    end
+    local char = LocalPlayer and LocalPlayer.Character
+    local tool = char and char:FindFirstChildOfClass("Tool")
+    return tool
+end
+
+local function _weaponsVisual_clear()
+    if _WV.hl then pcall(function() _WV.hl:Destroy() end) end
+    _WV.hl = nil; _WV.host = nil
+end
+
+local function _updateWeaponsVisual()
+    local cfg = Config.WeaponsVisual
+    if not cfg or not cfg.Enabled then
+        if _WV.hl then _weaponsVisual_clear() end
+        return
+    end
+    local host = _weaponsVisual_currentHost()
+    if not host or not host.Parent then _weaponsVisual_clear(); return end
+    if _WV.host ~= host or not (_WV.hl and _WV.hl.Parent) then
+        _weaponsVisual_clear()
+        local hl = Instance.new("Highlight")
+        hl.Name = "EclipseWeaponGlow"
+        hl.Adornee = host
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent = host
+        _WV.hl = hl; _WV.host = host
+    end
+    _WV.hl.FillColor           = cfg.FillColor
+    _WV.hl.OutlineColor        = cfg.OutlineColor
+    _WV.hl.FillTransparency    = cfg.FillTransparency
+    _WV.hl.OutlineTransparency = cfg.OutlineTransparency
+end
+
+-- ==========================================================================
+-- (removido: injeção de gloves customizadas em outras armas — usuário optou por manter só knife)
+
+
+
 connectSignal(RunService.RenderStepped:Connect(function()
     if not scriptRunning then return end
     _frameN = _frameN + 1
@@ -6146,6 +6206,8 @@ connectSignal(RunService.RenderStepped:Connect(function()
             if WeatherPart then WeatherPart.CFrame = Camera.CFrame * CFrame.new(0,30,0) end
         end)
     end
+    safeUpdate("WeaponsVisual", _updateWeaponsVisual)
+    
 end))
 
 -- Periodic light cleanup: releases dead references from ESP / warn / spray
@@ -6384,6 +6446,19 @@ ChGB:AddSlider("Sniper_CH_Size",  { Text="SIZE",     Default=10, Min=2,  Max=40,
 ChGB:AddSlider("Sniper_CH_Gap",   { Text="GAP",      Default=4,  Min=0,  Max=30, Rounding=0, Callback=function(v) Config.Crosshair.Gap=v end })
 ChGB:AddSlider("Sniper_CH_Thick", { Text="THICKNESS",Default=1,  Min=1,  Max=5,  Rounding=0, Callback=function(v) Config.Crosshair.Thickness=v end })
 ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=function(v) Config.Crosshair.Dot=v end })
+
+-- WEAPONS VISUAL — glow/chams on the LocalPlayer's equipped weapon model.
+local WVGB = Tabs.Visuals:AddRightGroupbox("WEAPONS VISUAL", "wand-2")
+WVGB:AddToggle("WV_Toggle", { Text="ENABLE WEAPON GLOW", Default=false,
+    Callback=function(v) Config.WeaponsVisual.Enabled=v; if not v then pcall(_weaponsVisual_clear) end end })
+    :AddColorPicker("WV_Fill",    { Default=Config.WeaponsVisual.FillColor,    Title="Fill color",
+        Callback=function(c) Config.WeaponsVisual.FillColor=c end })
+    :AddColorPicker("WV_Outline", { Default=Config.WeaponsVisual.OutlineColor, Title="Outline color",
+        Callback=function(c) Config.WeaponsVisual.OutlineColor=c end })
+WVGB:AddSlider("WV_FillT",    { Text="FILL TRANSPARENCY",    Default=0.35, Min=0, Max=1, Rounding=2,
+    Callback=function(v) Config.WeaponsVisual.FillTransparency=v end })
+WVGB:AddSlider("WV_OutlineT", { Text="OUTLINE TRANSPARENCY", Default=0,    Min=0, Max=1, Rounding=2,
+    Callback=function(v) Config.WeaponsVisual.OutlineTransparency=v end })
 
 
 
