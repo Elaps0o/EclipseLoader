@@ -32,7 +32,7 @@ local LocalPlayer = Players.LocalPlayer
 -- gatilho automático está off — nada de hooks CoreGui no boot, então o erro
 -- "attempt to index nil with 'Body'" em Obsidian não pode mais acontecer no
 -- 2º load. Para reativar futuramente, basta flipar isso para true.
-local ECLIPSE_BYPASS_ENABLED = false
+local ECLIPSE_BYPASS_ENABLED = true
 
 -- ============================================================
 --   DEVICE SPOOFER (built-in)
@@ -6706,9 +6706,14 @@ function CreateSkinDropdown(weapon, section)
     if not SkinsFolder then return end
     local folder = SkinsFolder:FindFirstChild(weapon); if not folder then return end
     local opts = {"Vanilla"}
-    for _, s in folder:GetChildren() do if s.Name and s.Name ~= "" then table.insert(opts, s.Name) end end
+    local _seen = { Vanilla = true }
+    for _, s in ipairs(folder:GetChildren()) do
+        local n = s and s.Name
+        if n and n ~= "" and not _seen[n] then _seen[n] = true; table.insert(opts, n) end
+    end
     if #opts <= 1 then return end
-    table.sort(opts, function(a, b)
+    pcall(table.sort, opts, function(a, b)
+        if a == b then return false end
         if a == "Vanilla" then return true end
         if b == "Vanilla" then return false end
         return tostring(a) < tostring(b)
@@ -9307,7 +9312,7 @@ end)() -- CUSTOM SHOOT SOUNDS
     for k, _ in pairs(EX.SoundPresets) do
         if k ~= "Default" then table.insert(presetNames, k) end
     end
-    table.sort(presetNames, function(a,b) if a=="Default" then return true elseif b=="Default" then return false end return a<b end)
+    pcall(table.sort, presetNames, function(a,b) if a==b then return false end if a=="Default" then return true elseif b=="Default" then return false end return tostring(a)<tostring(b) end)
 
     local currentSoundWeapon = weaponListValues[1]
     SafeAddDropdown(SoundGB, "Sound_Weapon", {
