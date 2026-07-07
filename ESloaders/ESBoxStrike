@@ -32,7 +32,7 @@ local LocalPlayer = Players.LocalPlayer
 -- gatilho automático está off — nada de hooks CoreGui no boot, então o erro
 -- "attempt to index nil with 'Body'" em Obsidian não pode mais acontecer no
 -- 2º load. Para reativar futuramente, basta flipar isso para true.
-local ECLIPSE_BYPASS_ENABLED = true
+local ECLIPSE_BYPASS_ENABLED = false
 
 -- ============================================================
 --   DEVICE SPOOFER (built-in)
@@ -4000,8 +4000,6 @@ end
 local function spawnViewmodel(knife)
     if SkinSystem.spawned or not SkinSystem.scriptRunning then return end
     local me = IsAlive(); if not me then return end
-    if _hudDeadUiVisible and _hudDeadUiVisible() then return end
-    if _isSpectatingOther and _isSpectatingOther() then return end
     _sanitizeSkinConfig()
     local ok, err = pcall(function()
     local assets = ReplicatedSt:WaitForChild("Assets", 5); if not assets then return end
@@ -4067,8 +4065,6 @@ end
 
 function _applySelectedGloveSkin()
     if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-    if _hudDeadUiVisible and _hudDeadUiVisible() then return end
-    if _isSpectatingOther and _isSpectatingOther() then return end
     local gloveSkin = Config.Skins.SelectedSkins["Sports Gloves"]; if not gloveSkin or gloveSkin == "" then return end
     pcall(function()
         local gf = SkinsFolder:FindFirstChild("Sports Gloves"); if not gf then return end
@@ -4094,8 +4090,6 @@ end
 
 local function applyWeaponSkin(model, forcedSkin)
     if not SkinsFolder or not model or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-    if _hudDeadUiVisible and _hudDeadUiVisible() then return end
-    if _isSpectatingOther and _isSpectatingOther() then return end
     pcall(_applySelectedGloveSkin)
     local skin = forcedSkin or Config.Skins.SelectedSkins[model.Name]; if not skin then return end
     pcall(function()
@@ -5037,7 +5031,28 @@ function ShowHUDAssetViewer()
 end
 
 function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
-    _restoreHUDIconVisibility(rec, iconLbl, iconViewport)
+    if rec then rec.iconToken = (rec.iconToken or 0) + 1 end
+    if rec and rec.iconImage then pcall(function() rec.iconImage:Destroy() end); rec.iconImage = nil end
+    if rec and rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end); rec.iconFallbackImage = nil end
+    if rec then _destroyHUDIconViewport(rec) end
+    if iconLbl then
+        pcall(function()
+            if rec and rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end
+            if rec and rec.iconImageColor3 ~= nil then iconLbl.ImageColor3 = rec.iconImageColor3 end
+            if rec and rec.iconImageRectOffset ~= nil then iconLbl.ImageRectOffset = rec.iconImageRectOffset end
+            if rec and rec.iconImageRectSize ~= nil then iconLbl.ImageRectSize = rec.iconImageRectSize end
+            if rec and rec.iconScaleType ~= nil then iconLbl.ScaleType = rec.iconScaleType end
+            iconLbl.ImageTransparency = rec and rec.iconImageTransparency or iconLbl.ImageTransparency
+            if rec and rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end
+        end)
+    end
+    if iconViewport then
+        pcall(function()
+            iconViewport.BackgroundTransparency = rec and rec.iconViewportTransparency or iconViewport.BackgroundTransparency
+            if rec and rec.iconViewportVisible ~= nil then iconViewport.Visible = rec.iconViewportVisible end
+        end)
+    end
+    if rec then rec.eclIconHidden = false; rec.iconAppliedKey = nil end
 end
 
 function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
@@ -5048,7 +5063,9 @@ function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
             if not rec.applying and nameLbl.Text ~= rec.currentOverlayText then
                 local clean = _cleanHUDWeaponText(nameLbl.Text)
                 if clean then rec.nameText = nameLbl.Text; rec.baseName = clean end
-                rec.nameTextTransparency = nameLbl.TextTransparency
+                if type(nameLbl.TextTransparency) == "number" and nameLbl.TextTransparency < 0.95 then
+                    rec.nameTextTransparency = nameLbl.TextTransparency
+                end
                 rec.nameTextStrokeTransparency = nameLbl.TextStrokeTransparency
             end
         end
@@ -5106,20 +5123,6 @@ function _restoreHUDName(rec, nameLbl)
     if not nameLbl then return end
     pcall(function()
         if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
-        -- If the native label still holds OUR override string, write back the
-        -- best known original (game-owned baseName / inferred weapon / cached
-        -- raw nameText). Never stomp when the game already refreshed it to a
-        -- real value — that would revert legitimate updates.
-        if rec and rec.eclNameApplied and rec.eclNameText and nameLbl.Text == rec.eclNameText then
-            local base = _inferHUDSlotWeapon(rec.slotFrame, nameLbl)
-            if not base or base == "" then base = rec.baseName end
-            if (not base or base == "") and rec.nameText and rec.nameText ~= rec.eclNameText then
-                base = rec.nameText
-            end
-            if base and base ~= "" then
-                pcall(function() nameLbl.Text = base end)
-            end
-        end
         if rec then
             rec.currentOverlayText = nil
             rec.eclNameApplied = false
@@ -5131,31 +5134,23 @@ end
 
 function _applyHUDNameOverlay(rec, nameLbl, text)
     if not (rec and nameLbl and text and text ~= "") then return end
-    -- Direct in-place write into the native HUD label. No sibling overlay —
-    -- the game HUD renders our text without any extra ScreenGui / clone,
-    -- avoiding the "non RobloxScript" require path entirely. Restore is
-    -- handled by _restoreHUDName using the cached baseName / raw nameText.
+    if not rec.nameOverlay or not rec.nameOverlay.Parent then
+        rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay")
+    end
+    if not rec.nameOverlay then return end
     pcall(function()
-        if rec.nameOverlay then rec.nameOverlay.Visible = false end
-        -- Snapshot the current label BEFORE we overwrite it, so restore has a
-        -- fresh original to write back even if the game rebuilt the HUD.
-        local current = nameLbl.Text
-        if current and current ~= "" and current ~= text and current ~= rec.eclNameText then
-            local clean = _cleanHUDWeaponText(current)
-            if clean then rec.baseName = clean end
-            rec.nameText = current
-            if type(nameLbl.TextTransparency) == "number" and nameLbl.TextTransparency < 0.95 then
-                rec.nameTextTransparency = nameLbl.TextTransparency
-            end
-            rec.nameTextStrokeTransparency = nameLbl.TextStrokeTransparency
-        end
+        _syncHUDOverlayGeometry(nameLbl, rec.nameOverlay)
+        rec.nameOverlay.Text = text
         rec.currentOverlayText = text
-        rec.eclNameApplied = true
-        rec.eclNameText = text
-        nameLbl.Text = text
-        nameLbl.TextTransparency = 0
+        rec.nameOverlay.TextColor3 = nameLbl.TextColor3
+        rec.nameOverlay.TextTransparency = 0
+        rec.nameOverlay.TextStrokeTransparency = 1
+        rec.nameOverlay.Visible = true
+        rec.nameOverlay.ZIndex = math.max((nameLbl.ZIndex or 1) + 5, 10)
+        -- Hide only the native label visibility; never mutate Text, so the
+        -- game's own HUD keeps its real weapon name for restore/spectate.
+        nameLbl.TextTransparency = 1
         nameLbl.TextStrokeTransparency = 1
-        nameLbl.Visible = true
     end)
 end
 
@@ -5235,23 +5230,18 @@ end
 function _slotWeaponKey(slotFrame, nameLbl)
     local rec = HUDSkin.slots[slotFrame]
     local clean = _cleanHUDWeaponText(nameLbl.Text)
-    local known = _hudKnownWeaponName(clean)
-    if known and known ~= "" then
-        if rec and nameLbl.Text ~= rec.currentOverlayText and not rec.applying then
-            rec.baseName = known
+    if clean and clean ~= "" then
+        if rec and nameLbl.Text ~= rec.currentOverlayText then
+            rec.baseName = clean
             rec.nameText = nameLbl.Text
-            if type(nameLbl.TextTransparency) == "number" and nameLbl.TextTransparency < 0.95 then rec.nameTextTransparency = nameLbl.TextTransparency end
+            if type(nameLbl.TextTransparency) == "number" and nameLbl.TextTransparency < 0.95 then
+                rec.nameTextTransparency = nameLbl.TextTransparency
+            end
             rec.nameTextStrokeTransparency = nameLbl.TextStrokeTransparency
         end
-        return known
+        return clean
     end
-    local inferred = _inferHUDSlotWeapon(slotFrame, nameLbl)
-    if inferred then
-        if rec then rec.baseName = inferred end
-        return inferred
-    end
-    if rec and rec.eclNameApplied and nameLbl.Text == rec.eclNameText and _hudKnownWeaponName(rec.baseName) then return rec.baseName end
-    return nil
+    return rec and rec.baseName or nil
 end
 
 function _isHUDMeleeSlot(slotFrame, weaponKey)
@@ -5311,9 +5301,7 @@ function _queueHUDSlotApply(slotFrame)
     if rec then rec.queued = true end
     task.delay(0.04, function()
         if rec then rec.queued = false end
-        if scriptRunning and Config.Skins.SkinChangerEnabled and slotFrame and slotFrame.Parent then
-            if _canApplyHUDSkin() then pcall(function() _applyOneSlot(slotFrame, false) end) else pcall(function() _recoverNativeHUDSlot(slotFrame, rec) end) end
-        end
+        if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() and slotFrame and slotFrame.Parent then pcall(function() _applyOneSlot(slotFrame, false) end) end
     end)
 end
 
@@ -5372,12 +5360,9 @@ function _recoverNativeHUDSlot(slotFrame, rec)
     if nameLbl then
         pcall(function()
             if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
-            if rec and rec.eclNameApplied and rec.eclNameText and nameLbl.Text == rec.eclNameText then
-                local base = _inferHUDSlotWeapon(slotFrame, nameLbl)
-                if (not base or base == "") then base = rec.baseName end
-                if (not base or base == "") and rec.nameText and rec.nameText ~= rec.eclNameText then base = rec.nameText end
-                if base and base ~= "" then pcall(function() nameLbl.Text = base end) end
-            end
+            -- Overlay method never mutates Text, so recovery restores only
+            -- visibility/transparency and lets the game's HUD keep ownership
+            -- of the real weapon name.
             _restoreHUDNameVisibility(rec, nameLbl)
         end)
     end
