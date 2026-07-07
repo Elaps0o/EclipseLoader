@@ -907,7 +907,7 @@ local Config = {
         ChamsGlow      = 0.35, -- 0 = solid, 1 = only outline glow
         Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
         IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90), -- MoneyColor kept for back-compat but not user-editable; only shown during warmup
-        
+        C4Carrier      = false, C4CarrierColor = Color3.fromRGB(255, 90, 60),
     },
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={} },
@@ -921,13 +921,6 @@ local Config = {
     -- === Screen Stretch (matrix aspect ratio) + Logging module ==========
     Stretch   = { Enabled=false, Ratio=1.30 },
     Logging   = { Enabled=false },
-    WeaponsVisual = {
-        Enabled = false,
-        FillColor          = Color3.fromRGB(160, 80, 255),
-        OutlineColor       = Color3.fromRGB(255, 255, 255),
-        FillTransparency   = 0.35,
-        OutlineTransparency= 0,
-    },
 
 }
 
@@ -4002,29 +3995,31 @@ local function _applySkinSourceToPart(target, source)
     end)
 end
 
--- Uniform mesh scale. The knife viewmodel attaches T/CT gloves separately, so
--- the glove must be shrunk as one whole piece; axis-only scaling makes knives
--- look abnormal because the glove grows in one direction while the hand/knife
--- offset stays original.
+-- Uniform mesh scale. Only touches BaseParts, so a single-MeshPart glove/sleeve
+-- shrinks in place without breaking welds. Skips models with sub-parts (weld
+-- offsets wouldn't scale together). For Part + SpecialMesh gloves, also scales
+-- the visual mesh itself; otherwise changing Size can leave the visible glove
+-- wrong while the hitbox shrinks.
 local function _uniformScale(inst, factor)
     if not inst or not factor or factor == 1 then return end
-    if not inst:IsA("BasePart") then return end
-    local visualMeshes = {}
-    for _, ch in ipairs(inst:GetChildren()) do
-        if ch:IsA("SpecialMesh") or ch:IsA("BlockMesh") or ch:IsA("CylinderMesh") then
-            table.insert(visualMeshes, ch)
+    if inst:IsA("BasePart") then
+        local visualMeshes = {}
+        for _, ch in ipairs(inst:GetChildren()) do
+            if ch:IsA("SpecialMesh") or ch:IsA("BlockMesh") or ch:IsA("CylinderMesh") then
+                table.insert(visualMeshes, ch)
+            end
+        end
+        if #visualMeshes > 0 then
+            -- Part + SpecialMesh: scale only the rendered mesh, not Part.Size,
+            -- so the visual changes by exactly the requested amount.
+            for _, ch in ipairs(visualMeshes) do
+                pcall(function() ch.Scale = ch.Scale * factor end)
+            end
+        else
+            -- MeshPart/plain BasePart: Size controls the visual shape.
+            pcall(function() inst.Size = inst.Size * factor end)
         end
     end
-    if #visualMeshes > 0 then
-        for _, ch in ipairs(visualMeshes) do
-            pcall(function() ch.Scale = ch.Scale * factor end)
-        end
-    elseif inst:IsA("MeshPart") then
-        -- MeshPart keeps its MeshId when Size scales (Roblox stretches the mesh).
-        pcall(function() inst.Size = inst.Size * factor end)
-    end
-    -- If it's a plain Part with no visual mesh, do NOT touch Size — resizing a
-    -- bare Part just makes a bigger/smaller cube (that was the "glove virou cubo" bug).
 end
 
 local function _findArmPart(root, armName)
@@ -4077,8 +4072,6 @@ local function _fitGloveToReference(mesh, ref, maxScale)
     return true, factor
 end
 
-local GLOVE_KNIFE_UNIFORM_SCALE = 0.86
-
 local function attachAsset(folder, arm, model, name, offset, ref)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
@@ -4086,17 +4079,13 @@ local function attachAsset(folder, arm, model, name, offset, ref)
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
     pcall(function() mesh:SetAttribute("EclipseAttached", true) end)
-    -- Luva em knife: voltar ao comportamento antigo, diminuindo o modelo todo
-    -- por igual a partir do tamanho original. Isso evita o bug de ficar grande
-    -- ou torta somente com knives.
+    -- Luva: apenas -4% do tamanho original. Nada de tentar encaixar pelo tamanho
+    -- do braço, porque isso achatava a luva e virava um "cubinho" em alguns meshes.
     if name == "Glove" and mesh:IsA("BasePart") and target:IsA("BasePart") then
-        local fitted, factor = _fitGloveToReference(mesh, ref, GLOVE_KNIFE_UNIFORM_SCALE)
-        if not fitted then
-            factor = GLOVE_KNIFE_UNIFORM_SCALE
-            _uniformScale(mesh, factor)
-        end
+        local factor = 0.86
+        _uniformScale(mesh, factor)
         local prev = SkinSystem.gloveScale or 1.0
-        if factor and factor > 0 and factor < prev then SkinSystem.gloveScale = factor end
+        if factor < prev then SkinSystem.gloveScale = factor end
     end
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
@@ -5247,7 +5236,6 @@ end
 
 function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
     if rec then rec.iconToken = (rec.iconToken or 0) + 1 end
-    if rec then rec.iconHiddenForOverride = nil; rec.suppressIconVis = nil end
     if rec and rec.iconImage then pcall(function() rec.iconImage:Destroy() end); rec.iconImage = nil end
     if rec and rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end); rec.iconFallbackImage = nil end
     if iconLbl then
@@ -5273,39 +5261,6 @@ function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
     end
 end
 
-function _hideNativeHUDIconForOverride(rec, iconLbl, iconViewport)
-    if not rec then return end
-    rec.iconHiddenForOverride = true
-    rec.suppressIconVis = true
-    pcall(function()
-        if rec.iconImage and rec.iconImage.Parent then
-            rec.iconImage.ImageTransparency = 0
-            rec.iconImage.Visible = true
-        end
-        if iconLbl and iconLbl.Parent then
-            iconLbl.ImageTransparency = 1
-            iconLbl.Visible = false
-        end
-        if iconViewport and iconViewport.Parent then
-            iconViewport.BackgroundTransparency = 1
-            iconViewport.Visible = false
-        end
-    end)
-    task.defer(function()
-        if rec then rec.suppressIconVis = nil end
-    end)
-end
-
-function _enforceHUDIconOverrideVisibility()
-    if not (Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning and IsAlive()) then return end
-    for slotFrame, rec in pairs(HUDSkin.slots) do
-        if slotFrame and slotFrame.Parent and rec and rec.iconAppliedKey and rec.iconImage and rec.iconImage.Parent then
-            local _, iconLbl, iconViewport = _slotParts(slotFrame)
-            _hideNativeHUDIconForOverride(rec, iconLbl or rec.iconLabelRef, iconViewport or rec.iconViewportRef)
-        end
-    end
-end
-
 function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
     local rec = HUDSkin.slots[slotFrame]
     if rec then
@@ -5318,27 +5273,8 @@ function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
             end
         end
         if nameLbl and (not rec.nameOverlay or not rec.nameOverlay.Parent) then rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay") end
-        if iconLbl and rec.iconLabelRef ~= iconLbl and iconLbl:GetAttribute("EclipseHUD") ~= true then
-            rec.iconLabelRef = iconLbl
-            rec.iconLabelImage = (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.Image or rec.iconLabelImage
-            rec.iconImageColor3 = (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageColor3 or rec.iconImageColor3
-            rec.iconImageRectOffset = (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageRectOffset or rec.iconImageRectOffset
-            rec.iconImageRectSize = (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ImageRectSize or rec.iconImageRectSize
-            rec.iconScaleType = (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton")) and iconLbl.ScaleType or rec.iconScaleType
-            rec.iconImageTransparency = iconLbl.ImageTransparency
-            rec.iconLabelVisible = iconLbl.Visible
-            rec.iconAppliedKey = nil
-        else
-            rec.iconLabelRef = iconLbl or rec.iconLabelRef
-        end
-        if iconViewport and rec.iconViewportRef ~= iconViewport and iconViewport:GetAttribute("EclipseHUD") ~= true then
-            rec.iconViewportRef = iconViewport
-            rec.iconViewportTransparency = iconViewport.BackgroundTransparency
-            rec.iconViewportVisible = iconViewport.Visible
-            rec.iconAppliedKey = nil
-        else
-            rec.iconViewportRef = iconViewport or rec.iconViewportRef
-        end
+        rec.iconLabelRef = iconLbl or rec.iconLabelRef
+        rec.iconViewportRef = iconViewport or rec.iconViewportRef
         rec.iconAnchorRef = iconAnchor or rec.iconAnchorRef
         return rec
     end
@@ -5622,19 +5558,21 @@ function _applyOneSlot(slotFrame, forceKnife)
             if rec.iconViewport then pcall(function() rec.iconViewport.Visible = false end) end
             local alreadyApplied = rec.iconAppliedKey == directIcon and img.Visible ~= false and (not usingNativeImage or tostring(img.Image or "") ~= tostring(rec.iconLabelImage or ""))
             if alreadyApplied then
-                _hideNativeHUDIconForOverride(rec, iconLbl, iconViewport)
+                if iconViewport then pcall(function() iconViewport.Visible = false end) end
+                if iconLbl then pcall(function() iconLbl.Visible = false end) end
+                if rec.iconImage then pcall(function() rec.iconImage.Visible = true end) end
             else
                 rec.iconAppliedKey = directIcon
-                rec.iconHiddenForOverride = nil
                 if iconLbl then pcall(function() iconLbl.Visible = rec.iconLabelVisible ~= false end) end
                 if iconViewport then pcall(function() iconViewport.Visible = rec.iconViewportVisible ~= false end) end
                 _preloadHUDIcon(directIcon)
                 _applyHUDImageWithFallback(rec, img, directIcon, tostring(slotFrame.Name) .. ":slot-image", function(finalIcon)
-                    _hideNativeHUDIconForOverride(rec, iconLbl, iconViewport)
+                    if iconViewport then pcall(function() iconViewport.Visible = false end) end
+                    if iconLbl then pcall(function() iconLbl.Visible = false end) end
+                    if rec.iconImage then pcall(function() rec.iconImage.Visible = true end) end
                     _hudDbg("melee HUD icon injected", Config.Skins.SelectedKnife, finalIcon)
                 end, function()
                     rec.iconAppliedKey = nil
-                    rec.iconHiddenForOverride = nil
                     if iconLbl then pcall(function() iconLbl.Visible = rec.iconLabelVisible ~= false end) end
                     if iconViewport then pcall(function() iconViewport.Visible = rec.iconViewportVisible ~= false end) end
                     _hudDbg("melee HUD icon failed", Config.Skins.SelectedKnife)
@@ -5666,45 +5604,21 @@ function _applyOneSlot(slotFrame, forceKnife)
     if isMelee and iconLbl and not rec.iconImgConn then
         rec.iconImgConn = iconLbl:GetPropertyChangedSignal("Image"):Connect(function()
             if rec.applying or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-            if rec.iconAppliedKey and rec.iconImage and rec.iconImage.Parent then
-                _hideNativeHUDIconForOverride(rec, iconLbl, iconViewport)
-            end
             _queueHUDSlotApply(slotFrame)
         end)
         table.insert(UnloadConnections, rec.iconImgConn)
     end
-    if isMelee and iconLbl and not rec.iconTransConn then
-        rec.iconTransConn = iconLbl:GetPropertyChangedSignal("ImageTransparency"):Connect(function()
-            if rec.applying or rec.suppressIconVis or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-            if rec.iconAppliedKey and rec.iconImage and rec.iconImage.Parent then
-                _hideNativeHUDIconForOverride(rec, iconLbl, iconViewport)
-                _scheduleHUDApply(0.05)
-            end
-        end)
-        table.insert(UnloadConnections, rec.iconTransConn)
-    end
     if isMelee and iconLbl and not rec.iconConn then
         rec.iconConn = iconLbl:GetPropertyChangedSignal("Visible"):Connect(function()
             if rec.applying or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-            if rec.suppressIconVis then return end
-            if rec.iconAppliedKey and rec.iconImage and rec.iconImage.Parent then
-                _hideNativeHUDIconForOverride(rec, iconLbl, iconViewport)
-                _scheduleHUDApply(0.05)
-            elseif not iconLbl.Visible then
-                _queueHUDSlotApply(slotFrame)
-            end
+            if not iconLbl.Visible then _queueHUDSlotApply(slotFrame) end
         end)
         table.insert(UnloadConnections, rec.iconConn)
     end
     if isMelee and iconViewport and not rec.vpVisConn then
         rec.vpVisConn = iconViewport:GetPropertyChangedSignal("Visible"):Connect(function()
             if rec.applying or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-            if rec.iconAppliedKey and rec.iconImage and rec.iconImage.Parent then
-                _hideNativeHUDIconForOverride(rec, iconLbl, iconViewport)
-                _scheduleHUDApply(0.05)
-            elseif iconViewport.Visible then
-                _queueHUDSlotApply(slotFrame)
-            end
+            if iconViewport.Visible then _queueHUDSlotApply(slotFrame) end
         end)
         table.insert(UnloadConnections, rec.vpVisConn)
     end
@@ -5829,7 +5743,6 @@ function _restoreHUDKnife()
         if rec.nameVisConn then pcall(function() rec.nameVisConn:Disconnect() end); rec.nameVisConn = nil end
         if rec.iconConn then pcall(function() rec.iconConn:Disconnect() end); rec.iconConn = nil end
         if rec.iconImgConn then pcall(function() rec.iconImgConn:Disconnect() end); rec.iconImgConn = nil end
-        if rec.iconTransConn then pcall(function() rec.iconTransConn:Disconnect() end); rec.iconTransConn = nil end
         if rec.vpVisConn then pcall(function() rec.vpVisConn:Disconnect() end); rec.vpVisConn = nil end
         if slotFrame and slotFrame.Parent then
             local nameLbl, iconLbl, iconViewport = _slotParts(slotFrame)
@@ -5867,7 +5780,6 @@ function _resetHUDSlots()
             if rec.nameVisConn then pcall(function() rec.nameVisConn:Disconnect() end) end
             if rec.iconConn then pcall(function() rec.iconConn:Disconnect() end) end
             if rec.iconImgConn then pcall(function() rec.iconImgConn:Disconnect() end) end
-            if rec.iconTransConn then pcall(function() rec.iconTransConn:Disconnect() end) end
             HUDSkin.slots[slotFrame] = nil
         end
     end
@@ -5878,7 +5790,6 @@ task.spawn(function()
         if Config.Skins.SkinChangerEnabled then
             if IsAlive() and not _isSpectatingOther() then
                 pcall(_applyHUDKnife, false)
-                pcall(_enforceHUDIconOverrideVisibility)
             else
                 pcall(_hideAllHUDOverlays)
             end
@@ -6110,57 +6021,6 @@ end))
 _frameN = 0
 _lastFrameT = tick()
 _emaDt = 1/60
-
--- ==========================================================================
--- WEAPONS VISUAL (Highlight-based chams on LocalPlayer's viewmodel / tool)
--- ==========================================================================
-local _WV = { hl = nil, host = nil }
-
-local function _weaponsVisual_currentHost()
-    -- Prefer the active viewmodel in Camera (matches what the player sees).
-    for _, ch in ipairs(Camera:GetChildren()) do
-        if ch:IsA("Model") and (ch:FindFirstChild("Right Arm") or ch:FindFirstChildWhichIsA("BasePart", true)) then
-            return ch
-        end
-    end
-    local char = LocalPlayer and LocalPlayer.Character
-    local tool = char and char:FindFirstChildOfClass("Tool")
-    return tool
-end
-
-local function _weaponsVisual_clear()
-    if _WV.hl then pcall(function() _WV.hl:Destroy() end) end
-    _WV.hl = nil; _WV.host = nil
-end
-
-local function _updateWeaponsVisual()
-    local cfg = Config.WeaponsVisual
-    if not cfg or not cfg.Enabled then
-        if _WV.hl then _weaponsVisual_clear() end
-        return
-    end
-    local host = _weaponsVisual_currentHost()
-    if not host or not host.Parent then _weaponsVisual_clear(); return end
-    if _WV.host ~= host or not (_WV.hl and _WV.hl.Parent) then
-        _weaponsVisual_clear()
-        local hl = Instance.new("Highlight")
-        hl.Name = "EclipseWeaponGlow"
-        hl.Adornee = host
-        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Parent = host
-        _WV.hl = hl; _WV.host = host
-    end
-    _WV.hl.FillColor           = cfg.FillColor
-    _WV.hl.OutlineColor        = cfg.OutlineColor
-    _WV.hl.FillTransparency    = cfg.FillTransparency
-    _WV.hl.OutlineTransparency = cfg.OutlineTransparency
-end
-
--- ==========================================================================
--- (removido: injeção de gloves customizadas em outras armas — usuário optou por manter só knife)
-
-
-
 connectSignal(RunService.RenderStepped:Connect(function()
     if not scriptRunning then return end
     _frameN = _frameN + 1
@@ -6206,8 +6066,6 @@ connectSignal(RunService.RenderStepped:Connect(function()
             if WeatherPart then WeatherPart.CFrame = Camera.CFrame * CFrame.new(0,30,0) end
         end)
     end
-    safeUpdate("WeaponsVisual", _updateWeaponsVisual)
-    
 end))
 
 -- Periodic light cleanup: releases dead references from ESP / warn / spray
@@ -6415,6 +6273,10 @@ local WorldEspGB = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
 WorldEspGB:AddToggle("World_Bomb",    { Text="ESP C4",          Default=false, Callback=function(v) Config.ESP.WorldBomb=v; for _,e in pairs(WorldEspPool) do hideWorldEntry(e) end end })
     :AddColorPicker("World_BombCol", { Default=Config.ESP.BombColor,    Title="C4 color",      Callback=function(c) Config.ESP.BombColor=c end })
 WorldEspGB:AddToggle("ESP_C4Timer",   { Text="C4 PANEL",         Default=true,  Callback=function(v) Config.Misc.C4Timer=v end })
+-- C4 CARRIER ESP: puts a red marker above any player who has a C4 tool in
+-- their Backpack or Character. Lightweight: 1 Hz scan, cached BillboardGui.
+WorldEspGB:AddToggle("ESP_C4Carrier", { Text="ESP C4 CARRIER", Default=false, Callback=function(v) Config.ESP.C4Carrier=v end })
+    :AddColorPicker("ESP_C4CarrierCol", { Default=Color3.fromRGB(255,90,60), Title="C4 carrier color", Callback=function(c) Config.ESP.C4CarrierColor=c end })
 WorldEspGB:AddToggle("World_Weapons", { Text="DROPPED WEAPONS", Default=false, Callback=function(v) Config.ESP.WorldWeapons=v end })
     :AddColorPicker("World_WepCol",  { Default=Config.ESP.WeaponColor,  Title="Weapon color",  Callback=function(c) Config.ESP.WeaponColor=c end })
 WorldEspGB:AddToggle("World_Molotov", { Text="MOLOTOVS",        Default=false, Callback=function(v) Config.ESP.WorldMolotov=v end })
@@ -6446,19 +6308,6 @@ ChGB:AddSlider("Sniper_CH_Size",  { Text="SIZE",     Default=10, Min=2,  Max=40,
 ChGB:AddSlider("Sniper_CH_Gap",   { Text="GAP",      Default=4,  Min=0,  Max=30, Rounding=0, Callback=function(v) Config.Crosshair.Gap=v end })
 ChGB:AddSlider("Sniper_CH_Thick", { Text="THICKNESS",Default=1,  Min=1,  Max=5,  Rounding=0, Callback=function(v) Config.Crosshair.Thickness=v end })
 ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=function(v) Config.Crosshair.Dot=v end })
-
--- WEAPONS VISUAL — glow/chams on the LocalPlayer's equipped weapon model.
-local WVGB = Tabs.Visuals:AddRightGroupbox("WEAPONS VISUAL", "wand-2")
-WVGB:AddToggle("WV_Toggle", { Text="ENABLE WEAPON GLOW", Default=false,
-    Callback=function(v) Config.WeaponsVisual.Enabled=v; if not v then pcall(_weaponsVisual_clear) end end })
-    :AddColorPicker("WV_Fill",    { Default=Config.WeaponsVisual.FillColor,    Title="Fill color",
-        Callback=function(c) Config.WeaponsVisual.FillColor=c end })
-    :AddColorPicker("WV_Outline", { Default=Config.WeaponsVisual.OutlineColor, Title="Outline color",
-        Callback=function(c) Config.WeaponsVisual.OutlineColor=c end })
-WVGB:AddSlider("WV_FillT",    { Text="FILL TRANSPARENCY",    Default=0.35, Min=0, Max=1, Rounding=2,
-    Callback=function(v) Config.WeaponsVisual.FillTransparency=v end })
-WVGB:AddSlider("WV_OutlineT", { Text="OUTLINE TRANSPARENCY", Default=0,    Min=0, Max=1, Rounding=2,
-    Callback=function(v) Config.WeaponsVisual.OutlineTransparency=v end })
 
 
 
@@ -9767,7 +9616,84 @@ end)() -- SCREEN STRETCH + LOGGING
 -- The old local bottom-screen bar is intentionally disabled so the ammo
 -- toggle stays distinct from ESP Weapon and never draws in the wrong place.
 
--- (C4 Carrier ESP removed by user request.)
+-- =====================================================================
+-- C4 CARRIER ESP · marker above the head of whoever holds the bomb.
+-- Lightweight: scans Backpack + Character for a Tool whose name contains
+-- "C4" or "Bomb" once per second, caches a BillboardGui per player.
+-- =====================================================================
+do
+    local C4Markers = {}
+    local function _hasC4(plr)
+        local function check(container)
+            if not container then return false end
+            for _, child in ipairs(container:GetChildren()) do
+                if child:IsA("Tool") or child:IsA("Model") then
+                    local n = child.Name:lower()
+                    if n:find("c4") or n:find("bomb") then return true end
+                end
+            end
+            return false
+        end
+        return check(plr:FindFirstChildOfClass("Backpack")) or check(plr.Character)
+    end
+    local function _clearMarker(plr)
+        local m = C4Markers[plr]
+        if m then pcall(function() m:Destroy() end); C4Markers[plr] = nil end
+    end
+    local function _makeMarker(plr)
+        local char = plr.Character; if not char then return nil end
+        local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+        if not head then return nil end
+        local bb = Instance.new("BillboardGui")
+        bb.Name = "EclipseC4Carrier"
+        bb.Adornee = head
+        bb.AlwaysOnTop = true
+        bb.Size = UDim2.fromOffset(32, 32)
+        bb.StudsOffset = Vector3.new(0, 3.2, 0)
+        bb.ResetOnSpawn = false
+        pcall(function() bb.Parent = (gethui and gethui()) or CoreGui end)
+        local pill = Instance.new("Frame", bb)
+        pill.AnchorPoint = Vector2.new(0.5, 0.5)
+        pill.Position = UDim2.new(0.5, 0, 0.5, 0)
+        pill.Size = UDim2.fromOffset(28, 14)
+        pill.BackgroundColor3 = Config.ESP.C4CarrierColor or Color3.fromRGB(255,90,60)
+        pill.BorderSizePixel = 0
+        Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+        local lbl = Instance.new("TextLabel", pill)
+        lbl.BackgroundTransparency = 1
+        lbl.Size = UDim2.fromScale(1, 1)
+        lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 10
+        lbl.TextColor3 = Color3.new(1, 1, 1)
+        lbl.Text = "C4"
+        return bb
+    end
+    task.spawn(function()
+        while scriptRunning do
+            if Config.ESP.C4Carrier then
+                local seen = {}
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= LocalPlayer and (not Config.TeamCheck or not IsAlly(plr)) and _hasC4(plr) then
+                        seen[plr] = true
+                        local m = C4Markers[plr]
+                        if not m or not m.Parent or not m.Adornee or not m.Adornee.Parent then
+                            _clearMarker(plr)
+                            C4Markers[plr] = _makeMarker(plr)
+                        else
+                            local pill = m:FindFirstChildOfClass("Frame")
+                            if pill then pill.BackgroundColor3 = Config.ESP.C4CarrierColor or Color3.fromRGB(255,90,60) end
+                        end
+                    end
+                end
+                for plr, _ in pairs(C4Markers) do
+                    if not seen[plr] then _clearMarker(plr) end
+                end
+            else
+                for plr, _ in pairs(C4Markers) do _clearMarker(plr) end
+            end
+            task.wait(1)
+        end
+    end)
+end
 
 UpdateWeather(Config.World.Weather)
 
@@ -9787,4 +9713,3 @@ task.spawn(function()
         end)
     end
 end)
-
