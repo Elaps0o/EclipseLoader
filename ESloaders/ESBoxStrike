@@ -870,6 +870,7 @@ local Config = {
         Enabled=false, FOV=150, Smoothness=0.35, TargetPart="Head",
         DrawFOV=true, VisibilityCheck=true, FOVColor=Color3.fromRGB(255,255,255),
         Global=true, SelectedWeapon="AK-47", PerWeapon={},
+        DisableInSmoke=true, DisableInFlash=true,
     },
     TriggerBot = { Enabled=false, Delay=0.01, Mode="HitChance", HitChance=100, Spread=0 },
     ESP      = {
@@ -898,6 +899,7 @@ local Config = {
         ChamsGlowColor = Color3.fromRGB(255, 180, 180),
         ChamsGlow      = 0.35, -- 0 = solid, 1 = only outline glow
         Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
+        IdentifyMoney  = false, MoneyColor = Color3.fromRGB(120, 220, 120),
     },
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={} },
@@ -1889,6 +1891,13 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     local nameParts = {}
     if Config.ESP.Name then table.insert(nameParts, plr.Name) end
     if Config.ESP.Distance then table.insert(nameParts, math.floor(dist) .. "m") end
+    if Config.ESP.IdentifyMoney then
+        local m = tonumber(plr:GetAttribute("Money"))
+        if m then
+            local s = tostring(m):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+            table.insert(nameParts, "$" .. s)
+        end
+    end
     -- Ammo bar at the BOTTOM of the tag, drawn white, draining with real ammo.
     local ammoY = y + height - 4
     local ammoPadL, ammoPadR = x + 6, x + width - 6
@@ -3039,6 +3048,72 @@ end
 
 function updateAntiSmoke() end
 
+-- ---- Aimbot environmental gates (smoke / flash) ------------------------
+-- Cheap AABB test: ray from `from` to `to` intersects any active
+-- VoxelSmoke_* voxel in workspace.Debris. Same technique the game's own
+-- AimAssistController uses so results match its "blocked by smoke" logic.
+function _aimRayHitsSmoke(from, to)
+    local dbg = Workspace:FindFirstChild("Debris"); if not dbg then return false end
+    local dir = to - from; local mag = dir.Magnitude; if mag <= 0.001 then return false end
+    local u = dir / mag
+    for _, folder in ipairs(dbg:GetChildren()) do
+        if folder:IsA("Folder") and folder.Name:match("^VoxelSmoke_") then
+            for _, vox in ipairs(folder:GetChildren()) do
+                if vox:IsA("BasePart") and vox.Name == "SmokeVoxel" then
+                    local half = vox.Size / 2
+                    local mn, mx = vox.Position - half, vox.Position + half
+                    local tmin, tmax = 0, mag
+                    local ok = true
+                    for _, axis in ipairs({"X","Y","Z"}) do
+                        local o, d = from[axis], u[axis]
+                        if math.abs(d) < 1e-4 then
+                            if o < mn[axis] or o > mx[axis] then ok = false; break end
+                        else
+                            local inv = 1/d
+                            local t1, t2 = (mn[axis]-o)*inv, (mx[axis]-o)*inv
+                            if t2 < t1 then t1, t2 = t2, t1 end
+                            if t1 > tmin then tmin = t1 end
+                            if t2 < tmax then tmax = t2 end
+                            if tmax < tmin then ok = false; break end
+                        end
+                    end
+                    if ok and tmin >= 0 and tmin <= mag then return true end
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- Detect if we're currently flashed. Prefer the game's own FlashEffect
+-- module (source of truth); fall back to PlayerGui FlashbangEffect / the
+-- Lighting FlashbangColorCorrection while it's active.
+local _FlashEffectMod
+function _isLocalFlashed()
+    if not _FlashEffectMod then
+        pcall(function()
+            local rs = game:GetService("ReplicatedStorage")
+            local m = rs:FindFirstChild("Components", true)
+            if m then
+                local mod = m:FindFirstChild("VFXLibary", true)
+                if mod then
+                    local fx = mod:FindFirstChild("FlashEffect")
+                    if fx and fx:IsA("ModuleScript") then _FlashEffectMod = require(fx) end
+                end
+            end
+        end)
+    end
+    if _FlashEffectMod and type(_FlashEffectMod.IsFlashed) == "function" then
+        local ok, r = pcall(_FlashEffectMod.IsFlashed); if ok then return r == true end
+    end
+    -- Fallback probes.
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if pg and pg:FindFirstChild("FlashbangEffect") then return true end
+    local cc = Lighting:FindFirstChild("FlashbangColorCorrection")
+    if cc and cc:IsA("ColorCorrectionEffect") and cc.Enabled and math.abs(cc.Brightness) > 0.05 then return true end
+    return false
+end
+
 -- Aimbot smoothing state: acquisition ramp (no snap) + last-frame tick
 -- for frame-rate-independent exponential smoothing.
 local AimState = { lastTarget = nil, acquiredAt = 0, lastTick = 0 }
@@ -3048,6 +3123,7 @@ function updateAimbot()
         FOVCircleInner.Visible = false
     end
     if not Config.GlobalEnable or not Config.Aimbot.Enabled then return end
+    if Config.Aimbot.DisableInFlash and _isLocalFlashed() then return end
     local mouse = UserInput:GetMouseLocation()
     local r = ActiveAimFOV()
     FOVCircle.Visible = Config.Aimbot.DrawFOV
@@ -3091,6 +3167,7 @@ function updateAimbot()
         end
         if not part then continue end
         if Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
+        if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
         local sp, on = Camera:WorldToViewportPoint(part.Position)
         if on then
             local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
@@ -5520,6 +5597,8 @@ SafeAddDropdown(AimGB, "Aimbot_Part", { Text="TARGET PART", Values={"Head","Neck
 AimGB:AddToggle("Aimbot_DrawFOV", { Text="DRAW FOV",    Default=true, Callback=function(v) Config.Aimbot.DrawFOV=v end })
     :AddColorPicker("Aimbot_FOVColor", { Default=Color3.fromRGB(255,255,255), Title="FOV color", Callback=function(c) Config.Aimbot.FOVColor=c end })
 -- VISIBILITY CHECK is built-in and always on (no toggle).
+AimGB:AddToggle("Aimbot_NoSmoke", { Text="DISABLE IN SMOKE", Default=true, Callback=function(v) Config.Aimbot.DisableInSmoke=v end })
+AimGB:AddToggle("Aimbot_NoFlash", { Text="DISABLE IN FLASH", Default=true, Callback=function(v) Config.Aimbot.DisableInFlash=v end })
 
 
 local TrigGB = Tabs.Aim:AddLeftGroupbox("TRIGGER BOT")
@@ -5561,6 +5640,8 @@ EspGB:AddToggle("ESP_Weapon",    { Text="ESP WEAPON", Default=false, Callback=fu
     :AddColorPicker("ESP_WepNCol", { Default=Config.ESP.WeaponNameColor, Title="Weapon name color", Callback=function(c) Config.ESP.WeaponNameColor=c end })
 EspGB:AddToggle("ESP_Ammo",      { Text="ESP AMMO",   Default=false, Callback=function(v) Config.ESP.Ammo=v end })
     :AddColorPicker("ESP_AmmoCol", { Default=Config.ESP.AmmoColor, Title="Ammo bar color", Callback=function(c) Config.ESP.AmmoColor=c end })
+EspGB:AddToggle("ESP_Money",     { Text="IDENTIFY MONEY", Default=false, Callback=function(v) Config.ESP.IdentifyMoney=v end })
+    :AddColorPicker("ESP_MoneyCol", { Default=Config.ESP.MoneyColor, Title="Money color", Callback=function(c) Config.ESP.MoneyColor=c end })
 -- HEAD DOT + SKELETON removed by user request (were causing FPS drop).
 Config.ESP.HeadDot = false
 Config.ESP.Skeleton = false
