@@ -921,15 +921,6 @@ local Config = {
     -- === Screen Stretch (matrix aspect ratio) + Logging module ==========
     Stretch   = { Enabled=false, Ratio=1.30 },
     Logging   = { Enabled=false },
-    WeaponsVisual = {
-        Enabled = false,
-        Color              = Color3.fromRGB(160, 80, 255),
-        FillColor          = Color3.fromRGB(160, 80, 255), -- back-compat with old configs
-        OutlineColor       = Color3.fromRGB(160, 80, 255), -- back-compat with old configs
-        FillTransparency   = 0.18,
-        OutlineTransparency= 0,
-    },
-
 }
 
 local _EclipseConfigLoading = false
@@ -3930,9 +3921,12 @@ end
 function _clearGloveSkinRuntime()
     pcall(function()
         for _, obj in ipairs(Camera:GetChildren()) do
-            -- Destroy any leftover custom glove/sleeve parts we attached.
+            -- Destroy only glove clones/motors. Sleeves and knife parts stay intact.
             for _, d in ipairs(obj:GetDescendants()) do
-                if d:GetAttribute("EclipseAttached") then
+                local isGloveClone = d:GetAttribute("EclipseGloveClone") == true
+                    or (d:IsA("Motor6D") and d.Name == "EclipseGloveMotor")
+                    or (d:IsA("BasePart") and d.Name == "Glove" and d:GetAttribute("EclipseAttached"))
+                if isGloveClone then
                     pcall(function() d:Destroy() end)
                 end
             end
@@ -4098,12 +4092,6 @@ local function _hasGloveVisual(part)
     return false
 end
 
-local function _firstBasePart(root)
-    if not root then return nil end
-    if root:IsA("BasePart") then return root end
-    return root:FindFirstChildWhichIsA("BasePart", true)
-end
-
 local function _relativeOffset(parentPart, childPart, fallback)
     if parentPart and childPart and parentPart:IsA("BasePart") and childPart:IsA("BasePart") then
         local ok, cf = pcall(function() return parentPart.CFrame:ToObjectSpace(childPart.CFrame) end)
@@ -4132,7 +4120,7 @@ local function _sourceBaseForGlove(sideRoot, glovePart, sideName)
         if p:IsA("BasePart") and p ~= glovePart then return p end
         p = p.Parent
     end
-    local first = _firstBasePart(sideRoot)
+    local first = sideRoot and sideRoot:FindFirstChildWhichIsA("BasePart", true)
     if first == glovePart then return nil end
     return first
 end
@@ -4163,6 +4151,58 @@ local function _prepAttachedTree(root)
             d.Transparency = 0
             pcall(function() d.LocalTransparencyModifier = 0 end)
             pcall(function() d.Massless = true end)
+        end
+    end
+end
+
+local function _stripNestedBaseParts(root)
+    if not root then return end
+    for _, d in ipairs(root:GetDescendants()) do
+        if d:IsA("BasePart") then pcall(function() d:Destroy() end) end
+    end
+end
+
+local function _isIgnoredGloveSourcePart(part, sideName)
+    local n = tostring(part and part.Name or "")
+    local l = n:lower()
+    return n == sideName
+        or l:find("arm", 1, true)
+        or l:find("sleeve", 1, true)
+        or l:find("hand", 1, true)
+        or l:find("hitbox", 1, true)
+        or l:find("root", 1, true)
+        or l:find("bound", 1, true)
+end
+
+local function _collectGloveSourceParts(sideRoot, sideName)
+    local out, seen = {}, {}
+    local function push(part)
+        if part and part:IsA("BasePart") and not seen[part] and not _isIgnoredGloveSourcePart(part, sideName) then
+            if part.Name == "Glove" or _hasGloveVisual(part) or tostring(part.Name):lower():find("glove", 1, true) then
+                seen[part] = true
+                table.insert(out, part)
+            end
+        end
+    end
+    local direct = _sourceGlovePart(sideRoot)
+    push(direct)
+    if direct then
+        for _, d in ipairs(direct:GetDescendants()) do push(d) end
+    end
+    if sideRoot then
+        if sideRoot:IsA("BasePart") then push(sideRoot) end
+        for _, d in ipairs(sideRoot:GetDescendants()) do push(d) end
+    end
+    table.sort(out, function(a, b) return a:GetFullName() < b:GetFullName() end)
+    return out
+end
+
+local function _destroyEclipseGlovesOnArm(arm)
+    if not arm then return end
+    for _, d in ipairs(arm:GetChildren()) do
+        if (d:IsA("Motor6D") and d.Name == "EclipseGloveMotor")
+            or (d:IsA("BasePart") and d:GetAttribute("EclipseGloveClone")) then
+            pcall(function() d:Destroy() end)
         end
     end
 end
@@ -4206,50 +4246,69 @@ local function _attachGloveAsset(folder, arm, model, offset, ref)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm)
     if not (target and target:IsA("BasePart")) then return end
-    local srcSide = folder:WaitForChild(model, 5); if not srcSide then return end
-    local srcGlove = _sourceGlovePart(srcSide); if not (srcGlove and srcGlove:IsA("BasePart")) then return end
 
-    -- Prefer the selected Sports Gloves skin dump as the actual cloned visual.
-    -- The T/CT glove asset is only a fallback/position reference; several dumps
-    -- expose it as a plain block, which caused invisible/cube gloves and skins
-    -- that appeared not to apply.
+    _destroyEclipseGlovesOnArm(target)
+
+    local fallbackSide = folder:WaitForChild(model, 5)
     local skinRoot = _selectedGloveSkinRoot()
     local skinSide = skinRoot and _sourceArmRoot(skinRoot, arm) or nil
-    local skinGlove = _gloveSkinSourceForSide(skinRoot, arm)
-    if skinGlove and _hasGloveVisual(skinGlove) then
-        srcSide = skinSide or skinGlove.Parent or skinRoot
-        srcGlove = skinGlove
-    elseif not _hasGloveVisual(srcGlove) and skinGlove then
-        srcSide = skinSide or skinGlove.Parent or skinRoot
-        srcGlove = skinGlove
+    local sourceSide = skinSide or fallbackSide
+    if not sourceSide then return end
+
+    local sourceParts = _collectGloveSourceParts(sourceSide, arm)
+    if #sourceParts == 0 and fallbackSide and fallbackSide ~= sourceSide then
+        sourceSide = fallbackSide
+        sourceParts = _collectGloveSourceParts(sourceSide, arm)
+    end
+    if #sourceParts == 0 then
+        local native = _activeGlovePart(target)
+        if native then
+            native.Transparency = 0
+            pcall(function() native.LocalTransparencyModifier = 0 end)
+        end
+        return
     end
 
-    -- Replace only the glove visual. Cloning the whole source arm was the old
-    -- bug: some dumps expose that arm as a plain block, so skins vanished or the
-    -- hand became a cube. This clone keeps the original glove mesh/textures.
-    _hideNativeGloveOnArm(target)
-    local mesh = srcGlove:Clone()
-    mesh.Name = "Glove"
-    mesh.Parent = target
-    _prepAttachedTree(mesh)
-    _uniformScale(mesh, GLOVE_KNIFE_UNIFORM_SCALE)
-    SkinSystem.gloveScale = GLOVE_KNIFE_UNIFORM_SCALE
+    local sourceBase = sourceSide:IsA("BasePart") and sourceSide or sourceSide:FindFirstChild(arm, true)
+    if not (sourceBase and sourceBase:IsA("BasePart")) then
+        sourceBase = sourceSide:FindFirstChildWhichIsA("BasePart", true)
+    end
+    local primarySource = sourceParts[1]
+    local fallbackC0 = (ref and ref.Offset) or offset or CFrame.new(0, 0, -1.5)
 
-    local srcBase = _sourceBaseForGlove(srcSide, srcGlove, arm)
-    local c0 = (ref and ref.Offset) or _relativeOffset(srcBase, srcGlove, offset or CFrame.new(0, 0, -1.5))
-    -- Shrinking a glove around its own pivot can visually pull it down/off the
-    -- hand on some meshes. Lift by half the lost Y-size so it stays covering the
-    -- hand while still being exactly 10% smaller overall.
-    pcall(function()
-        local lostY = math.max(0, (srcGlove.Size.Y or 0) * (1 - GLOVE_KNIFE_UNIFORM_SCALE))
-        c0 = c0 * CFrame.new(0, math.clamp(lostY * 0.5, 0, 0.14), 0)
-    end)
-    local motor = Instance.new("Motor6D")
-    motor.Name = "EclipseGloveMotor"
-    motor.Part0 = target
-    motor.Part1 = mesh
-    motor.C0 = c0
-    motor.Parent = target
+    local made = 0
+    for _, srcPart in ipairs(sourceParts) do
+        local clone = srcPart:Clone()
+        clone.Name = "Glove"
+        _stripNestedBaseParts(clone)
+        clone.Parent = target
+        _prepAttachedTree(clone)
+        clone:SetAttribute("EclipseGloveClone", true)
+        clone:SetAttribute("EclipseSkinSource", srcPart:GetFullName())
+        _uniformScale(clone, GLOVE_KNIFE_UNIFORM_SCALE)
+        SkinSystem.gloveScale = GLOVE_KNIFE_UNIFORM_SCALE
+
+        local c0
+        if sourceBase and sourceBase ~= primarySource and sourceBase ~= srcPart then
+            c0 = _relativeOffset(sourceBase, srcPart, fallbackC0)
+        elseif srcPart == primarySource then
+            c0 = fallbackC0
+        else
+            c0 = fallbackC0 * _relativeOffset(primarySource, srcPart, CFrame.new())
+        end
+        local motor = Instance.new("Motor6D")
+        motor.Name = "EclipseGloveMotor"
+        motor.Part0 = target
+        motor.Part1 = clone
+        motor.C0 = c0
+        motor.Parent = target
+        motor:SetAttribute("EclipseGloveClone", true)
+        made = made + 1
+    end
+
+    if made > 0 then
+        _hideNativeGloveOnArm(target)
+    end
 end
 
 local function attachAsset(folder, arm, model, name, offset, ref)
@@ -4273,12 +4332,7 @@ local function _refreshKnifeGloves()
     for _, side in ipairs({"Left Arm", "Right Arm"}) do
         local arm = SkinSystem.vm:FindFirstChild(side)
         if arm then
-            for _, d in ipairs(arm:GetChildren()) do
-                if (d:IsA("Motor6D") and d.Name == "EclipseGloveMotor")
-                    or (d:IsA("BasePart") and d.Name == "Glove" and d:GetAttribute("EclipseAttached")) then
-                    pcall(function() d:Destroy() end)
-                end
-            end
+            _destroyEclipseGlovesOnArm(arm)
         end
     end
     local teamName = tostring((IsAlive() and IsAlive().Parent and IsAlive().Parent.Name) or "")
@@ -4286,7 +4340,6 @@ local function _refreshKnifeGloves()
     if not gloveFolder then return end
     attachAsset(gloveFolder, "Left Arm", "Left Arm", "Glove", CFrame.new(0,0,-1.5))
     attachAsset(gloveFolder, "Right Arm", "Right Arm", "Glove", CFrame.new(0,0,-1.5))
-    pcall(_applySelectedGloveSkin)
 end
 
 -- Empurra a faca (e demais partes presas ao Right Arm que nao sao luva/manga)
@@ -4520,15 +4573,25 @@ function _applySelectedGloveSkin()
         local gsr = cam and (cam:FindFirstChild("Factory New") or cam)
         if not gsr then return end
         for _, obj in ipairs(Camera:GetChildren()) do
-            local l = obj:FindFirstChild("Left Arm"); local r = obj:FindFirstChild("Right Arm")
-            if l or r then
-                for _, side in {"Left Arm","Right Arm"} do
-                    local arm = obj:FindFirstChild(side); local s = gsr:FindFirstChild(side)
-                    if arm and s then
-                        local gm = _activeGlovePart(arm)
-                        local srcGlove = _gloveSkinSourceForSide(gsr, side)
-                        if gm and srcGlove then
-                            _applySkinSourceToPart(gm, srcGlove)
+            if obj:FindFirstChild("Left Arm") or obj:FindFirstChild("Right Arm") then
+                for _, side in ipairs({"Left Arm","Right Arm"}) do
+                    local arm = obj:FindFirstChild(side)
+                    local sourceSide = _sourceArmRoot(gsr, side) or gsr
+                    if arm and sourceSide then
+                        local targets = {}
+                        for _, d in ipairs(arm:GetChildren()) do
+                            if d:IsA("BasePart") and d:GetAttribute("EclipseGloveClone") then table.insert(targets, d) end
+                        end
+                        table.sort(targets, function(a, b) return a:GetFullName() < b:GetFullName() end)
+                        local sources = _collectGloveSourceParts(sourceSide, side)
+                        if #targets > 0 and #sources > 0 then
+                            for i, targetPart in ipairs(targets) do
+                                _applySkinSourceToPart(targetPart, sources[math.min(i, #sources)])
+                            end
+                        else
+                            local gm = _activeGlovePart(arm)
+                            local srcGlove = _gloveSkinSourceForSide(gsr, side)
+                            if gm and srcGlove then _applySkinSourceToPart(gm, srcGlove) end
                         end
                     end
                 end
@@ -6301,120 +6364,14 @@ _frameN = 0
 _lastFrameT = tick()
 _emaDt = 1/60
 
--- ==========================================================================
--- WEAPONS VISUAL (Highlight-based chams on LocalPlayer's equipped weapon only)
--- ==========================================================================
-local _WV = { highlights = {}, parts = {}, host = nil }
-
-local function _weaponsVisual_isIgnoredPart(part)
-    local n = tostring(part and part.Name or ""):lower()
-    if n == "" then return true end
-    return n:find("arm", 1, true)
-        or n:find("glove", 1, true)
-        or n:find("sleeve", 1, true)
-        or n:find("hand", 1, true)
-        or n:find("hitbox", 1, true)
-        or n:find("root", 1, true)
-        or n:find("bound", 1, true)
-end
-
-local function _weaponsVisual_addParts(root, out)
-    if not root then return end
-    if root:IsA("BasePart") then
-        if not _weaponsVisual_isIgnoredPart(root) then table.insert(out, root) end
-        return
-    end
-    for _, d in ipairs(root:GetDescendants()) do
-        if d:IsA("BasePart") and not _weaponsVisual_isIgnoredPart(d) then
-            table.insert(out, d)
-        end
-    end
-end
-
-local function _weaponsVisual_partsFromHost(host)
-    local parts = {}
-    if not host then return parts end
-
-    -- Normal guns keep visible weapon meshes under a Weapon container. Prefer it
-    -- so arms/gloves/sleeves never receive the glow, then include common weapon
-    -- attachment containers because some guns split magazines/scopes/barrels out.
-    local weapon = host:FindFirstChild("Weapon")
-    if weapon then
-        _weaponsVisual_addParts(weapon, parts)
-        for _, cname in ipairs({"Attachments", "Attachment", "Magazine", "Mag", "Ammo", "Sight", "Scope", "Barrel", "Handle"}) do
-            local extra = host:FindFirstChild(cname)
-            if extra and extra ~= weapon then _weaponsVisual_addParts(extra, parts) end
-        end
-        _weaponsVisual_addParts(host, parts)
-        if #parts > 0 then return parts end
-    end
-
-    -- Custom knife viewmodels can attach blade/handle parts directly to arms.
-    -- Fallback scans the host but still filters body/glove/sleeve pieces.
-    _weaponsVisual_addParts(host, parts)
-    return parts
-end
-
-local function _weaponsVisual_currentHost()
-    -- Prefer the active viewmodel in Camera (matches what the player sees).
-    for _, ch in ipairs(Camera:GetChildren()) do
-        if ch:IsA("Model") and (ch:FindFirstChild("Right Arm") or ch:FindFirstChildWhichIsA("BasePart", true)) then
-            return ch
-        end
-    end
-    local char = LocalPlayer and LocalPlayer.Character
-    local tool = char and char:FindFirstChildOfClass("Tool")
-    return tool
-end
-
 local function _weaponsVisual_clear()
-    if _WV.hl then pcall(function() _WV.hl:Destroy() end) end -- old single-highlight cleanup
-    for hl in pairs(_WV.highlights or {}) do pcall(function() hl:Destroy() end) end
-    _WV.highlights = {}; _WV.parts = {}; _WV.host = nil; _WV.hl = nil
-end
-
-local function _updateWeaponsVisual()
-    local cfg = Config.WeaponsVisual
-    if not cfg or not cfg.Enabled then
-        if _WV.hl or _WV.host or next(_WV.parts or {}) then _weaponsVisual_clear() end
-        return
-    end
-    local host = _weaponsVisual_currentHost()
-    if not host or not host.Parent then _weaponsVisual_clear(); return end
-    if _WV.host ~= host then
-        _weaponsVisual_clear()
-        _WV.host = host
-    end
-    local color = cfg.Color or cfg.FillColor or cfg.OutlineColor or Color3.fromRGB(160, 80, 255)
-    local fillT = tonumber(cfg.FillTransparency) or 0.18
-    local outlineT = tonumber(cfg.OutlineTransparency) or 0
-    local live = {}
-    for _, part in ipairs(_weaponsVisual_partsFromHost(host)) do
-        if part and part.Parent and part.Transparency < 1 then
-            live[part] = true
-            local hl = _WV.parts[part]
-            if not (hl and hl.Parent) then
-                hl = Instance.new("Highlight")
-                hl.Name = "EclipseWeaponGlow"
-                hl.Adornee = part
-                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                hl.Parent = CoreGui
-                _WV.parts[part] = hl
-                _WV.highlights[hl] = true
+    pcall(function()
+        for _, root in ipairs({CoreGui, Camera}) do
+            for _, d in ipairs(root:GetDescendants()) do
+                if d:IsA("Highlight") and d.Name == "EclipseWeaponGlow" then d:Destroy() end
             end
-            hl.FillColor = color
-            hl.OutlineColor = color
-            hl.FillTransparency = fillT
-            hl.OutlineTransparency = outlineT
         end
-    end
-    for part, hl in pairs(_WV.parts) do
-        if not live[part] then
-            pcall(function() hl:Destroy() end)
-            _WV.highlights[hl] = nil
-            _WV.parts[part] = nil
-        end
-    end
+    end)
 end
 
 -- ==========================================================================
@@ -6467,8 +6424,6 @@ connectSignal(RunService.RenderStepped:Connect(function()
             if WeatherPart then WeatherPart.CFrame = Camera.CFrame * CFrame.new(0,30,0) end
         end)
     end
-    safeUpdate("WeaponsVisual", _updateWeaponsVisual)
-    
 end))
 
 -- Periodic light cleanup: releases dead references from ESP / warn / spray
@@ -6708,18 +6663,7 @@ ChGB:AddSlider("Sniper_CH_Gap",   { Text="GAP",      Default=4,  Min=0,  Max=30,
 ChGB:AddSlider("Sniper_CH_Thick", { Text="THICKNESS",Default=1,  Min=1,  Max=5,  Rounding=0, Callback=function(v) Config.Crosshair.Thickness=v end })
 ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=function(v) Config.Crosshair.Dot=v end })
 
--- WEAPONS VISUAL — glow/chams on the LocalPlayer's equipped weapon model.
-local WVGB = Tabs.Visuals:AddRightGroupbox("WEAPONS VISUAL", "wand-2")
-WVGB:AddToggle("WV_Toggle", { Text="ENABLE WEAPON GLOW", Default=false,
-    Callback=function(v) Config.WeaponsVisual.Enabled=v; if not v then pcall(_weaponsVisual_clear) end end })
-    :AddColorPicker("WV_Color", { Default=Config.WeaponsVisual.Color, Title="Weapon glow color",
-        Callback=function(c) Config.WeaponsVisual.Color=c; Config.WeaponsVisual.FillColor=c; Config.WeaponsVisual.OutlineColor=c end })
-
-
-
-
-
-
+pcall(_weaponsVisual_clear)
 
 local RcsGB = Tabs.Aim:AddLeftGroupbox("RECOIL CONTROL", "target")
 RcsGB:AddToggle("RCS_Toggle", { Text="RCS", Default=false, Callback=function(v) Config.RCS.Enabled=v end })
