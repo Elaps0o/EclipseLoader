@@ -4800,9 +4800,13 @@ function _restoreHUDName(rec, nameLbl)
     pcall(function()
         if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
         if rec then rec.currentOverlayText = nil end
-        if rec and rec.nameText ~= nil then nameLbl.Text = rec.nameText end
+        -- Do NOT write nameLbl.Text. The game HUD owns that string and
+        -- rewrites it every frame with the real weapon name. Writing our
+        -- cached value would stamp stale text like "Primary"/"Secondary"
+        -- or "" (invisible) and the game wouldn't refresh it back.
         nameLbl.TextTransparency = (rec and rec.nameTextTransparency ~= nil) and rec.nameTextTransparency or 0
         nameLbl.TextStrokeTransparency = (rec and rec.nameTextStrokeTransparency ~= nil) and rec.nameTextStrokeTransparency or 1
+        nameLbl.Visible = true
     end)
 end
 
@@ -4821,8 +4825,10 @@ function _applyHUDNameOverlay(rec, nameLbl, text)
         rec.nameOverlay.TextStrokeTransparency = 1
         rec.nameOverlay.Visible = true
         rec.nameOverlay.ZIndex = math.max((nameLbl.ZIndex or 1) + 5, 10)
-        -- Hide the real game label instead of writing into it. Direct Text
-        -- mutation makes the game/HUD fight us and can bug the whole inventory.
+        -- Hide the real game label via transparency only. Never mutate
+        -- .Text: the game re-emits its own weapon name each frame, so
+        -- writing to it causes flicker and permanent invisible / "Primary"
+        -- bugs when we later restore.
         nameLbl.TextTransparency = 1
         nameLbl.TextStrokeTransparency = 1
     end)
