@@ -2500,226 +2500,172 @@ function syncC4Timer(bomb)
     end
 end
 
+-- =====================================================================
+-- C4 PANEL (pill style — matches Spectator List / Keybind List / Terms modal)
+--   * Black bg (Transparency 0.4)  * White UIStroke (Transparency 0.6, 1px)
+--   * 4px corner  * Font.Code 13px  * Auto-fits text via AutomaticSize.X
+--   * Header dot (accent) + RichText body + animated trailing "…"
+-- Compatible with the existing C4Show(status, timeText, sub, color) callers.
+-- =====================================================================
 local C4UI = {}
-function c4Scheme(name, fallback)
-    local ok, v = pcall(function() return Library.Scheme and Library.Scheme[name] end)
-    if ok and typeof(v) == "Color3" then return v end
-    return fallback
-end
 function ensureC4UI()
     if C4UI.frame and C4UI.frame.Parent then return end
-    local parent = (Library and Library.ScreenGui) or CoreGui
-    if not (Library and Library.ScreenGui) then
+    local parent = (Library and Library.ScreenGui) or nil
+    if not parent then
         local g = Instance.new("ScreenGui")
         g.Name = "EclipseC4Timer"; g.ResetOnSpawn = false
         g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
         pcall(function() g.Parent = (gethui and gethui()) or CoreGui end)
         parent = g
     end
-    local MAIN_ = c4Scheme("MainColor",       Color3.fromRGB(20,20,20))
-    local OUT_  = c4Scheme("OutlineColor",    Color3.fromRGB(40,40,40))
-    local ACC_  = c4Scheme("AccentColor",     Color3.fromRGB(255,90,60))
-    local FG_   = c4Scheme("FontColor",       Color3.fromRGB(255,255,255))
 
-    -- Premium redesign: square panel with a segmented circular ring hugging
-    -- the seconds text at the centre. No linear bar, no "PLANTED" label.
     local f = Instance.new("Frame")
     f.Name = "C4Frame"
-    f.Size = UDim2.fromOffset(180, 180)
     f.AnchorPoint = Vector2.new(0, 0.5)
-    f.Position = UDim2.new(0, -210, 0.5, -90) -- off-screen for slide-in
-    f.BackgroundColor3 = MAIN_
-    f.BackgroundTransparency = 0.15
+    f.Position = UDim2.new(0, 14, 0.5, 0)
+    f.BackgroundColor3 = Color3.new(0, 0, 0)
+    f.BackgroundTransparency = 0.4
     f.BorderSizePixel = 0
-    f.Visible = false
-    f.Active = true
-    f.ZIndex = 60
+    f.Size = UDim2.fromOffset(10, 30)                     -- min size; auto-grows to text
+    f.AutomaticSize = Enum.AutomaticSize.X
+    f.Visible = false; f.Active = true; f.ZIndex = 60
     f.Parent = parent
     local stroke = Instance.new("UIStroke", f)
-    stroke.Color = OUT_; stroke.Thickness = 1; stroke.Transparency = 0.25
-    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 14)
-    -- Acrylic gradient background.
-    local grad = Instance.new("UIGradient", f)
-    grad.Rotation = 90
-    grad.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(42,42,48)),
-        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(24,24,28)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(14,14,18)),
-    }
-    grad.Transparency = NumberSequence.new{
-        NumberSequenceKeypoint.new(0, 0.10),
-        NumberSequenceKeypoint.new(1, 0.28),
-    }
+    stroke.Color = Color3.new(1, 1, 1); stroke.Thickness = 1; stroke.Transparency = 0.6
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 4)
 
-    -- Title/header intentionally removed: the ring itself is the identifier,
-    -- keeping the panel clean and giving the number more room to breathe.
-    local title = Instance.new("TextLabel", f)
-    title.BackgroundTransparency = 1
-    title.Size = UDim2.new(1, 0, 0, 1)
-    title.Text = ""
-    title.Visible = false
+    local pad = Instance.new("UIPadding", f)
+    pad.PaddingLeft = UDim.new(0, 10); pad.PaddingRight = UDim.new(0, 10)
+    pad.PaddingTop  = UDim.new(0, 4);  pad.PaddingBottom = UDim.new(0, 4)
+    local lay = Instance.new("UIListLayout", f)
+    lay.FillDirection = Enum.FillDirection.Horizontal
+    lay.SortOrder = Enum.SortOrder.LayoutOrder
+    lay.VerticalAlignment = Enum.VerticalAlignment.Center
+    lay.Padding = UDim.new(0, 6)
 
-    -- Circular ring container (perfectly centred, larger radius).
-    local ring = Instance.new("Frame", f)
-    ring.BackgroundTransparency = 1
-    ring.AnchorPoint = Vector2.new(0.5, 0.5)
-    ring.Position = UDim2.fromScale(0.5, 0.5)
-    ring.Size = UDim2.fromOffset(140, 140)
-    ring.ZIndex = 61
+    local dot = Instance.new("Frame", f)
+    dot.Name = "Dot"; dot.LayoutOrder = 1
+    dot.Size = UDim2.fromOffset(8, 8)
+    dot.BackgroundColor3 = Color3.fromRGB(255, 90, 60)
+    dot.BorderSizePixel = 0; dot.ZIndex = 61
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
-    -- Build one tick mark per whole second of the fuse. Ticks live on the
-    -- ring's circumference and are recoloured/faded to reflect progress.
-    local ticks = {}
-    local totalTicks = C4_FALLBACK_DURATION -- rebuilt on duration change
-    local radius = 62
-    local function buildTicks(count)
-        for _, t in ipairs(ticks) do t:Destroy() end
-        table.clear(ticks)
-        for i = 1, count do
-            local seg = Instance.new("Frame", ring)
-            seg.BackgroundColor3 = ACC_
-            seg.BorderSizePixel = 0
-            seg.Size = UDim2.fromOffset(3, 12)
-            seg.AnchorPoint = Vector2.new(0.5, 0.5)
-            local angle = (i - 1) / count * math.pi * 2 - math.pi / 2
-            seg.Position = UDim2.new(0.5, math.cos(angle) * radius, 0.5, math.sin(angle) * radius)
-            seg.Rotation = math.deg(angle) + 90
-            seg.ZIndex = 62
-            Instance.new("UICorner", seg).CornerRadius = UDim.new(1, 0)
-            ticks[i] = seg
-        end
+    local text = Instance.new("TextLabel", f)
+    text.Name = "Body"; text.LayoutOrder = 2
+    text.BackgroundTransparency = 1
+    text.AutomaticSize = Enum.AutomaticSize.X
+    text.Size = UDim2.fromOffset(0, 22)
+    text.Font = Enum.Font.Code; text.TextSize = 13
+    text.TextColor3 = Color3.new(1, 1, 1)
+    text.TextXAlignment = Enum.TextXAlignment.Left
+    text.RichText = true; text.Text = ""
+    text.ZIndex = 61
+
+    local dots = Instance.new("TextLabel", f)
+    dots.Name = "Dots"; dots.LayoutOrder = 3
+    dots.BackgroundTransparency = 1
+    dots.AutomaticSize = Enum.AutomaticSize.X
+    dots.Size = UDim2.fromOffset(0, 22)
+    dots.Font = Enum.Font.Code; dots.TextSize = 13
+    dots.TextColor3 = Color3.fromRGB(200, 200, 205)
+    dots.TextXAlignment = Enum.TextXAlignment.Left
+    dots.RichText = false; dots.Text = ""
+    dots.ZIndex = 61; dots.Visible = false
+
+    -- Drag
+    do
+        local dragging, dStart, sPos
+        f.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true; dStart = input.Position; sPos = f.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                end)
+            end
+        end)
+        UserInput.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local d = input.Position - dStart
+                f.Position = UDim2.new(sPos.X.Scale, sPos.X.Offset + d.X, sPos.Y.Scale, sPos.Y.Offset + d.Y)
+            end
+        end)
     end
-    buildTicks(totalTicks)
-
-    -- Seconds label at the centre of the ring.
-    local time = Instance.new("TextLabel", ring)
-    time.BackgroundTransparency = 1
-    time.AnchorPoint = Vector2.new(0.5, 0.5)
-    time.Position = UDim2.fromScale(0.5, 0.44)
-    time.Size = UDim2.fromOffset(110, 54)
-    time.Font = Enum.Font.Code; time.TextSize = 42
-    time.TextColor3 = ACC_
-    time.TextXAlignment = Enum.TextXAlignment.Center
-    time.Text = "40"; time.ZIndex = 63
-
-    -- Sub-line under the number (defuser info etc.).
-    local sub = Instance.new("TextLabel", ring)
-    sub.BackgroundTransparency = 1
-    sub.AnchorPoint = Vector2.new(0.5, 0.5)
-    sub.Position = UDim2.fromScale(0.5, 0.72)
-    sub.Size = UDim2.fromOffset(150, 16)
-    sub.Font = Enum.Font.Code; sub.TextSize = 11
-    sub.TextColor3 = Color3.fromRGB(180,180,185)
-    sub.TextXAlignment = Enum.TextXAlignment.Center
-    sub.Text = ""; sub.ZIndex = 63
-
-    -- Drag support
-    local dragging, dStart, sPos
-    f.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true; dStart = input.Position; sPos = f.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
-            end)
-        end
-    end)
-    UserInput.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - dStart
-            f.Position = UDim2.new(sPos.X.Scale, sPos.X.Offset + d.X, sPos.Y.Scale, sPos.Y.Offset + d.Y)
-        end
-    end)
 
     C4UI.frame  = f
-    C4UI.title  = title
-    C4UI.time   = time
-    C4UI.sub    = sub
-    C4UI.accent = nil
+    C4UI.dot    = dot
+    C4UI.text   = text
+    C4UI.time   = text  -- alias so legacy TextTransparency pulse still works
+    C4UI.dots   = dots
     C4UI.stroke = stroke
-    C4UI.bar    = nil -- legacy linear bar removed
-    C4UI.ring   = ring
-    C4UI.ticks  = ticks
-    C4UI.tickCount = totalTicks
-    C4UI.tickAccent = ACC_
-    C4UI.rebuildTicks = buildTicks
     C4UI.shown  = false
+    C4UI.pinned = false
 end
 
--- Update the segmented ring so tick marks up to `remain` seconds are lit in
--- the accent colour and the rest fade to a dim grey. Called from the C4
--- update loop each frame while the panel is visible.
-function updateC4Ring(remain, duration, accent)
-    if not C4UI.ticks or not C4UI.tickCount then return end
-    local total = math.max(1, math.ceil(duration or C4_FALLBACK_DURATION))
-    if total ~= C4UI.tickCount and C4UI.rebuildTicks then
-        C4UI.rebuildTicks(total); C4UI.tickCount = total
-    end
-    if accent then C4UI.tickAccent = accent end
-    local litColor = C4UI.tickAccent or Color3.fromRGB(255,90,60)
-    local dimColor = Color3.fromRGB(60,60,66)
-    local lit = math.clamp(math.ceil(remain), 0, C4UI.tickCount)
-    for i, seg in ipairs(C4UI.ticks) do
-        if i <= lit then
-            seg.BackgroundColor3 = litColor
-            seg.BackgroundTransparency = 0
-        else
-            seg.BackgroundColor3 = dimColor
-            seg.BackgroundTransparency = 0.35
-        end
-    end
-end
+-- Ring removed by pill-panel redesign; kept as no-op for old callers.
+function updateC4Ring() end
 
 function C4Hide()
-    if not C4UI.frame or not C4UI.shown then
-        if C4UI.frame then C4UI.frame.Visible = false end
-        C4UI.shown = false
-        return
-    end
-    C4UI.shown = false
+    if not C4UI.frame then return end
+    if not C4UI.shown then C4UI.frame.Visible = false; return end
+    C4UI.shown = false; C4UI.pinned = false
     local f = C4UI.frame
-    local tween = TweenService:Create(f, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-        { Position = UDim2.new(0, -220, f.Position.Y.Scale, f.Position.Y.Offset) })
-    tween:Play()
-    tween.Completed:Once(function() if not C4UI.shown then f.Visible = false end end)
+    local tw = TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+        { BackgroundTransparency = 1 })
+    tw:Play()
+    tw.Completed:Once(function() if not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 0.4 end end)
 end
+
+-- Legacy-compatible signature: (status, timeText, sub, color)
 function C4Show(status, timeText, sub, color)
     ensureC4UI()
     if not C4UI.frame then return end
-    -- Title element is hidden entirely — ring + colour tell the story.
-    if C4UI.title then C4UI.title.Text = "" end
 
-    C4UI.time.Text  = timeText
-    local subLine = ""
-    if status == "DEFUSING" or status == "BOMB DEFUSED"
-       or status == "BOMB DETONATED" or status == "BOMB LOST"
-       or status == "TIME UP" then
-        subLine = status
+    local rich
+    if status == "PLANTED" then
+        rich = string.format("<b>C4</b>  %s s", tostring(timeText or ""))
+    elseif status == "DEFUSING" then
+        local who = (sub and sub ~= "" and (" · " .. sub)) or ""
+        rich = string.format("<b>DEFUSING</b>  %s s%s", tostring(timeText or ""), who)
+    elseif status == "BOMB DEFUSED"   then rich = "<b>BOMB DEFUSED</b>"
+    elseif status == "BOMB DETONATED" then rich = "<b>BOMB DETONATED</b>"
+    elseif status == "BOMB LOST"      then rich = "<b>BOMB LOST</b>  signal lost"
+    elseif status == "TIME UP"        then rich = "<b>TIME UP</b>  fuse ended"
+    else
+        rich = string.format("<b>C4</b>  %s", tostring(timeText or ""))
     end
-    if sub and sub ~= "" then
-        local cleaned = tostring(sub):gsub("PLANTED", ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if cleaned ~= "" then
-            subLine = (subLine ~= "" and (subLine .. " · ") or "") .. cleaned
-        end
-    end
-    C4UI.sub.Text = subLine
+
+    C4UI.text.Text = rich
+    local animate = (status == "PLANTED" or status == "DEFUSING")
+    C4UI.dots.Visible = animate
+    C4UI.pinned = (status == "BOMB DEFUSED" or status == "BOMB DETONATED"
+                   or status == "BOMB LOST" or status == "TIME UP")
+
     if color then
-        C4UI.time.TextColor3       = color
-        if C4UI.accent then C4UI.accent.BackgroundColor3 = color end
-        C4UI.stroke.Color          = color
-        C4UI.tickAccent            = color
+        C4UI.dot.BackgroundColor3 = color
+        C4UI.stroke.Color = color; C4UI.stroke.Transparency = 0.45
+    else
+        C4UI.stroke.Color = Color3.new(1,1,1); C4UI.stroke.Transparency = 0.6
     end
+
     if not C4UI.shown then
         C4UI.shown = true
-        local f = C4UI.frame
-        f.Visible = true
-        -- Parchment unfurl: slide-in from left AND scale from 60% width → 100%.
-        f.Position = UDim2.new(0, -170, f.Position.Y.Scale, f.Position.Y.Offset)
-        local finalSz = UDim2.fromOffset(140, 140)
-        f.Size = UDim2.fromOffset(math.floor(140 * 0.6), 140)
-        TweenService:Create(f, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-            { Position = UDim2.new(0, 14, f.Position.Y.Scale, f.Position.Y.Offset), Size = finalSz }):Play()
+        C4UI.frame.Visible = true
+        C4UI.frame.BackgroundTransparency = 1
+        TweenService:Create(C4UI.frame, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            { BackgroundTransparency = 0.4 }):Play()
     end
 end
+
+-- Trailing "…" animation loop.
+task.spawn(function()
+    while true do
+        task.wait(0.33)
+        if C4UI.dots and C4UI.dots.Visible then
+            local n = (#C4UI.dots.Text % 3) + 1
+            C4UI.dots.Text = string.rep(".", n)
+        end
+    end
+end)
 
 function findDefuser()
     for _, p in ipairs(Players:GetPlayers()) do
@@ -3890,18 +3836,20 @@ end
 -- weapon identity intact, so death/respawn/equip reloads keep following the game.
 local HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={}, viewer=nil, debugPrints=0 }
 
+-- Kept as a defensive no-op. In the previous build this created an external
+-- ScreenGui (`EclipseHUDOverlayRoot`) parented to gethui()/CoreGui, and every
+-- HUD overlay lived inside it. That broke game-internal HUD observers (they
+-- expected overlays as siblings of the native element). We now inject
+-- overlays IN-PLACE as siblings of the original — see `_cloneHUDOverlay` /
+-- `_ensureIconImage` / `_ensureIconFallbackImage`. Any stray external gui
+-- from a previous session is cleaned up here for backward compatibility.
 function _hudOverlayRoot()
-    if HUDSkin.overlayGui and HUDSkin.overlayGui.Parent then return HUDSkin.overlayGui end
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "EclipseHUDOverlayRoot"
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.DisplayOrder = 2147483600
-    pcall(function() gui.Parent = (gethui and gethui()) or CoreGui end)
-    HUDSkin.overlayGui = gui
-    table.insert(UnloadConnections, { Disconnect = function() pcall(function() gui:Destroy() end) end })
-    return gui
+    pcall(function()
+        local parent = (gethui and gethui()) or CoreGui
+        local stray = parent and parent:FindFirstChild("EclipseHUDOverlayRoot")
+        if stray then stray:Destroy() end
+    end)
+    return nil
 end
 
 local function _hudDbg(...)
@@ -4234,31 +4182,48 @@ local function _cleanHUDWeaponText(t)
     return t
 end
 
+-- =====================================================================
+-- SAFE IN-PLACE INJECTION (no external ScreenGui)
+--
+-- How it works: Eclipse overlays are parented DIRECTLY as siblings of the
+-- native HUD element they mirror (inside the game's own PlayerGui.MainGui
+-- hierarchy). This is the "old" injection style — but every element is
+-- tagged with the attribute `EclipseHUD = true`, name-prefixed with
+-- "EclipseHUD*", and set `Active/Selectable = false`. Result:
+--   * Game observers iterating children skip us via the attribute + name
+--   * We inherit the parent's coordinate space, so a simple AnchorPoint /
+--     Position / Size copy mirrors the original perfectly (no AbsolutePos
+--     math, no drift, no jitter on layout changes).
+--   * The original element is NEVER destroyed or reparented — we only
+--     toggle its Visible/TextTransparency, which we restore on cleanup.
+--   * Every write is pcall-wrapped so a locked/GC'd instance can't cascade.
+-- =====================================================================
 local function _syncHUDOverlayGeometry(original, overlay)
     if not (original and overlay) then return end
     pcall(function()
-        local pos = original.AbsolutePosition
-        local size = original.AbsoluteSize
-        overlay.AnchorPoint = Vector2.new(0, 0)
-        overlay.Position = UDim2.fromOffset(pos.X, pos.Y)
-        overlay.Size = UDim2.fromOffset(size.X, size.Y)
-        overlay.Rotation = original.Rotation
-        overlay.Visible = original.Visible
-        overlay.ZIndex = math.max((original.ZIndex or 1) + 100, 150)
+        overlay.AnchorPoint = original.AnchorPoint
+        overlay.Position    = original.Position
+        overlay.Size        = original.Size
+        overlay.Rotation    = original.Rotation
+        overlay.Visible     = original.Visible
+        overlay.ZIndex      = math.max((original.ZIndex or 1) + 1, 2)
     end)
 end
 
 local function _cloneHUDOverlay(original, overlayName)
-    if not original then return nil end
-    local root = _hudOverlayRoot(); if not root then return nil end
+    if not original or not original.Parent then return nil end
+    local parent = original.Parent
+    local existing = parent:FindFirstChild(overlayName)
+    if existing then return existing end
     local clone; local ok = pcall(function() clone = original:Clone() end)
     if not ok or not clone then return nil end
-    clone.Name = overlayName; clone.Parent = root; clone.Visible = true
+    clone.Name = overlayName
     clone.Active = false; clone.Selectable = false
     pcall(function()
-        clone:SetAttribute("EclipseExternalHUD", true)
-        clone.ZIndex = math.max((original.ZIndex or 1) + 100, 150)
+        clone:SetAttribute("EclipseHUD", true)
+        clone.ZIndex = math.max((original.ZIndex or 1) + 1, 2)
     end)
+    pcall(function() clone.Parent = parent end)
     return clone
 end
 
@@ -4343,20 +4308,19 @@ local function _showKnifeViewportIcon(rec, iconLbl, knifeName)
 end
 
 local function _ensureIconImage(rec, anchor)
-    if not (rec and anchor) then return nil end
-    local parent = _hudOverlayRoot(); if not parent then return nil end
+    if not (rec and anchor and anchor.Parent) then return nil end
+    local parent = anchor.Parent
     local img = rec.iconImage
-    if not (img and img.Parent) then
-        local old = parent:FindFirstChild("EclipseHUDIcon"); if old then pcall(function() old:Destroy() end) end
+    if not (img and img.Parent == parent) then
+        local old = parent:FindFirstChild("EclipseHUDIcon")
+        if old then pcall(function() old:Destroy() end) end
         img = Instance.new("ImageLabel")
         img.Name = "EclipseHUDIcon"; img.BackgroundTransparency = 1; img.BorderSizePixel = 0
         img.ScaleType = Enum.ScaleType.Fit; img.Active = false; img.Selectable = false
         img.ClipsDescendants = false
-        pcall(function() img:SetAttribute("EclipseExternalHUD", true) end)
-        img.Parent = parent
+        pcall(function() img:SetAttribute("EclipseHUD", true) end)
+        pcall(function() img.Parent = parent end)
         rec.iconImage = img
-    elseif img.Parent ~= parent then
-        img.Parent = parent
     end
     pcall(function()
         if anchor:IsA("GuiObject") then
@@ -4364,13 +4328,13 @@ local function _ensureIconImage(rec, anchor)
             img.Position    = anchor.Position
             img.Size        = anchor.Size
             img.Rotation    = anchor.Rotation
-            img.ZIndex      = math.max((anchor.ZIndex or 1) + 100, 150)
+            img.ZIndex      = math.max((anchor.ZIndex or 1) + 1, 2)
         else
             img.AnchorPoint = Vector2.new(0.5, 0.5)
             img.Position    = UDim2.fromScale(0.5, 0.5)
             img.Size        = UDim2.fromScale(1, 1)
             img.Rotation    = 0
-            img.ZIndex      = 150
+            img.ZIndex      = 2
         end
         img.ImageColor3 = Color3.fromRGB(255,255,255)
         img.ImageTransparency = 0
@@ -4385,30 +4349,29 @@ local function _syncHUDFallbackGeometry(source, fallback)
     if not (source and fallback) then return end
     pcall(function()
         fallback.AnchorPoint = source.AnchorPoint
-        fallback.Position = source.Position
-        fallback.Size = source.Size
-        fallback.Rotation = source.Rotation
-        fallback.ZIndex = math.max((source.ZIndex or 2) - 1, 1)
-        fallback.Visible = source.Visible
+        fallback.Position    = source.Position
+        fallback.Size        = source.Size
+        fallback.Rotation    = source.Rotation
+        fallback.ZIndex      = math.max((source.ZIndex or 2) - 1, 1)
+        fallback.Visible     = source.Visible
     end)
 end
 
 local function _ensureIconFallbackImage(rec, source)
-    if not (rec and source) then return nil end
-    local parent = _hudOverlayRoot(); if not parent then return nil end
+    if not (rec and source and source.Parent) then return nil end
+    local parent = source.Parent
     local img = rec.iconFallbackImage
-    if not (img and img.Parent) then
-        local old = parent:FindFirstChild("EclipseHUDIconThumbFallback"); if old then pcall(function() old:Destroy() end) end
+    if not (img and img.Parent == parent) then
+        local old = parent:FindFirstChild("EclipseHUDIconThumbFallback")
+        if old then pcall(function() old:Destroy() end) end
         img = Instance.new("ImageLabel")
         img.Name = "EclipseHUDIconThumbFallback"
         img.BackgroundTransparency = 1; img.BorderSizePixel = 0
         img.ScaleType = Enum.ScaleType.Fit; img.Active = false; img.Selectable = false
         img.ClipsDescendants = false
-        pcall(function() img:SetAttribute("EclipseExternalHUD", true) end)
-        img.Parent = parent
+        pcall(function() img:SetAttribute("EclipseHUD", true) end)
+        pcall(function() img.Parent = parent end)
         rec.iconFallbackImage = img
-    elseif img.Parent ~= parent then
-        img.Parent = parent
     end
     _syncHUDFallbackGeometry(source, img)
     pcall(function()
