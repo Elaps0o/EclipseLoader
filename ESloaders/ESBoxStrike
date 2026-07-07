@@ -906,7 +906,7 @@ local Config = {
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=false },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -6457,6 +6457,67 @@ end)() -- MOVEMENT / WORLD controls
 ;(function() -- MISC controls + spectator list (IIFE for register budget)
 local MiscGB = Tabs.Misc:AddLeftGroupbox("MISC")
 
+-- ==== EXPLORER #1 (buy-area bypass, embedded) ==========================
+-- Hooks the game's IsInBuyArea module so, while enabled, the game always
+-- believes the LocalPlayer is standing in a buy zone. The Money HUD
+-- controller reads through this same function, so buy UI stays available
+-- anywhere on the map. Gate is a plain Config flag; if the executor lacks
+-- hookfunction we still flip LocalPlayer:SetAttribute("BuyMenu", true) as
+-- a best-effort fallback.
+local _explorer1 = { hooked=false, original=nil, target=nil }
+task.spawn(function()
+    local ok, mod = pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        return require(rs.Database.Components.Common.IsInBuyArea)
+    end)
+    if not ok or type(mod) ~= "function" then return end
+    _explorer1.target = mod
+    if type(hookfunction) == "function" then
+        local wrapper = function(plr, ...)
+            if Config.Misc.Explorer1 and plr == LocalPlayer then return true end
+            return _explorer1.original(plr, ...)
+        end
+        local ok2, orig = pcall(hookfunction, mod, (type(newcclosure)=="function" and newcclosure(wrapper)) or wrapper)
+        if ok2 then _explorer1.original = orig; _explorer1.hooked = true end
+    end
+end)
+task.spawn(function()
+    while scriptRunning do
+        if Config.Misc.Explorer1 then
+            pcall(function() LocalPlayer:SetAttribute("BuyMenu", true) end)
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- ==== HUD Skin life-gate ===============================================
+-- When the local player dies, hide every skinchanger name/icon overlay so
+-- the raw game HUD is visible again (fixes overlays sticking with stale
+-- text while dead). When alive again, the existing apply loop replays.
+task.spawn(function()
+    local wasAlive = false
+    while scriptRunning do
+        local alive = IsAlive()
+        if wasAlive and not alive then
+            for slotFrame, rec in pairs(HUDSkin.slots) do
+                if slotFrame and slotFrame.Parent then
+                    local nameLbl, iconLbl, iconViewport = _slotParts(slotFrame)
+                    if nameLbl then pcall(_restoreHUDName, rec, nameLbl) end
+                    if iconLbl or iconViewport then pcall(_restoreOriginalHUDIcon, rec, iconLbl, iconViewport) end
+                end
+            end
+        elseif not wasAlive and alive and Config.Skins.SkinChangerEnabled then
+            for slotFrame in pairs(HUDSkin.slots) do
+                if slotFrame and slotFrame.Parent then pcall(_queueHUDSlotApply, slotFrame) end
+            end
+        end
+        wasAlive = alive
+        task.wait(0.25)
+    end
+end)
+
+
+
 -- (Custom Player Model removido a pedido do usuário)
 
 
@@ -6471,6 +6532,10 @@ Config.Misc.AutoDefuse = false
 Config.Misc.ForceScope = false
 MiscGB:AddToggle("NoCameraRecoil_Toggle", { Text="NO CAMERA RECOIL", Default=false, Callback=function(v)
     Config.Misc.NoCameraRecoil = v; pcall(_updateNoRecoil)
+end })
+MiscGB:AddToggle("Explorer1_Toggle", { Text="EXPLORER #1 (BUY ANYWHERE)", Default=false, Callback=function(v)
+    Config.Misc.Explorer1 = v
+    if not v then pcall(function() LocalPlayer:SetAttribute("BuyMenu", nil) end) end
 end })
 
 
