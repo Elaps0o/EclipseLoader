@@ -899,14 +899,14 @@ local Config = {
         ChamsGlowColor = Color3.fromRGB(255, 180, 180),
         ChamsGlow      = 0.35, -- 0 = solid, 1 = only outline glow
         Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
-        IdentifyMoney  = false, MoneyColor = Color3.fromRGB(120, 220, 120),
+        IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90), -- MoneyColor kept for back-compat but not user-editable; only shown during warmup
     },
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={} },
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=false },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -1839,7 +1839,21 @@ function _espGetPlayerAmmo(plr, weaponName)
     return math.max(0, cur), mx
 end
 
+-- Cheap cached warmup detector for ESP money gating.
+local _warmT, _warmVal = 0, false
+function _isWarmup()
+    local t = tick()
+    if t - _warmT < 0.5 then return _warmVal end
+    _warmT = t
+    local st
+    pcall(function() st = workspace:GetAttribute("GameState") end)
+    local s = tostring(st or ""):lower()
+    _warmVal = (s:find("warm") ~= nil) or (s:find("wait") ~= nil) or (s:find("prep") ~= nil) or (s:find("freeze") ~= nil) or (s:find("intermission") ~= nil)
+    return _warmVal
+end
+
 -- Draw the premium ESP tag ABOVE the enemy's head.
+
 -- Layout (top → bottom): gradient accent line, weapon name, white ammo bar.
 -- The whole tag scales via _espAnimScale() so it grows on ESP enable and
 -- collapses on disable. When WeaponName is enabled the tag is enlarged.
@@ -1891,13 +1905,15 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     local nameParts = {}
     if Config.ESP.Name then table.insert(nameParts, plr.Name) end
     if Config.ESP.Distance then table.insert(nameParts, math.floor(dist) .. "m") end
-    if Config.ESP.IdentifyMoney then
+    -- Money is rendered on its own Drawing (fixed green) only during warmup.
+    local moneyStr = nil
+    if Config.ESP.IdentifyMoney and _isWarmup and _isWarmup() then
         local m = tonumber(plr:GetAttribute("Money"))
         if m then
-            local s = tostring(m):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
-            table.insert(nameParts, "$" .. s)
+            moneyStr = "$" .. tostring(m):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
         end
     end
+
     -- Ammo bar at the BOTTOM of the tag, drawn white, draining with real ammo.
     local ammoY = y + height - 4
     local ammoPadL, ammoPadR = x + 6, x + width - 6
@@ -1926,8 +1942,25 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     data.TagText.Color = Color3.fromRGB(240,240,245)
     data.TagText.Transparency = trBase
     data.TagText.Visible = #lines > 0
+    -- Money text: fixed green, positioned just below the info text, warmup-only.
+    if moneyStr then
+        if not data.MoneyText then
+            data.MoneyText = Drawing.new("Text")
+            data.MoneyText.Font=2; data.MoneyText.Size=12; data.MoneyText.Outline=true
+            data.MoneyText.OutlineColor=Color3.new(0,0,0); data.MoneyText.Center=true
+        end
+        data.MoneyText.Text = moneyStr
+        data.MoneyText.Color = Color3.fromRGB(60,220,90)
+        data.MoneyText.Transparency = trBase
+        local lineH = (data.TagText.Size or 12) + 2
+        data.MoneyText.Position = Vector2.new(cx, topTextY + lineH * #lines)
+        data.MoneyText.Visible = true
+    elseif data.MoneyText then
+        data.MoneyText.Visible = false
+    end
     return height + 12
 end
+
 
 -- ---------------- Per-element ESP label positioning ---------------------
 -- Each element (Name/Distance/Weapon/Health) cycles through preset sides.
@@ -2186,6 +2219,8 @@ function updateESP()
                 if d.TagAmmoBg then d.TagAmmoBg:Remove() end
                 if d.TagAmmoFill then d.TagAmmoFill:Remove() end
                 if d.TagText then d.TagText:Remove() end
+                if d.MoneyText then d.MoneyText:Remove() end
+
             end)
             ESPObjects[p] = nil
         end
@@ -3160,11 +3195,13 @@ function updateAimbot()
         local hum = char:FindFirstChildOfClass("Humanoid")
         if not hum or hum.Health <= 0 then continue end
         local part
-        if isAWP then
+        if isAWP or isSniper then
+            -- All snipers: head lock for max precision.
             part = char:FindFirstChild("Head") or GetAimbotTargetPart(char)
         else
             part = GetAimbotTargetPart(char)
         end
+
         if not part then continue end
         if Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
         if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
@@ -3183,9 +3220,9 @@ function updateAimbot()
         end
         AimState.frameN = (AimState.frameN or 0) + 1
 
-        -- 2-frame ease-out ramp on acquisition (skip for AWP → hard snap).
+        -- 2-frame ease-out ramp on acquisition (skip for snipers → hard snap).
         local ramp
-        if isAWP then
+        if isAWP or isSniper then
             ramp = 1
         else
             local t = math.clamp(AimState.frameN / 2, 0, 1)
@@ -3197,10 +3234,8 @@ function updateAimbot()
         AimState.lastTick = now
 
         local k
-        if isAWP then
-            k = 240                       -- AWP: hard snap direto
-        elseif isSniper then
-            k = 55                        -- sniper: stick leve
+        if isAWP or isSniper then
+            k = 240                       -- Snipers: hard snap direto, grudância absurda
         else
             k = 3 + s * 20                -- snap bem mais leve; slider ainda controla
         end
@@ -3213,8 +3248,9 @@ function updateAimbot()
         local delta = tp - mp
         local mag = delta.Magnitude
         -- Sticky snap: quando bem próximo, gruda um pouquinho — leve, perceptível.
-        if mag < 5 and not isAWP then alpha = math.min(1, alpha * 1.5) end
-        if isAWP then alpha = 1 end
+        if mag < 5 and not (isAWP or isSniper) then alpha = math.min(1, alpha * 1.5) end
+        if isAWP or isSniper then alpha = 1 end
+
         local dx = delta.X * alpha
         local dy = delta.Y * alpha
         if mousemoverel then mousemoverel(dx, dy) end
@@ -4987,14 +5023,74 @@ function _queueHUDSlotApply(slotFrame)
     end)
 end
 
+-- === SPECTATOR GATE ============================================
+-- Quando o player local morre e passa a espectar OUTRO player, o jogo
+-- reaproveita o mesmo `PlayerGui.MainGui.Gameplay.Bottom.Inventory` para
+-- renderizar o loadout do espectado. Nossos overlays (nome/ícone) ficariam
+-- grudados no slot mostrando "Glock-18 | Aurora" e ícones sobrepostos na
+-- HUD dele. Detectamos isso via Camera.CameraSubject: se o Humanoid dono
+-- do subject não pertence ao LocalPlayer, escondemos todos os overlays
+-- (sem destruir) e não reaplicamos até voltarmos a controlar.
+function _isSpectatingOther()
+    local subj = Camera and Camera.CameraSubject
+    if not subj then return false end
+    local hum = subj:IsA("Humanoid") and subj or (subj:IsA("BasePart") and subj.Parent and subj.Parent:FindFirstChildOfClass("Humanoid"))
+    if not hum then return false end
+    local char = hum.Parent; if not char then return false end
+    local owner = Players:GetPlayerFromCharacter(char)
+    return owner ~= nil and owner ~= LocalPlayer
+end
+
+function _hideAllHUDOverlays()
+    for _, rec in pairs(HUDSkin.slots) do
+        pcall(function()
+            if rec.nameOverlay then rec.nameOverlay.Visible = false end
+            if rec.iconOverlay then rec.iconOverlay.Visible = false end
+            if rec.iconImage then rec.iconImage.Visible = false end
+            if rec.iconFallbackImage then rec.iconFallbackImage.Visible = false end
+            if rec.iconViewport then rec.iconViewport.Visible = false end
+            rec.iconAppliedKey = nil
+            rec.currentOverlayText = nil
+            if rec.nameLblRef and rec.nameLblRef.Parent then
+                rec.nameLblRef.TextTransparency = rec.nameTextTransparency or 0
+                rec.nameLblRef.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
+                rec.nameLblRef.Visible = true
+            end
+            if rec.iconLabelRef and rec.iconLabelRef.Parent then
+                rec.iconLabelRef.Visible = rec.iconLabelVisible ~= false
+                if rec.iconLabelImage ~= nil then rec.iconLabelRef.Image = rec.iconLabelImage end
+                rec.iconLabelRef.ImageTransparency = rec.iconImageTransparency or 0
+            end
+            if rec.iconViewportRef and rec.iconViewportRef.Parent then
+                rec.iconViewportRef.Visible = rec.iconViewportVisible ~= false
+            end
+        end)
+    end
+end
+
 function _applyOneSlot(slotFrame, forceKnife)
     if not slotFrame or not slotFrame.Parent or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+    if _isSpectatingOther() then return end
     local nameLbl, iconLbl, iconViewport, iconAnchor = _slotParts(slotFrame); if not nameLbl then return end
     local rec = _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
     local rawWeapon = _slotWeaponKey(slotFrame, nameLbl) or rec.baseName or tostring(slotFrame.Name)
     if forceKnife then rawWeapon = rawWeapon or _localKnifeByTeam() end
     local isMelee = _isHUDMeleeSlot(slotFrame, rawWeapon)
     local text, icon, baseName, hasSkin = _desiredHUDForSlot(slotFrame, rawWeapon); if not text then return end
+
+    -- Se a arma no slot mudou desde a última aplicação, limpa overlay antigo
+    -- ANTES de escrever o novo (evita "Glock-18|Aurora" ficar por cima de
+    -- outra arma, ou dois ícones empilhados quando o loadout troca).
+    if rec.lastAppliedWeapon and rec.lastAppliedWeapon ~= baseName then
+        pcall(function()
+            if rec.nameOverlay then rec.nameOverlay.Visible = false end
+            if rec.iconImage then rec.iconImage.Visible = false end
+            if rec.iconFallbackImage then rec.iconFallbackImage.Visible = false end
+        end)
+        rec.iconAppliedKey = nil
+        rec.currentOverlayText = nil
+    end
+    rec.lastAppliedWeapon = baseName
     rec.baseName = baseName or rawWeapon or rec.baseName
 
     if rec.iconOverlay then pcall(function() rec.iconOverlay.Visible = false end) end
@@ -5163,7 +5259,13 @@ function _hudInventorySlots(inv)
 end
 
 _applyHUDKnife = function(_force)
-    if not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+    if not Config.Skins.SkinChangerEnabled then return end
+    -- Espectando OUTRO player: nunca reaplica; força hide dos overlays para
+    -- não vazar nome/ícone no HUD do espectado.
+    if not IsAlive() or _isSpectatingOther() then
+        pcall(_hideAllHUDOverlays)
+        return
+    end
     local inv = _hudInventory(); if not inv then return end
     _hookHUDInventory(inv)
     for _, slot in ipairs(_hudInventorySlots(inv)) do
@@ -5243,8 +5345,14 @@ end
 
 task.spawn(function()
     while scriptRunning do
-        if Config.Skins.SkinChangerEnabled and IsAlive() then pcall(_applyHUDKnife, false) end
-        task.wait(1.2)
+        if Config.Skins.SkinChangerEnabled then
+            if IsAlive() and not _isSpectatingOther() then
+                pcall(_applyHUDKnife, false)
+            else
+                pcall(_hideAllHUDOverlays)
+            end
+        end
+        task.wait(0.5)
     end
 end)
 
@@ -5253,6 +5361,17 @@ pcall(function()
     LocalPlayer.CharacterAdded:Connect(function()
         for _, delayT in ipairs({0.35, 0.85, 1.5}) do task.delay(delayT, function() pcall(_applyHUDKnife, true) end) end
     end)
+    -- Spectator gate: quando o CameraSubject muda (morre / troca de alvo /
+    -- respawn), esconde ou reaplica na hora.
+    if Camera then
+        Camera:GetPropertyChangedSignal("CameraSubject"):Connect(function()
+            if _isSpectatingOther() or not IsAlive() then
+                pcall(_hideAllHUDOverlays)
+            else
+                task.delay(0.15, function() pcall(_applyHUDKnife, true) end)
+            end
+        end)
+    end
 end)
 
 -- ============================================================
@@ -5307,6 +5426,8 @@ function CleanupScript()
         pcall(function() if d.TagAmmoBg then d.TagAmmoBg:Remove() end end)
         pcall(function() if d.TagAmmoFill then d.TagAmmoFill:Remove() end end)
         pcall(function() if d.TagText then d.TagText:Remove() end end)
+        pcall(function() if d.MoneyText then d.MoneyText:Remove() end end)
+
     end
     table.clear(ESPObjects)
     -- Destroy every per-enemy Chams Highlight (was leaking on unload/rejoin).
@@ -5330,7 +5451,7 @@ function CleanupScript()
             end
         end
     end)
-    pcall(function() TargetLine:Remove() end); pcall(function() FOVCircle:Remove() end)
+    pcall(function() TargetLine:Remove() end); pcall(function() FOVCircle.Visible=false; FOVCircle:Remove() end); pcall(function() FOVCircleInner.Visible=false; FOVCircleInner:Remove() end)
     -- Sniper crosshair drawings
     pcall(function() for _, o in pairs(CH) do pcall(function() o.Visible=false; o:Remove() end) end end)
     -- Grenade Warning drawings + line pool
@@ -5414,7 +5535,12 @@ connectSignal(RunService.RenderStepped:Connect(function()
     local now = tick()
     local dt = now - _lastFrameT; _lastFrameT = now
     _emaDt = _emaDt * 0.9 + dt * 0.1
-    local heavy = (_emaDt <= 1/45) or (_frameN % 2 == 0) -- lazy every-2nd-frame when laggy
+    -- Adaptive RenderStepped throttle: sob lag (FPS<45), passes visuais
+    -- pesados caem para ~30Hz. Input-critical (Aim/Trigger/RCS/ESP) 60Hz.
+    local laggy = _emaDt > (1/45)
+    local heavy = (not laggy) or (_frameN % 2 == 0)
+    local severeLag = _emaDt > (1/25)
+    local runLowPri = (not severeLag) or (_frameN % 3 == 0)
 
     -- Input-critical passes: every frame.
     safeUpdate("Aimbot", updateAimbot)
@@ -5424,14 +5550,9 @@ connectSignal(RunService.RenderStepped:Connect(function()
     safeUpdate("SniperCrosshair", updateSniperCrosshair)
     safeUpdate("C4Timer", updateC4Timer)
     safeUpdate("ForceScope", _updateForceScope)
-    -- Grenade prediction/warning: every frame, no delay, no spam (single connection).
     safeUpdate("GrenadePrediction", updateGrenadePrediction)
 
-    -- ESP redraws must be real-time (input-adjacent): running it on the
-    -- "heavy" every-other-frame path caused frozen ghost boxes when TeamCheck
-    -- was toggled between the skipped frames. Keep it on every frame.
     safeUpdate("ESP", updateESP)
-    -- Other world passes stay paced under load.
     if heavy then
         safeUpdate("Chams", updateChams)
         safeUpdate("WorldESP", updateWorldESP)
@@ -5439,18 +5560,20 @@ connectSignal(RunService.RenderStepped:Connect(function()
         safeUpdate("AntiSmoke", updateAntiSmoke)
     end
 
-    safeUpdate("SkinSystem", function()
-        if SkinSystem.scriptRunning and SkinSystem.vm and SkinSystem.vm.PrimaryPart then
-            local k = knives[Config.Skins.SelectedKnife] or knives["Butterfly Knife"]
-            SkinSystem.vm.PrimaryPart.CFrame = Camera.CFrame * k.Offset
-            if not SkinSystem.inspecting and not SkinSystem.swinging then
-            if SkinSystem.idleAnim and not SkinSystem.idleAnim.IsPlaying then SkinSystem.idleAnim:Play() end
+    if runLowPri then
+        safeUpdate("SkinSystem", function()
+            if SkinSystem.scriptRunning and SkinSystem.vm and SkinSystem.vm.PrimaryPart then
+                local k = knives[Config.Skins.SelectedKnife] or knives["Butterfly Knife"]
+                SkinSystem.vm.PrimaryPart.CFrame = Camera.CFrame * k.Offset
+                if not SkinSystem.inspecting and not SkinSystem.swinging then
+                if SkinSystem.idleAnim and not SkinSystem.idleAnim.IsPlaying then SkinSystem.idleAnim:Play() end
+                end
             end
-        end
-    end)
-    safeUpdate("Weather", function()
-        if WeatherPart then WeatherPart.CFrame = Camera.CFrame * CFrame.new(0,30,0) end
-    end)
+        end)
+        safeUpdate("Weather", function()
+            if WeatherPart then WeatherPart.CFrame = Camera.CFrame * CFrame.new(0,30,0) end
+        end)
+    end
 end))
 
 -- Periodic light cleanup: releases dead references from ESP / warn / spray
@@ -5640,8 +5763,8 @@ EspGB:AddToggle("ESP_Weapon",    { Text="ESP WEAPON", Default=false, Callback=fu
     :AddColorPicker("ESP_WepNCol", { Default=Config.ESP.WeaponNameColor, Title="Weapon name color", Callback=function(c) Config.ESP.WeaponNameColor=c end })
 EspGB:AddToggle("ESP_Ammo",      { Text="ESP AMMO",   Default=false, Callback=function(v) Config.ESP.Ammo=v end })
     :AddColorPicker("ESP_AmmoCol", { Default=Config.ESP.AmmoColor, Title="Ammo bar color", Callback=function(c) Config.ESP.AmmoColor=c end })
-EspGB:AddToggle("ESP_Money",     { Text="IDENTIFY MONEY", Default=false, Callback=function(v) Config.ESP.IdentifyMoney=v end })
-    :AddColorPicker("ESP_MoneyCol", { Default=Config.ESP.MoneyColor, Title="Money color", Callback=function(c) Config.ESP.MoneyColor=c end })
+EspGB:AddToggle("ESP_Money",     { Text="IDENTIFY MONEY (WARMUP)", Default=false, Callback=function(v) Config.ESP.IdentifyMoney=v end })
+
 -- HEAD DOT + SKELETON removed by user request (were causing FPS drop).
 Config.ESP.HeadDot = false
 Config.ESP.Skeleton = false
@@ -6533,10 +6656,11 @@ Config.Misc.ForceScope = false
 MiscGB:AddToggle("NoCameraRecoil_Toggle", { Text="NO CAMERA RECOIL", Default=false, Callback=function(v)
     Config.Misc.NoCameraRecoil = v; pcall(_updateNoRecoil)
 end })
-MiscGB:AddToggle("Explorer1_Toggle", { Text="EXPLORER #1 (BUY ANYWHERE)", Default=false, Callback=function(v)
+MiscGB:AddToggle("Explorer1_Toggle", { Text="EXPLORER #1 (BUY ANYWHERE)", Default=true, Callback=function(v)
     Config.Misc.Explorer1 = v
     if not v then pcall(function() LocalPlayer:SetAttribute("BuyMenu", nil) end) end
 end })
+
 
 
 
@@ -7444,12 +7568,25 @@ end)() -- helpers + panels
                             key   = name,
                             label = tostring(opt.Text or name):gsub("_", " "),
                             state = function()
+                                -- Reflect the LINKED TOGGLE (feature on/off),
+                                -- not whether the key/MB1 is being held.
+                                local tname = name:gsub("_Key$", "_Toggle"):gsub("_Key$", "_Enabled")
+                                local candidates = {
+                                    name:gsub("_Key$", "_Toggle"),
+                                    name:gsub("_Key$", "_Enabled"),
+                                    name:gsub("_Key$", ""),
+                                }
+                                for _, tn in ipairs(candidates) do
+                                    local tog = Library.Toggles and Library.Toggles[tn]
+                                    if tog and tog.Value ~= nil then return tog.Value == true end
+                                end
                                 if opt.GetState then
                                     local ok, s = pcall(function() return opt:GetState() end)
                                     if ok then return s end
                                 end
                                 return true
                             end,
+
                         })
                     end
                 end
@@ -9035,57 +9172,8 @@ end)() -- UI CREATION
     end)
 end)() -- SCREEN STRETCH + LOGGING
 
+-- (SCREECH / STRETCH BYPASS block removed per user request)
 
--- ================================================================
--- SCREECH / STRETCH BYPASS
--- Anti-cheat kicks with "Custom FieldOfView's Are Not Allowed" because
--- the game listens to Camera:GetPropertyChangedSignal("FieldOfView") /
--- Camera.Changed. Signals fire at the C engine level, so a plain
--- __index hook is not enough — we also swap the signal calls so the
--- game's connections never fire while stretch is on.
--- Layers:
---   1. __index: any read of Camera.FieldOfView returns the ORIGINAL value.
---   2. __namecall: GetPropertyChangedSignal("FieldOfView") returns a
---      dummy BindableEvent.Event that never fires.
---   3. __namecall: block :Kick(...) calls whose message mentions FOV.
--- ================================================================
-;(function()
-    local hookmm  = rawget(getfenv(0), "hookmetamethod")
-    local newccl  = rawget(getfenv(0), "newcclosure") or function(f) return f end
-    local getns   = rawget(getfenv(0), "getnamecallmethod")
-    if type(hookmm) ~= "function" or type(getns) ~= "function" then return end
-
-    local dummySignal = Instance.new("BindableEvent").Event
-
-    local oldIndex
-    pcall(function()
-        oldIndex = hookmm(Camera, "__index", newccl(function(self, k)
-            if self == Camera and k == "FieldOfView" and Config.Stretch and Config.Stretch.Enabled then
-                return OriginalCameraFOV or 70
-            end
-            return oldIndex(self, k)
-        end))
-    end)
-
-    local oldNamecall
-    pcall(function()
-        oldNamecall = hookmm(game, "__namecall", newccl(function(self, ...)
-            local method = getns()
-            if method == "GetPropertyChangedSignal" then
-                local prop = (...)
-                if self == Camera and prop == "FieldOfView" and Config.Stretch and Config.Stretch.Enabled then
-                    return dummySignal
-                end
-            elseif method == "Kick" then
-                local msg = tostring((...) or "")
-                if msg:lower():find("fieldofview") or msg:lower():find("custom fov") or msg:find("267") then
-                    return nil
-                end
-            end
-            return oldNamecall(self, ...)
-        end))
-    end)
-end)()
 
 
 
