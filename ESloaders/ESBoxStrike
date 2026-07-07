@@ -4003,12 +4003,17 @@ local function _applySkinSourceToPart(target, source)
     end)
 end
 
--- Uniform mesh scale. The knife viewmodel attaches T/CT gloves separately, so
--- the glove must be shrunk as one whole piece; axis-only scaling makes knives
--- look abnormal because the glove grows in one direction while the hand/knife
--- offset stays original.
+-- Uniform visual scale. The knife viewmodel attaches T/CT gloves separately, so
+-- the glove must be shrunk from its OWN mesh only. We never resize a plain Part
+-- without a visual mesh, because that is what turned gloves into visible cubes.
 local function _uniformScale(inst, factor)
     if not inst or not factor or factor == 1 then return end
+    if inst:IsA("Model") then
+        local ok = pcall(function()
+            if inst.ScaleTo and inst.GetScale then inst:ScaleTo(inst:GetScale() * factor) end
+        end)
+        if ok then return end
+    end
     if not inst:IsA("BasePart") then return end
     local visualMeshes = {}
     for _, ch in ipairs(inst:GetChildren()) do
@@ -4080,22 +4085,117 @@ end
 
 local GLOVE_KNIFE_UNIFORM_SCALE = 0.90
 
+local function _firstBasePart(root)
+    if not root then return nil end
+    if root:IsA("BasePart") then return root end
+    return root:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function _relativeOffset(parentPart, childPart, fallback)
+    if parentPart and childPart and parentPart:IsA("BasePart") and childPart:IsA("BasePart") then
+        local ok, cf = pcall(function() return parentPart.CFrame:ToObjectSpace(childPart.CFrame) end)
+        if ok and cf then return cf end
+    end
+    return fallback or CFrame.new()
+end
+
+local function _prepAttachedTree(root)
+    if not root then return end
+    if root:IsA("BasePart") then
+        cleanPart(root)
+        root.Transparency = 0
+        pcall(function() root.LocalTransparencyModifier = 0 end)
+        pcall(function() root.Massless = true end)
+    end
+    pcall(function() root:SetAttribute("EclipseAttached", true) end)
+    for _, d in ipairs(root:GetDescendants()) do
+        pcall(function() d:SetAttribute("EclipseAttached", true) end)
+        if d:IsA("BasePart") then
+            cleanPart(d)
+            d.Transparency = 0
+            pcall(function() d.LocalTransparencyModifier = 0 end)
+            pcall(function() d.Massless = true end)
+        end
+    end
+end
+
+local function _activeGlovePart(arm)
+    if not arm then return nil end
+    local fallback = nil
+    local direct = arm:FindFirstChild("Glove")
+    if direct and direct:IsA("BasePart") then
+        if direct:GetAttribute("EclipseAttached") then return direct end
+        fallback = direct
+    end
+    for _, d in ipairs(arm:GetDescendants()) do
+        if d:IsA("BasePart") and d.Name == "Glove" then
+            if d:GetAttribute("EclipseAttached") then return d end
+            fallback = fallback or d
+        end
+    end
+    return fallback
+end
+
+local function _hideNativeGloveOnArm(arm)
+    if not arm then return end
+    for _, d in ipairs(arm:GetDescendants()) do
+        if d:IsA("BasePart") and d.Name == "Glove" and not d:GetAttribute("EclipseAttached") then
+            pcall(function() d.Transparency = 1 end)
+            pcall(function() d.LocalTransparencyModifier = 1 end)
+        end
+    end
+end
+
+local function _gloveSkinSourceForSide(skinRoot, side)
+    if not skinRoot then return nil end
+    local sideRoot = skinRoot:FindFirstChild(side)
+    local part = _sourceGlovePart(sideRoot)
+    if part then return part end
+    return _sourceGlovePart(skinRoot)
+end
+
+local function _attachGloveAsset(folder, arm, model, offset, ref)
+    if not folder or not SkinSystem.vm then return end
+    local target = SkinSystem.vm:FindFirstChild(arm)
+    if not (target and target:IsA("BasePart")) then return end
+    local srcSide = folder:WaitForChild(model, 5); if not srcSide then return end
+    local srcGlove = _sourceGlovePart(srcSide); if not (srcGlove and srcGlove:IsA("BasePart")) then return end
+
+    -- Replace only the glove visual. Cloning the whole source arm was the old
+    -- bug: some dumps expose that arm as a plain block, so skins vanished or the
+    -- hand became a cube. This clone keeps the original glove mesh/textures.
+    _hideNativeGloveOnArm(target)
+    local mesh = srcGlove:Clone()
+    mesh.Name = "Glove"
+    mesh.Parent = target
+    _prepAttachedTree(mesh)
+    _uniformScale(mesh, GLOVE_KNIFE_UNIFORM_SCALE)
+    SkinSystem.gloveScale = GLOVE_KNIFE_UNIFORM_SCALE
+
+    local srcBase = _firstBasePart(srcSide)
+    local c0 = (ref and ref.Offset) or _relativeOffset(srcBase, srcGlove, offset or CFrame.new(0, 0, -1.5))
+    -- Tiny outward compensation after the 10% scale: avoids blade/handle sinking
+    -- into the glove without changing knife model size or animation data.
+    c0 = c0 * CFrame.new(0, 0, -0.035)
+    local motor = Instance.new("Motor6D")
+    motor.Name = "EclipseGloveMotor"
+    motor.Part0 = target
+    motor.Part1 = mesh
+    motor.C0 = c0
+    motor.Parent = target
+end
+
 local function attachAsset(folder, arm, model, name, offset, ref)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
-    local mesh = src:Clone()
-    cleanPart(mesh); mesh.Name = name; mesh.Parent = target
-    pcall(function() mesh:SetAttribute("EclipseAttached", true) end)
-    -- Luva em knife: diminuir só 10% do tamanho original da própria luva.
-    -- Não usa fit por referência: em alguns dumps o tamanho da referência vem
-    -- errado e fazia a luva sumir/virar cubo.
-    if name == "Glove" and mesh:IsA("BasePart") and target:IsA("BasePart") then
-        local factor = GLOVE_KNIFE_UNIFORM_SCALE
-        _uniformScale(mesh, factor)
-        local prev = SkinSystem.gloveScale or 1.0
-        if factor and factor > 0 and factor < prev then SkinSystem.gloveScale = factor end
+    if name == "Glove" then
+        _attachGloveAsset(folder, arm, model, offset, ref)
+        return
     end
+    local mesh = src:Clone()
+    _prepAttachedTree(mesh); mesh.Name = name; mesh.Parent = target
+    pcall(function() mesh:SetAttribute("EclipseAttached", true) end)
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
@@ -4334,8 +4434,8 @@ function _applySelectedGloveSkin()
                 for _, side in {"Left Arm","Right Arm"} do
                     local arm = obj:FindFirstChild(side); local s = gsr:FindFirstChild(side)
                     if arm and s then
-                        local gm = arm:FindFirstChild("Glove")
-                        local srcGlove = _sourceGlovePart(s)
+                        local gm = _activeGlovePart(arm)
+                        local srcGlove = _gloveSkinSourceForSide(gsr, side)
                         if gm and srcGlove then
                             _applySkinSourceToPart(gm, srcGlove)
                         end
@@ -7170,10 +7270,9 @@ function CreateSkinDropdown(weapon, section)
                     for _, obj in ipairs(Camera:GetChildren()) do
                         for _, side in ipairs({"Left Arm","Right Arm"}) do
                             local arm = obj:FindFirstChild(side)
-                            local s   = src:FindFirstChild(side)
-                            if arm and s then
-                                local gm = arm:FindFirstChild("Glove")
-                                local srcGlove = _sourceGlovePart and _sourceGlovePart(s)
+                            if arm then
+                                local gm = _activeGlovePart and _activeGlovePart(arm)
+                                local srcGlove = _gloveSkinSourceForSide and _gloveSkinSourceForSide(src, side)
                                 if gm and srcGlove and _applySkinSourceToPart then
                                     _applySkinSourceToPart(gm, srcGlove)
                                 end
