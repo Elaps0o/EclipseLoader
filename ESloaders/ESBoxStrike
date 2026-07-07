@@ -1801,6 +1801,7 @@ function hideESP(data)
     if data.TagAmmoBg then data.TagAmmoBg.Visible=false end
     if data.TagAmmoFill then data.TagAmmoFill.Visible=false end
     if data.TagText then data.TagText.Visible=false end
+    if data.MoneyText then data.MoneyText.Visible=false end
 end
 
 function syncAllESP()
@@ -2015,6 +2016,7 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
         for _,l in pairs(data.TagGrad)   do l.Visible=false end
         data.TagAmmoBg.Visible=false; data.TagAmmoFill.Visible=false
         data.TagText.Visible=false
+        if data.MoneyText then data.MoneyText.Visible=false end
         return 0
     end
     local hasWeapon = Config.ESP.WeaponName and weaponName and weaponName ~= ""
@@ -2237,6 +2239,7 @@ function _espProcessPlayer(plr, myRoot, center)
         if data.TagAmmoBg then data.TagAmmoBg.Visible = false end
         if data.TagAmmoFill then data.TagAmmoFill.Visible = false end
         if data.TagText then data.TagText.Visible = false end
+        if data.MoneyText then data.MoneyText.Visible = false end
     end
 
     if Config.ESP.HealthBar then
@@ -5103,34 +5106,40 @@ function _restoreHUDName(rec, nameLbl)
     if not nameLbl then return end
     pcall(function()
         if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
-        if rec then rec.currentOverlayText = nil end
-        -- Do NOT write nameLbl.Text. The game HUD owns that string and
-        -- rewrites it every frame with the real weapon name. Writing our
-        -- cached value would stamp stale text like "Primary"/"Secondary"
-        -- or "" (invisible) and the game wouldn't refresh it back.
-        if rec and rec.eclNameApplied and rec.baseName and nameLbl.Text == rec.eclNameText then
-            nameLbl.Text = rec.baseName
+        if rec then
+            rec.currentOverlayText = nil
+            rec.eclNameApplied = false
+            rec.eclNameText = nil
         end
-        if rec then rec.eclNameApplied = false; rec.eclNameText = nil end
         _restoreHUDNameVisibility(rec, nameLbl)
     end)
 end
 
 function _applyHUDNameOverlay(rec, nameLbl, text)
     if not (rec and nameLbl and text and text ~= "") then return end
-    -- New safer path: write the native slot label directly while alive/local.
-    -- The old clone-overlay path hid the real label and could leave blank names
-    -- if Roblox rebuilt the HUD while dead/spectating. Direct text is visible,
-    -- easy to detect, and restored only if it is still our exact string.
+    -- Clone-overlay path: write the override into OUR sibling clone (which the
+    -- game HUD never touches) and hide the native label. Direct writes to the
+    -- native label were reverted every frame by the game script, leaving the
+    -- original text on screen. The clone survives all game rewrites because
+    -- it is a separate instance tagged EclipseHUD.
     pcall(function()
-        if rec.nameOverlay then rec.nameOverlay.Visible = false end
+        if not rec.nameOverlay or not rec.nameOverlay.Parent then
+            rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay")
+        end
+        local ov = rec.nameOverlay
+        if not ov then return end
+        _syncHUDOverlayGeometry(nameLbl, ov)
+        ov.Text = text
+        ov.TextTransparency = 0
+        ov.TextStrokeTransparency = 1
+        ov.Visible = true
+        ov.ZIndex = math.max((nameLbl.ZIndex or 1) + 5, 6)
         rec.currentOverlayText = text
         rec.eclNameApplied = true
         rec.eclNameText = text
-        nameLbl.Text = text
-        nameLbl.TextTransparency = 0
+        -- Hide the native label so only our clone shows the override.
+        nameLbl.TextTransparency = 1
         nameLbl.TextStrokeTransparency = 1
-        nameLbl.Visible = true
     end)
 end
 
@@ -5347,10 +5356,6 @@ function _recoverNativeHUDSlot(slotFrame, rec)
     if nameLbl then
         pcall(function()
             if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
-            if rec and rec.eclNameApplied and rec.eclNameText and nameLbl.Text == rec.eclNameText then
-                local base = _inferHUDSlotWeapon(slotFrame, nameLbl) or rec.baseName
-                if base then nameLbl.Text = base end
-            end
             _restoreHUDNameVisibility(rec, nameLbl)
         end)
     end
@@ -6892,27 +6897,69 @@ local MiscGB = Tabs.Misc:AddLeftGroupbox("MISC")
 -- hookfunction we still flip LocalPlayer:SetAttribute("BuyMenu", true) as
 -- a best-effort fallback.
 local _explorer1 = { hooked=false, original=nil, target=nil }
-task.spawn(function()
-    local ok, mod = pcall(function()
-        local rs = game:GetService("ReplicatedStorage")
-        return require(rs.Database.Components.Common.IsInBuyArea)
-    end)
-    if not ok or type(mod) ~= "function" then return end
-    _explorer1.target = mod
-    if type(hookfunction) == "function" then
-        local wrapper = function(plr, ...)
-            if Config.Misc.Explorer1 and plr == LocalPlayer then return true end
-            return _explorer1.original(plr, ...)
+
+-- Locate the IsInBuyArea module WITHOUT calling require() on it (require()
+-- from an executor thread triggers the game's "Cannot require a non-
+-- RobloxScript module from a RobloxScript" guard and prints red debug spam
+-- in the F9 console). Instead we sweep getgc() for the already-loaded
+-- closure that lives in ReplicatedStorage.Database.Components.Common
+-- .IsInBuyArea -- the game itself loaded it during startup, so it is
+-- always present by the time our script runs.
+local function _findIsInBuyAreaClosure()
+    if type(getgc) ~= "function" then return nil end
+    local ok, gc = pcall(getgc, true)
+    if not ok or type(gc) ~= "table" then return nil end
+    local getinfo = debug and (debug.getinfo or debug.info)
+    for _, v in ipairs(gc) do
+        if type(v) == "function" then
+            local ok2, info = pcall(getinfo, v, "s")
+            local src = ok2 and info and (info.source or info.short_src or info.what)
+            if type(src) == "string" and src:find("IsInBuyArea", 1, true) then
+                return v
+            end
         end
-        local ok2, orig = pcall(hookfunction, mod, (type(newcclosure)=="function" and newcclosure(wrapper)) or wrapper)
-        if ok2 then _explorer1.original = orig; _explorer1.hooked = true end
+    end
+    return nil
+end
+
+local function _tryHookExplorer1()
+    if _explorer1.hooked then return true end
+    if type(hookfunction) ~= "function" then return false end
+    local target = _findIsInBuyAreaClosure()
+    if type(target) ~= "function" then return false end
+    _explorer1.target = target
+    local wrapper
+    wrapper = function(plr, ...)
+        if Config.Misc and Config.Misc.Explorer1 and plr == LocalPlayer then
+            return true
+        end
+        return _explorer1.original(plr, ...)
+    end
+    local wrapped = (type(newcclosure) == "function" and newcclosure(wrapper)) or wrapper
+    local ok, orig = pcall(hookfunction, target, wrapped)
+    if ok and type(orig) == "function" then
+        _explorer1.original = orig
+        _explorer1.hooked   = true
+        return true
+    end
+    return false
+end
+
+task.spawn(function()
+    -- retry a few times in case the module hasn't been required by the
+    -- game yet, then keep watching so map/round reloads re-hook silently.
+    for _ = 1, 40 do
+        if _tryHookExplorer1() then break end
+        task.wait(0.5)
+    end
+    while scriptRunning do
+        task.wait(5)
+        if not _explorer1.hooked then pcall(_tryHookExplorer1) end
     end
 end)
--- (BuyMenu attribute-spam loop removed: it was firing IsInBuyArea from the
---  Money HUD controller in bad contexts and causing the "attempt to call a
---  nil value" spam. The hookfunction above is enough on executors that
---  support it; on those that don't, the feature is a no-op.)
+Config.Misc = Config.Misc or {}
 Config.Misc.Explorer1 = true
+
 
 -- ==== HUD Skin life-gate ===============================================
 -- When the local player dies, hide every skinchanger name/icon overlay so
@@ -6960,6 +7007,11 @@ end })
 -- EXPLORER #1 is now always-on (toggle removed per user request).
 MiscGB:AddToggle("IdentifyMoney_Toggle", { Text="IDENTIFY MONEY", Default=false, Callback=function(v)
     Config.ESP.IdentifyMoney = v
+    if not v then
+        for _, d in pairs(ESPObjects) do
+            pcall(function() if d.MoneyText then d.MoneyText.Visible = false end end)
+        end
+    end
 end }):AddKeyPicker("IdentifyMoney_Key", { Default="N", SyncToggleState=true, Mode="Toggle", Text="Identify Money" })
 
 
@@ -7341,6 +7393,23 @@ pcall(function()
         local ok, err = pcall(function() SaveManager:BuildConfigSection(Tabs.Configs) end)
         Tabs.Configs.AddRightGroupbox = origRight
         if not ok then warn("[Eclipse] BuildConfigSection failed: " .. tostring(err)) end
+        -- Remove the "Current autoload config: ..." label added by SaveManager.
+        pcall(function()
+            local function hideAutoloadLabels(inst)
+                for _, d in ipairs(inst:GetDescendants()) do
+                    if (d:IsA("TextLabel") or d:IsA("TextButton")) then
+                        local t = tostring(d.Text or ""):lower()
+                        if t:find("autoload", 1, true) then
+                            d.Visible = false
+                            d.Text = ""
+                        end
+                    end
+                end
+            end
+            local tabInst = Tabs.Configs.Container or Tabs.Configs.Base or Tabs.Configs.TabFrame
+            if tabInst then hideAutoloadLabels(tabInst) end
+            if Library and Library.ScreenGui then hideAutoloadLabels(Library.ScreenGui) end
+        end)
     end
     ThemeManager:ApplyToTab(Tabs.Configs)
 
