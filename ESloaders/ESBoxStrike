@@ -3792,7 +3792,6 @@ local function restoreOriginalKnife()
 end
 local function hideOriginalKnife(k)
     restoreOriginalKnife()
-    if not k then return end
     SkinSystem._hidden = {}
     SkinSystem._hiddenOwner = k
     local function hideInst(inst)
@@ -3802,8 +3801,29 @@ local function hideOriginalKnife(k)
             pcall(function() inst.Transparency = 1 end)
         end
     end
-    hideInst(k)
-    for _, p in ipairs(k:GetDescendants()) do hideInst(p) end
+    local function hideTree(root)
+        if not root then return end
+        hideInst(root)
+        for _, p in ipairs(root:GetDescendants()) do hideInst(p) end
+    end
+    hideTree(k)
+    -- Some maps/round states leave the native knife/arms/gloves as separate
+    -- camera children. Hide them together with the original knife and restore
+    -- their exact transparencies later, so the custom glove does not stack over
+    -- the original hand/knife or remain visible after cleanup.
+    pcall(function()
+        for _, obj in ipairs(Camera:GetChildren()) do
+            if obj ~= SkinSystem.vm then
+                local n = tostring(obj.Name):lower()
+                local looksOriginalKnifeOrGlove = (obj == k)
+                    or n:find("knife", 1, true)
+                    or n:find("glove", 1, true)
+                    or obj:FindFirstChild("Left Arm")
+                    or obj:FindFirstChild("Right Arm")
+                if looksOriginalKnifeOrGlove then hideTree(obj) end
+            end
+        end
+    end)
 end
 
 local function _cacheSkinTarget(target)
@@ -3881,12 +3901,13 @@ function _targetBelongsToWeapon(target, weapon)
 end
 
 function _restoreWeaponSkinRuntime(weapon)
+    local isGlove = GLOVES[weapon] or tostring(weapon) == "Sports Gloves"
     for target in pairs(SkinSystem._skinRestore or {}) do
         if _targetBelongsToWeapon(target, weapon) then _restoreSkinTarget(target) end
     end
     pcall(function()
         for _, obj in ipairs(Camera:GetChildren()) do
-            if obj.Name == weapon or GLOVES[weapon] or weapon == "Sports Gloves" then
+            if obj.Name == weapon or isGlove then
                 obj:SetAttribute("SkinApplied", nil)
                 for _, d in ipairs(obj:GetDescendants()) do
                     d:SetAttribute("SkinApplied", nil)
@@ -3895,10 +3916,34 @@ function _restoreWeaponSkinRuntime(weapon)
             end
         end
     end)
+    if isGlove then pcall(_clearGloveSkinRuntime) end
+end
+
+function _clearGloveSkinRuntime()
+    pcall(function()
+        for _, obj in ipairs(Camera:GetChildren()) do
+            for _, side in ipairs({"Left Arm", "Right Arm"}) do
+                local arm = obj:FindFirstChild(side)
+                local glove = arm and arm:FindFirstChild("Glove")
+                if glove and glove:IsA("BasePart") then
+                    if SkinSystem._skinRestore and SkinSystem._skinRestore[glove] then
+                        _restoreSkinTarget(glove)
+                    elseif glove:GetAttribute("EclipseSkinSource") ~= nil then
+                        for _, ch in ipairs(glove:GetChildren()) do
+                            if ch:IsA("SurfaceAppearance") then pcall(function() ch:Destroy() end) end
+                        end
+                        glove:SetAttribute("EclipseSkinSource", nil)
+                    end
+                    glove:SetAttribute("SkinApplied", nil)
+                end
+            end
+        end
+    end)
 end
 
 function _clearSkinChangerRuntime()
     pcall(_restoreAppliedSkins)
+    pcall(_clearGloveSkinRuntime)
     pcall(restoreOriginalKnife)
     -- Fallback glove/weapon cleanup: strip any SurfaceAppearance we injected
     -- (tagged with EclipseSkinSource) even if the weak _skinRestore entry
@@ -3954,14 +3999,76 @@ local function _uniformScale(inst, factor)
     end
 end
 
+local function _findArmPart(root, armName)
+    if not root then return nil end
+    local arm = root:FindFirstChild(armName, true)
+    return (arm and arm:IsA("BasePart")) and arm or nil
+end
+
+local function _gloveReferenceFrom(root, armName)
+    local arm = _findArmPart(root, armName)
+    if not arm then return nil end
+    local glove = arm:FindFirstChild("Glove")
+    if not (glove and glove:IsA("BasePart")) then
+        for _, d in ipairs(arm:GetDescendants()) do
+            if d.Name == "Glove" and d:IsA("BasePart") then glove = d; break end
+        end
+    end
+    if not (glove and glove:IsA("BasePart")) then return nil end
+    local offset
+    pcall(function() offset = arm.CFrame:ToObjectSpace(glove.CFrame) end)
+    return { Part = glove, Size = glove.Size, Offset = offset }
+end
+
+local function _collectGloveReferences(originalModel)
+    local refs = {}
+    for _, side in ipairs({"Left Arm", "Right Arm"}) do
+        refs[side] = _gloveReferenceFrom(originalModel, side)
+        if not refs[side] then
+            pcall(function()
+                for _, obj in ipairs(Camera:GetChildren()) do
+                    if obj ~= SkinSystem.vm then
+                        refs[side] = _gloveReferenceFrom(obj, side)
+                        if refs[side] then break end
+                    end
+                end
+            end)
+        end
+    end
+    return refs
+end
+
+local function _fitGloveToReference(mesh, ref, maxScale)
+    if not (mesh and mesh:IsA("BasePart") and ref and ref.Size) then return false end
+    local s, r = mesh.Size, ref.Size
+    if s.X <= 0 or s.Y <= 0 or s.Z <= 0 or r.X <= 0 or r.Y <= 0 or r.Z <= 0 then return false end
+    -- Uniform fit keeps the glove proportions intact while preventing the
+    -- skinned clone from becoming wider/deeper than the player's native glove.
+    local factor = math.min(r.X / s.X, r.Y / s.Y, r.Z / s.Z, maxScale or 1)
+    if factor > 0 and factor < 1 then _uniformScale(mesh, factor) end
+    return true
+end
+
 local function attachAsset(folder, arm, model, name, offset, scale)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
-    if scale then _uniformScale(mesh, scale) end
-    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
+    local finalOffset = offset
+    if type(scale) == "table" then
+        if scale.Reference then
+            if scale.Reference.Offset then finalOffset = scale.Reference.Offset end
+            if not _fitGloveToReference(mesh, scale.Reference, scale.MaxScale) and scale.FallbackScale then
+                _uniformScale(mesh, scale.FallbackScale)
+            end
+        elseif scale.FallbackScale then
+            _uniformScale(mesh, scale.FallbackScale)
+        end
+    elseif scale then
+        _uniformScale(mesh, scale)
+    end
+    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=finalOffset; motor.Parent=target
 end
 
 -- Sound lookup order:
@@ -4110,22 +4217,26 @@ local function spawnViewmodel(knife)
     SkinSystem.vm = camTpl:Clone()
     SkinSystem.vm.Name = Config.Skins.SelectedKnife; SkinSystem.vm.Parent = Camera
     disableCollisions(SkinSystem.vm); hideOriginalKnife(knife)
+    local gloveRefs = _collectGloveReferences(knife)
+    local function gloveFit(side)
+        return { Reference = gloveRefs and gloveRefs[side] or nil, MaxScale = 1, FallbackScale = 0.88 }
+    end
 
-    -- Gloves are shrunk (0.95x) and pulled slightly back on Z so they stop
-    -- swallowing the knife's blade/handle. Sleeves keep original scale — only
-    -- the hand mesh caused the clipping.
+    -- Fit custom glove to the player's native glove dimensions/offset. This
+    -- keeps the full hand covered but prevents the skinned clone from becoming
+    -- wider/deeper than the original glove and swallowing the knife.
     if me.Parent.Name == "Terrorists" then
         local g = weapons:WaitForChild("T Glove", 5)
-        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5),0.95)
-        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5),0.95)
+        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.55),gloveFit("Left Arm"))
+        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.55),gloveFit("Right Arm"))
     else
         local sleeves = assets:WaitForChild("Sleeves", 5)
         local sl = sleeves and sleeves:WaitForChild("IDF", 5)
         local g  = weapons:WaitForChild("CT Glove", 5)
         attachAsset(sl,"Left Arm","Left Arm","Sleeve",CFrame.new(0,0,0.5))
-        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5),0.95)
+        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.55),gloveFit("Left Arm"))
         attachAsset(sl,"Right Arm","Right Arm","Sleeve",CFrame.new(0,0,0.5))
-        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5),0.95)
+        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.55),gloveFit("Right Arm"))
     end
 
     local ac = SkinSystem.vm:FindFirstChildOfClass("AnimationController") or SkinSystem.vm:FindFirstChildOfClass("Animator")
@@ -6255,14 +6366,25 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
             -- Silently revert the custom-knife toggle when the parent goes off.
             pcall(function() if Toggles.Knife_Toggle then Toggles.Knife_Toggle:SetValue(false) end end)
         else
-            if IsAlive() then
+            -- If Custom Knife was toggled ON before Skin Changer, the viewmodel
+            -- may already be spawned with no skins cached. Force a clean respawn
+            -- so the viewmodel spawner loop rebuilds it, then re-apply skins on
+            -- a staggered schedule to cover the spawn latency.
+            if SkinSystem.scriptRunning and SkinSystem.spawned then
+                pcall(removeViewmodel)
+            end
+            local function _reapplyAll()
+                if not (Config.Skins.SkinChangerEnabled and IsAlive()) then return end
                 pcall(_applySelectedGloveSkin)
                 for _, obj in ipairs(Camera:GetChildren()) do
                     local skinName = Config.Skins.SelectedSkins[obj.Name]
                     if skinName then pcall(applyWeaponSkin, obj, skinName) end
                 end
                 pcall(_applyHUDKnife, true)
-                for _, delayT in ipairs({0.15, 0.45, 0.9}) do task.delay(delayT, function() if IsAlive() then pcall(_applyHUDKnife, true) end end) end
+            end
+            if IsAlive() then pcall(_reapplyAll) end
+            for _, delayT in ipairs({0.15, 0.45, 0.9, 1.5, 2.5}) do
+                task.delay(delayT, function() pcall(_reapplyAll) end)
             end
         end
         _syncKnifeLock()
