@@ -4147,7 +4147,7 @@ local function _prettySkinName(raw)
     return (raw:gsub("_", " "))
 end
 
-local function _slotParts(slotFrame)
+function _slotParts(slotFrame)
     local w = slotFrame and slotFrame:FindFirstChild("Weapon"); if not w then return nil end
     local nameLbl = w:FindFirstChild("WeaponName")
     if not (nameLbl and nameLbl:IsA("TextLabel")) then
@@ -4217,7 +4217,7 @@ end
 --     toggle its Visible/TextTransparency, which we restore on cleanup.
 --   * Every write is pcall-wrapped so a locked/GC'd instance can't cascade.
 -- =====================================================================
-local function _syncHUDOverlayGeometry(original, overlay)
+function _syncHUDOverlayGeometry(original, overlay)
     if not (original and overlay) then return end
     pcall(function()
         overlay.AnchorPoint = original.AnchorPoint
@@ -4229,7 +4229,7 @@ local function _syncHUDOverlayGeometry(original, overlay)
     end)
 end
 
-local function _cloneHUDOverlay(original, overlayName)
+function _cloneHUDOverlay(original, overlayName)
     if not original or not original.Parent then return nil end
     local parent = original.Parent
     local existing = parent:FindFirstChild(overlayName)
@@ -4329,7 +4329,7 @@ end
 -- Sweep the entire slot subtree for duplicate Eclipse overlays with the given
 -- name, destroying every match except `keep`. Prevents double-injection when
 -- the game re-parents / rebuilds slot elements between apply passes.
-local function _sweepDuplicateOverlays(slotFrame, overlayName, keep)
+function _sweepDuplicateOverlays(slotFrame, overlayName, keep)
     if not (slotFrame and slotFrame.Parent) then return end
     pcall(function()
         for _, d in ipairs(slotFrame:GetDescendants()) do
@@ -4340,7 +4340,7 @@ local function _sweepDuplicateOverlays(slotFrame, overlayName, keep)
     end)
 end
 
-local function _ensureIconImage(rec, anchor)
+function _ensureIconImage(rec, anchor)
 
     if not (rec and anchor and anchor.Parent) then return nil end
     local parent = anchor.Parent
@@ -4383,7 +4383,7 @@ local function _ensureIconImage(rec, anchor)
     return img
 end
 
-local function _syncHUDFallbackGeometry(source, fallback)
+function _syncHUDFallbackGeometry(source, fallback)
     if not (source and fallback) then return end
     pcall(function()
         fallback.AnchorPoint = source.AnchorPoint
@@ -4395,7 +4395,7 @@ local function _syncHUDFallbackGeometry(source, fallback)
     end)
 end
 
-local function _ensureIconFallbackImage(rec, source)
+function _ensureIconFallbackImage(rec, source)
     if not (rec and source and source.Parent) then return nil end
     local parent = source.Parent
     _sweepDuplicateOverlays(rec.slotFrame, "EclipseHUDIconThumbFallback", rec.iconFallbackImage)
@@ -4495,7 +4495,7 @@ local function _imageCandidateReady(img, candidate)
     return (loaded or _statusIsGood(status)) and not _statusIsBad(status), loaded, status
 end
 
-local function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed)
+function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed)
     if not (rec and img and img.Parent) then return false end
     local candidates = _iconCandidates(icon)
     if #candidates == 0 then return false end
@@ -4707,7 +4707,7 @@ local function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
     end
 end
 
-local function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
+function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
     local rec = HUDSkin.slots[slotFrame]
     if rec then
         if nameLbl and (not rec.nameOverlay or not rec.nameOverlay.Parent) then rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay") end
@@ -4750,7 +4750,7 @@ local function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnc
     return rec
 end
 
-local function _restoreHUDName(rec, nameLbl)
+function _restoreHUDName(rec, nameLbl)
     if not nameLbl then return end
     pcall(function()
         if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
@@ -4759,7 +4759,7 @@ local function _restoreHUDName(rec, nameLbl)
     end)
 end
 
-local function _applyHUDNameOverlay(rec, nameLbl, text)
+function _applyHUDNameOverlay(rec, nameLbl, text)
     if not (rec and nameLbl and text and text ~= "") then return end
     if not rec.nameOverlay or not rec.nameOverlay.Parent then
         rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay")
@@ -4796,7 +4796,7 @@ local function _isHUDMeleeSlot(slotFrame, weaponKey)
     return wk:find("knife", 1, true) ~= nil or wk:find("bayonet", 1, true) ~= nil or wk == "karambit"
 end
 
-local function _hudSkinForWeapon(weaponName, fallbackWeapon)
+function _hudSkinForWeapon(weaponName, fallbackWeapon)
     if type(weaponName) ~= "string" or weaponName == "" then return nil end
     -- Preserve other/renamed weapon skins: only show/apply configured skins when
     -- the current weapon name is an exact, known game skin folder.
@@ -4836,7 +4836,7 @@ local function _desiredHUDForSlot(slotFrame, rawWeapon)
     return text, nil, weaponName, prettySkin ~= nil
 end
 
-local function _queueHUDSlotApply(slotFrame)
+function _queueHUDSlotApply(slotFrame)
     local rec = slotFrame and HUDSkin.slots[slotFrame]
     if rec and rec.queued then return end
     if rec then rec.queued = true end
