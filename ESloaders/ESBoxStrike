@@ -3313,8 +3313,19 @@ function updateAimbot()
     local isAWP     = heldName == "AWP"
     local isSniper  = heldName and SniperWeapons[heldName] or false
 
-    local mp = UserInput:GetMouseLocation()
-    local closestPart, closestDist = nil, ActiveAimFOV()
+    -- When scoped in (any sniper), the game locks the mouse and the reticle sits
+    -- at screen center — GetMouseLocation() can lag / return offset coords, so
+    -- reference viewport center and blow the FOV wide open so the scoped-in
+    -- target is always eligible.
+    local scoped = (isAWP or isSniper) and (isScopedIn and isScopedIn())
+    local mp
+    if scoped then
+        local vp = Camera.ViewportSize
+        mp = Vector2.new(vp.X/2, vp.Y/2)
+    else
+        mp = UserInput:GetMouseLocation()
+    end
+    local closestPart, closestDist = nil, scoped and math.huge or ActiveAimFOV()
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr == LocalPlayer or not IsEnemy(plr) then continue end
         local char = GetCharacter(plr); if not char then continue end
@@ -3933,23 +3944,78 @@ local function _applySkinSourceToPart(target, source)
     end)
 end
 
-local function attachAsset(folder, arm, model, name, offset)
+-- Uniform mesh scale. Only touches BaseParts, so a single-MeshPart glove/sleeve
+-- shrinks in place without breaking welds. Skips models with sub-parts (weld
+-- offsets wouldn't scale together).
+local function _uniformScale(inst, factor)
+    if not inst or not factor or factor == 1 then return end
+    if inst:IsA("BasePart") then
+        pcall(function() inst.Size = inst.Size * factor end)
+    end
+end
+
+local function attachAsset(folder, arm, model, name, offset, scale)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
+    if scale then _uniformScale(mesh, scale) end
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
+-- Sound lookup order:
+--  1) ReplicatedStorage.Sounds.<knife>.<folder>.<name>  (pre-cloned Sound instances)
+--  2) ReplicatedStorage.Database.Audio.Weapons.<knife>  (ModuleScript returning
+--     { <folder> = { Identifiers = {ids}, Properties = {..} } } — matches the
+--     dumped Database.Audio schema so every knife's Handling1/Handling2/
+--     SecondInspect/HitOne/etc. play with correct volume + rolloff).
 local function playSound(folder, name)
+    local s
     local sounds = ReplicatedSt:FindFirstChild("Sounds")
     local ws = sounds and sounds:FindFirstChild(Config.Skins.SelectedKnife)
-    if not ws then return end
-    local sf = ws:FindFirstChild(folder)
-    local src = sf and sf:FindFirstChild(name)
-    if not src or not src:IsA("Sound") then return end
-    local s = src:Clone()
+    -- Folder name variants: some knives ship "Inspect", others "Inspect1"/"FirstInspect".
+    local variants = { folder }
+    if folder == "Inspect" then variants = { "Inspect", "Inspect1", "FirstInspect", "Inspect_1" }
+    elseif folder == "SecondInspect" then variants = { "SecondInspect", "Inspect2", "SecondInspect_1" }
+    elseif folder == "HitOne" then variants = { "HitOne", "Hit1", "Hit_1" }
+    elseif folder == "HitTwo" then variants = { "HitTwo", "Hit2", "Hit_2" }
+    elseif folder == "HitThree" then variants = { "HitThree", "Hit3", "Hit_3" }
+    elseif folder == "Equip" then variants = { "Equip", "Draw", "Deploy" }
+    end
+    local sf, src
+    for _, vname in ipairs(variants) do
+        sf = ws and ws:FindFirstChild(vname)
+        src = sf and (sf:FindFirstChild(name) or sf:FindFirstChild("1") or sf:FindFirstChildOfClass("Sound"))
+        if src and src:IsA("Sound") then break end
+        src = nil
+    end
+    if src and src:IsA("Sound") then
+        s = src:Clone()
+    else
+        local db = ReplicatedSt:FindFirstChild("Database")
+        local audio = db and db:FindFirstChild("Audio")
+        local wpns = audio and audio:FindFirstChild("Weapons")
+        local wm = wpns and wpns:FindFirstChild(Config.Skins.SelectedKnife)
+        if not wm then return end
+        local okReq, tbl = pcall(function()
+            if wm:IsA("ModuleScript") then return require(wm) end
+            return nil
+        end)
+        if not okReq or type(tbl) ~= "table" then return end
+        local entry
+        for _, vname in ipairs(variants) do
+            if type(tbl[vname]) == "table" then entry = tbl[vname]; break end
+        end
+        if type(entry) ~= "table" or type(entry.Identifiers) ~= "table" or #entry.Identifiers == 0 then return end
+        local id = entry.Identifiers[math.random(1, #entry.Identifiers)]
+        s = Instance.new("Sound")
+        s.SoundId = "rbxassetid://" .. tostring(id)
+        if type(entry.Properties) == "table" then
+            for k, v in pairs(entry.Properties) do pcall(function() s[k] = v end) end
+        end
+    end
+    if not s then return end
     s.Parent = Camera; pcall(function() s:Play() end)
     _signalOnce(s.Ended, function() pcall(function() s:Destroy() end) end)
     task.delay(8, function() if s and s.Parent then pcall(function() s:Destroy() end) end end)
@@ -3959,11 +4025,30 @@ local function handleAction(actionName, state)
     if state ~= Enum.UserInputState.Begin then return Enum.ContextActionResult.Pass end
     if not SkinSystem.spawned or not SkinSystem.animator or not IsAlive() then return Enum.ContextActionResult.Pass end
     if actionName == "InspectKnifeAction" then
-        if SkinSystem.inspecting or SkinSystem.swinging or not SkinSystem.inspectAnim then return Enum.ContextActionResult.Pass end
+        if SkinSystem.inspecting or SkinSystem.swinging then return Enum.ContextActionResult.Pass end
+        -- Alternating inspect: first press → Inspect, next press → Inspect2 (if the
+        -- weapon has one — currently only Butterfly Knife ships Inspect2). After the
+        -- alt plays it flips back so pattern is 1,2,1,2… Sounds mirror it: normal
+        -- inspect plays Sounds.<knife>.Inspect.1; alt plays SecondInspect + Handling1
+        -- then Handling2 shortly after (matches the dumped folder layout).
+        local useAlt = SkinSystem.inspectAlt and SkinSystem._inspectFlip
+        local track  = useAlt and SkinSystem.inspectAlt or SkinSystem.inspectAnim
+        if not track then return Enum.ContextActionResult.Pass end
         SkinSystem.inspecting = true
         if SkinSystem.idleAnim then pcall(function() SkinSystem.idleAnim:Stop() end) end
-        local ok = pcall(function() SkinSystem.inspectAnim:Play() end)
-        if ok then _signalOnce(SkinSystem.inspectAnim.Stopped, function() SkinSystem.inspecting = false end)
+        local ok = pcall(function() track:Play() end)
+        if ok then
+            if useAlt then
+                playSound("SecondInspect","1")
+                playSound("Handling1","1")
+                task.delay(0.55, function()
+                    if SkinSystem.inspecting then playSound("Handling2","1") end
+                end)
+            else
+                playSound("Inspect","1")
+            end
+            if SkinSystem.inspectAlt then SkinSystem._inspectFlip = not SkinSystem._inspectFlip end
+            _signalOnce(track.Stopped, function() SkinSystem.inspecting = false end)
         else SkinSystem.inspecting = false end
     elseif actionName == "AttackKnifeAction" or actionName == "RightAttackKnifeAction" then
         local now = os.clock()
@@ -4002,12 +4087,12 @@ local function removeViewmodel()
     pcall(function() ContextAction:UnbindAction("InspectKnifeAction") end)
     pcall(function() ContextAction:UnbindAction("AttackKnifeAction") end)
     pcall(function() ContextAction:UnbindAction("RightAttackKnifeAction") end)
-    for _, tr in ipairs({SkinSystem.equipAnim, SkinSystem.idleAnim, SkinSystem.inspectAnim, SkinSystem.HeavySwingAnim, SkinSystem.Swing1Anim, SkinSystem.Swing2Anim}) do
+    for _, tr in ipairs({SkinSystem.equipAnim, SkinSystem.idleAnim, SkinSystem.inspectAnim, SkinSystem.inspectAlt, SkinSystem.HeavySwingAnim, SkinSystem.Swing1Anim, SkinSystem.Swing2Anim}) do
         if tr then pcall(function() tr:Stop() end) end
     end
     if SkinSystem.vm then SkinSystem.vm:Destroy(); SkinSystem.vm=nil end
     SkinSystem.animator=nil; SkinSystem.inspecting=false; SkinSystem.swinging=false
-    SkinSystem.equipAnim=nil; SkinSystem.idleAnim=nil; SkinSystem.inspectAnim=nil
+    SkinSystem.equipAnim=nil; SkinSystem.idleAnim=nil; SkinSystem.inspectAnim=nil; SkinSystem.inspectAlt=nil; SkinSystem._inspectFlip=false
     SkinSystem.HeavySwingAnim=nil; SkinSystem.Swing1Anim=nil; SkinSystem.Swing2Anim=nil
     restoreOriginalKnife()
 end
@@ -4026,18 +4111,21 @@ local function spawnViewmodel(knife)
     SkinSystem.vm.Name = Config.Skins.SelectedKnife; SkinSystem.vm.Parent = Camera
     disableCollisions(SkinSystem.vm); hideOriginalKnife(knife)
 
+    -- Gloves are shrunk (0.95x) and pulled slightly back on Z so they stop
+    -- swallowing the knife's blade/handle. Sleeves keep original scale — only
+    -- the hand mesh caused the clipping.
     if me.Parent.Name == "Terrorists" then
         local g = weapons:WaitForChild("T Glove", 5)
-        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5))
-        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5))
+        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5),0.95)
+        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5),0.95)
     else
         local sleeves = assets:WaitForChild("Sleeves", 5)
         local sl = sleeves and sleeves:WaitForChild("IDF", 5)
         local g  = weapons:WaitForChild("CT Glove", 5)
         attachAsset(sl,"Left Arm","Left Arm","Sleeve",CFrame.new(0,0,0.5))
-        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5))
+        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5),0.95)
         attachAsset(sl,"Right Arm","Right Arm","Sleeve",CFrame.new(0,0,0.5))
-        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5))
+        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5),0.95)
     end
 
     local ac = SkinSystem.vm:FindFirstChildOfClass("AnimationController") or SkinSystem.vm:FindFirstChildOfClass("Animator")
@@ -4054,6 +4142,8 @@ local function spawnViewmodel(knife)
     SkinSystem.equipAnim      = loadTrack("Equip")
     SkinSystem.idleAnim       = loadTrack("Idle")
     SkinSystem.inspectAnim    = loadTrack("Inspect")
+    SkinSystem.inspectAlt     = loadTrack("Inspect2")  -- Butterfly-only (nil for others)
+    SkinSystem._inspectFlip   = false
     SkinSystem.HeavySwingAnim = loadTrack("Heavy Swing")
     SkinSystem.Swing1Anim     = loadTrack("Swing1")
     SkinSystem.Swing2Anim     = loadTrack("Swing2")
@@ -5558,6 +5648,7 @@ task.spawn(function()
     end
 end)
 
+
 pcall(function()
     LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function() pcall(_applyHUDKnife, true) end)
     LocalPlayer.CharacterAdded:Connect(function()
@@ -6620,12 +6711,17 @@ end)
 function CreateSkinDropdown(weapon, section)
     if not SkinsFolder then return end
     local folder = SkinsFolder:FindFirstChild(weapon); if not folder then return end
-    local opts = {"None"}
-    for _, s in folder:GetChildren() do if s.Name and s.Name ~= "" then table.insert(opts, s.Name) end end
+    local opts = {"Vanilla"}
+    local _seen = { Vanilla = true }
+    for _, s in ipairs(folder:GetChildren()) do
+        local n = s and s.Name
+        if n and n ~= "" and not _seen[n] then _seen[n] = true; table.insert(opts, n) end
+    end
     if #opts <= 1 then return end
-    table.sort(opts, function(a, b)
-        if a == "None" then return true end
-        if b == "None" then return false end
+    pcall(table.sort, opts, function(a, b)
+        if a == b then return false end
+        if a == "Vanilla" then return true end
+        if b == "Vanilla" then return false end
         return tostring(a) < tostring(b)
     end)
     if Config.Skins.SelectedSkins[weapon] == "" then Config.Skins.SelectedSkins[weapon] = nil end
@@ -6636,14 +6732,14 @@ function CreateSkinDropdown(weapon, section)
         Config.Skins.SelectedSkins[weapon] = defaultSkin
     end
     SafeAddDropdown(section, "Skin_"..weapon, { Text=weapon, Options=opts,
-        Default=defaultSkin or "None",
+        Default=defaultSkin or "Vanilla",
         Callback=function(v)
             if not Config.Skins.SkinChangerEnabled and not _EclipseConfigLoading then
-                pcall(function() Options["Skin_"..weapon]:SetValue(Config.Skins.SelectedSkins[weapon] or "None") end)
+                pcall(function() Options["Skin_"..weapon]:SetValue(Config.Skins.SelectedSkins[weapon] or "Vanilla") end)
                 return
             end
-            if v == "None" then Config.Skins.SelectedSkins[weapon] = nil else Config.Skins.SelectedSkins[weapon] = v end
-            if v == "None" then
+            if v == "Vanilla" or v == "None" then Config.Skins.SelectedSkins[weapon] = nil else Config.Skins.SelectedSkins[weapon] = v end
+            if v == "Vanilla" or v == "None" then
                 pcall(_skinPreviewClose)
                 pcall(_restoreWeaponSkinRuntime, weapon)
                 if Config.Skins.SkinChangerEnabled and IsAlive() then
@@ -9222,7 +9318,7 @@ end)() -- CUSTOM SHOOT SOUNDS
     for k, _ in pairs(EX.SoundPresets) do
         if k ~= "Default" then table.insert(presetNames, k) end
     end
-    table.sort(presetNames, function(a,b) if a=="Default" then return true elseif b=="Default" then return false end return a<b end)
+    pcall(table.sort, presetNames, function(a,b) if a==b then return false end if a=="Default" then return true elseif b=="Default" then return false end return tostring(a)<tostring(b) end)
 
     local currentSoundWeapon = weaponListValues[1]
     SafeAddDropdown(SoundGB, "Sound_Weapon", {
@@ -9429,3 +9525,4 @@ task.spawn(function()
         end)
     end
 end)
+
