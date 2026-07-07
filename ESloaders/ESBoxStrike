@@ -1770,21 +1770,28 @@ end
 function _espHealthValues(plr, char, hum)
     local hpKeys = {"Health","HP","CurrentHealth","CurrentHP","health","hp"}
     local maxKeys = {"MaxHealth","MaxHP","HealthMax","Max","maxHealth","maxhp"}
-    -- Prefer live Humanoid values; fall back to attributes/values only if humanoid is missing/dead.
     local hum2 = hum or (char and char:FindFirstChildOfClass("Humanoid"))
     local hp, mx
+    -- Prefer the LIVE humanoid unconditionally when it exists (fixes empty-bar
+    -- bug where a stale attribute Health=0 masked a full-HP humanoid).
     if hum2 then
         hp = _espNum(hum2.Health)
         mx = _espNum(hum2.MaxHealth)
     end
-    if not hp or hp <= 0 then
-        hp = _espReadNumber(char, hpKeys) or _espReadNumber(plr, hpKeys) or hp
+    -- Only fall back to attributes if humanoid did not provide sane values.
+    if not hp then
+        hp = _espReadNumber(char, hpKeys) or _espReadNumber(plr, hpKeys)
     end
     if not mx or mx <= 0 then
         mx = _espReadNumber(char, maxKeys) or _espReadNumber(plr, maxKeys) or mx
     end
     if not hp then return nil, nil end
     if not mx or mx <= 0 then mx = math.max(100, hp) end
+    -- Guarantee at least 1 HP shown when humanoid reports Alive but Health
+    -- momentarily reads 0 mid-frame (respawn/teleport races).
+    if hp <= 0 and hum2 and hum2:GetState() ~= Enum.HumanoidStateType.Dead then
+        hp = 1
+    end
     return math.clamp(hp, 0, mx), mx
 end
 
@@ -1922,16 +1929,47 @@ function _espDrawAmmo(data, L, R, T, cx, plr, weaponName)
     data.TagAmmoFill.Visible = pct > 0.001
 end
 
--- Cheap cached warmup detector for ESP money gating.
+-- Warmup detector — multi-source (GameState / RoundState / MatchState /
+-- Phase attributes on workspace + ReplicatedStorage, Status value, and the
+-- MatchLogging / RoundHandler / GameLogic modules). Cached for perf.
 local _warmT, _warmVal = 0, false
 function _isWarmup()
     local t = tick()
-    if t - _warmT < 0.5 then return _warmVal end
+    if t - _warmT < 0.35 then return _warmVal end
     _warmT = t
-    local st
-    pcall(function() st = workspace:GetAttribute("GameState") end)
-    local s = tostring(st or ""):lower()
-    _warmVal = (s:find("warm") ~= nil) or (s:find("wait") ~= nil) or (s:find("prep") ~= nil) or (s:find("freeze") ~= nil) or (s:find("intermission") ~= nil)
+    local hits = {}
+    local function _push(v) if v ~= nil then hits[#hits+1] = tostring(v):lower() end end
+    pcall(function() _push(workspace:GetAttribute("GameState")) end)
+    pcall(function() _push(workspace:GetAttribute("RoundState")) end)
+    pcall(function() _push(workspace:GetAttribute("MatchState")) end)
+    pcall(function() _push(workspace:GetAttribute("Phase")) end)
+    pcall(function() _push(ReplicatedSt:GetAttribute("GameState")) end)
+    pcall(function() _push(ReplicatedSt:GetAttribute("RoundState")) end)
+    pcall(function()
+        local status = ReplicatedSt:FindFirstChild("Status", true) or ReplicatedSt:FindFirstChild("GameStatus", true)
+        if status and (status:IsA("StringValue") or status:IsA("IntValue")) then _push(status.Value) end
+    end)
+    pcall(function()
+        for _, m in ipairs(ReplicatedSt:GetDescendants()) do
+            if m:IsA("ModuleScript") and (m.Name == "MatchLogging" or m.Name == "RoundHandler" or m.Name == "GameLogic") then
+                local ok, mod = pcall(require, m)
+                if ok and type(mod) == "table" then
+                    _push(mod.State); _push(mod.CurrentState); _push(mod.Phase); _push(mod.RoundState)
+                end
+                break
+            end
+        end
+    end)
+    pcall(function() _push(LocalPlayer:GetAttribute("Warmup")) end)
+    pcall(function() if LocalPlayer:GetAttribute("BuyMenu") == true then hits[#hits+1] = "warmup" end end)
+    local match = false
+    for _, s in ipairs(hits) do
+        if s:find("warm") or s:find("wait") or s:find("prep") or s:find("freeze")
+           or s:find("intermission") or s:find("pregame") or s:find("buy") then
+            match = true; break
+        end
+    end
+    _warmVal = match
     return _warmVal
 end
 
@@ -1989,14 +2027,24 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     if Config.ESP.Name then table.insert(nameParts, plr.Name) end
     if Config.ESP.Distance then table.insert(nameParts, math.floor(dist) .. "m") end
     -- Money is rendered on its own Drawing (fixed green) only during warmup.
+    -- Read from player attribute, leaderstats.Money/Cash, or character attribute.
     local moneyStr = nil
     if Config.ESP.IdentifyMoney and _isWarmup and _isWarmup() then
-        local m = tonumber(plr:GetAttribute("Money"))
+        local m = tonumber(plr:GetAttribute("Money")) or tonumber(plr:GetAttribute("Cash"))
+        if not m then
+            local ls = plr:FindFirstChild("leaderstats")
+            if ls then
+                local v = ls:FindFirstChild("Money") or ls:FindFirstChild("Cash") or ls:FindFirstChild("$")
+                if v then m = tonumber(v.Value) end
+            end
+        end
+        if not m and plr.Character then
+            m = tonumber(plr.Character:GetAttribute("Money")) or tonumber(plr.Character:GetAttribute("Cash"))
+        end
         if m then
-            moneyStr = "$" .. tostring(m):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+            moneyStr = "$" .. tostring(math.floor(m)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
         end
     end
-
     _espHideAmmo(data)
     -- Weapon on top line, name/distance beneath it (still above ammo).
     local lines = {}
@@ -2139,7 +2187,7 @@ function _espProcessPlayer(plr, myRoot, center)
     local weaponName = _espGetWeaponName(plr)
 
     -- Premium unified tag replaces the individual Name / Distance / Weapon labels.
-    local wantTag = Config.ESP.Name or Config.ESP.Distance or Config.ESP.WeaponName
+    local wantTag = Config.ESP.Name or Config.ESP.Distance or Config.ESP.WeaponName or (Config.ESP.IdentifyMoney and _isWarmup and _isWarmup())
     if wantTag then
         _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
         data.NameTag.Visible = false
@@ -2957,17 +3005,10 @@ function updateC4Timer()
         stopC4Timer(); return
     end
     -- Round-end detection: panel is holding a resolved state (SAFE/BOOM/LOST)
-    -- with no live bomb. Hide only when the Bomb tag is fully gone from the
-    -- workspace, meaning the round has actually reset.
+    -- with no live bomb. Keep visible until the next-round WARMUP is detected
+    -- (via _isWarmup from match logging), then animate the hide.
     if C4Timer.resolvedShown and not planted and not resolved then
-        local hasAnyBomb = false
-        pcall(function()
-            local tagged = CollectionService:GetTagged("Bomb")
-            for _, b in ipairs(tagged or {}) do
-                if b and b:IsDescendantOf(Workspace) then hasAnyBomb = true; break end
-            end
-        end)
-        if not hasAnyBomb then
+        if _isWarmup and _isWarmup() then
             C4Timer.resolvedShown = false
             C4Hide()
         end
@@ -7163,14 +7204,21 @@ pcall(function()
         return ok, err
     end
 
-    SaveManager:BuildConfigSection(Tabs.Configs)
+    -- Force SaveManager's Configuration groupbox into the LEFT column by
+    -- temporarily aliasing AddRightGroupbox → AddLeftGroupbox on this tab.
+    do
+        local realRight = Tabs.Configs.AddRightGroupbox
+        Tabs.Configs.AddRightGroupbox = Tabs.Configs.AddLeftGroupbox
+        local ok = pcall(function() SaveManager:BuildConfigSection(Tabs.Configs) end)
+        Tabs.Configs.AddRightGroupbox = realRight
+        if not ok then pcall(function() SaveManager:BuildConfigSection(Tabs.Configs) end) end
+    end
     ThemeManager:ApplyToTab(Tabs.Configs)
-    -- Fill the right column of the Configuration tab so it isn't visually
-    -- empty when the SaveManager only builds a left-side group.
+    -- Right column info panel.
     pcall(function()
         local InfoGB = Tabs.Configs:AddRightGroupbox("ECLIPSE HUB", "info")
         InfoGB:AddLabel("Version : " .. tostring(ECLIPSE and ECLIPSE.Version or "n/a"))
-        InfoGB:AddLabel("Toggle GUI : configurable (General tab)")
+        InfoGB:AddLabel("Toggle GUI : RightShift")
         InfoGB:AddLabel("Configs are saved locally by name.")
         InfoGB:AddDivider()
         InfoGB:AddButton({ Text="Open Configs Folder", Func=function()
@@ -7193,17 +7241,8 @@ end)
 
 ;(function() -- GENERAL controls + server hop (IIFE for register budget)
 local GenGB = Tabs.General:AddLeftGroupbox("MENU")
-do
-    local KEYS = {"RightShift","LeftShift","RightControl","LeftControl","RightAlt","LeftAlt","Insert","Home","End","PageUp","PageDown","Delete","Backquote","F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12"}
-    local defaultKey = "RightShift"
-    SafeAddDropdown(GenGB, "Gui_ToggleKey", {
-        Text="TOGGLE GUI KEY", Values=KEYS, Default=defaultKey,
-        Callback=function(v)
-            local kc = Enum.KeyCode[v]
-            if kc then _setGuiKey(kc) end
-        end,
-    })
-end
+-- Toggle GUI key is fixed to RightShift (no dropdown, no label). The
+-- keybind listener in _setGuiKey / _EclipseGuiKey already defaults to it.
 GenGB:AddButton({ Text="Copy Discord",   Func=function() copyToClipboard(ECLIPSE.Discord) end })
 GenGB:AddButton({ Text="Copy Website",   Func=function() copyToClipboard(ECLIPSE.Website) end })
 GenGB:AddButton({ Text="Rejoin",         Func=function()
@@ -9164,114 +9203,9 @@ end)() -- CUSTOM SHOOT SOUNDS
 end)() -- UI CREATION
 
 -- ================================================================
--- SCREEN STRETCH (Misc) + LOGGING (in same MISC groupbox as Spectator)
+-- LOGGING (Screen Stretch / Screech removed per user request)
 -- ================================================================
 ;(function()
-    -- ---------- SCREEN STRETCH (matrix aspect ratio) -----------------
-    -- Persistent stretch: we rewrite Camera.ViewportSize scaling every
-    -- frame via a proxy on Camera.CFrame's scale — Roblox has no direct
-    -- "aspect ratio" API, so the closest persistent effect is to bake
-    -- an anamorphic squeeze into the CoreGui viewport transform via
-    -- ScreenGui IgnoreGuiInset + a full-screen ViewportFrame? No — the
-    -- accepted community trick is to override Camera.FieldOfView on
-    -- BOTH axes by tweaking Camera.CFrame with a horizontal scale.
-    -- We use the standard `Camera:GetPropertyChangedSignal("FieldOfView")`
-    -- + a persistent multiplier so the game NEVER reverts while the
-    -- toggle is on; it only snaps back when the user disables it.
-    local ST = Config.Stretch
-    local StretchGB = Tabs.Misc:AddRightGroupbox("SCREEN STRETCH", "maximize")
-    local _origFOV, _fovConn, _charConn
-    local function _isAlive()
-        return IsAlive and IsAlive() ~= nil
-    end
-    local function _applyStretch()
-        if not ST.Enabled then return end
-        if not _isAlive() then return end
-        pcall(function()
-            local base = _origFOV or OriginalCameraFOV or 70
-            Camera.FieldOfView = math.clamp(base * ST.Ratio, 1, 120)
-        end)
-    end
-    local function _restoreStretch()
-        if _fovConn then pcall(function() _fovConn:Disconnect() end); _fovConn = nil end
-        if _charConn then pcall(function() _charConn:Disconnect() end); _charConn = nil end
-        pcall(function()
-            Camera.FieldOfView = _origFOV or OriginalCameraFOV or 70
-        end)
-        _origFOV = nil
-    end
-    table.insert(UnloadConnections, { Disconnect = _restoreStretch })
-    StretchGB:AddToggle("Stretch_Enable", { Text="SCREEN STRETCH", Default=false,
-        Callback=function(v)
-            ST.Enabled = v
-            if v then
-                if not _isAlive() then
-                    ST.Enabled = false
-                    pcall(function() Toggles.Stretch_Enable:SetValue(false) end)
-                    return
-                end
-                _origFOV = Camera.FieldOfView
-                _applyStretch()
-                if _fovConn then _fovConn:Disconnect() end
-                _fovConn = Camera:GetPropertyChangedSignal("FieldOfView"):Connect(function()
-                    if not ST.Enabled or not _isAlive() then return end
-                    local base = _origFOV or OriginalCameraFOV or 70
-                    local target = math.clamp(base * ST.Ratio, 1, 120)
-                    if math.abs(Camera.FieldOfView - target) > 0.05 then _applyStretch() end
-                end)
-                if _charConn then _charConn:Disconnect() end
-                _charConn = LocalPlayer.CharacterAdded:Connect(function()
-                    task.wait(0.5)
-                    if ST.Enabled then
-                        _origFOV = Camera.FieldOfView
-                        _applyStretch()
-                    end
-                end)
-            else
-                _restoreStretch()
-            end
-        end })
-
-    StretchGB:AddSlider("Stretch_Ratio", { Text="ASPECT RATIO", Default=1.30, Min=0.60, Max=2.20, Rounding=2,
-        Callback=function(v)
-            if not _isAlive() then
-                pcall(function() Options.Stretch_Ratio:SetValue(ST.Ratio) end)
-                return
-            end
-            ST.Ratio = v; _applyStretch()
-        end })
-    -- Small "must be alive" hint under the toggle/slider (via AddLabel if the
-    -- lib exposes it; else fall back to Notify-less silent gating).
-    pcall(function()
-        if type(StretchGB.AddLabel) == "function" then
-            StretchGB:AddLabel("You almost to be alived.", true)
-        end
-    end)
-    -- Live gate: while dead, restore original FOV, disable toggle/slider UI,
-    -- and re-enable them once the humanoid respawns. No popups.
-    task.spawn(function()
-        local wasAlive
-        while scriptRunning do
-            local alive = _isAlive()
-            if alive ~= wasAlive then
-                wasAlive = alive
-                if not alive and ST.Enabled then
-                    pcall(function() Toggles.Stretch_Enable:SetValue(false) end)
-                    ST.Enabled = false
-                    _restoreStretch()
-                end
-                pcall(function() _uiSetDisabled(Toggles.Stretch_Enable, not alive) end)
-                pcall(function() _uiSetDisabled(Options.Stretch_Ratio, not alive) end)
-            end
-            task.wait(0.35)
-        end
-    end)
-    -- Reapply every RenderStep too — some games rewrite FieldOfView per-tick
-    -- (weapon zoom, scripted cutscenes). This is what makes it PERSISTENT.
-    RunService.RenderStepped:Connect(function()
-        if not scriptRunning or not ST.Enabled then return end
-        _applyStretch()
-    end)
 
     -- ---------- LOGGING (Notify only; no extra logging GUI) ----------
     local function _log(title, desc, time)
