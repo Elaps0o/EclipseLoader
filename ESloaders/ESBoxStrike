@@ -1770,13 +1770,18 @@ end
 function _espHealthValues(plr, char, hum)
     local hpKeys = {"Health","HP","CurrentHealth","CurrentHP","health","hp"}
     local maxKeys = {"MaxHealth","MaxHP","HealthMax","Max","maxHealth","maxhp"}
-    local hp = _espReadNumber(char, hpKeys) or _espReadNumber(plr, hpKeys)
-    local mx = _espReadNumber(char, maxKeys) or _espReadNumber(plr, maxKeys)
-    if hum then
-        hp = hp or _espNum(hum.Health)
-        mx = mx or _espNum(hum.MaxHealth)
-        hp = hp or _espReadNumber(hum, hpKeys)
-        mx = mx or _espReadNumber(hum, maxKeys)
+    -- Prefer live Humanoid values; fall back to attributes/values only if humanoid is missing/dead.
+    local hum2 = hum or (char and char:FindFirstChildOfClass("Humanoid"))
+    local hp, mx
+    if hum2 then
+        hp = _espNum(hum2.Health)
+        mx = _espNum(hum2.MaxHealth)
+    end
+    if not hp or hp <= 0 then
+        hp = _espReadNumber(char, hpKeys) or _espReadNumber(plr, hpKeys) or hp
+    end
+    if not mx or mx <= 0 then
+        mx = _espReadNumber(char, maxKeys) or _espReadNumber(plr, maxKeys) or mx
     end
     if not hp then return nil, nil end
     if not mx or mx <= 0 then mx = math.max(100, hp) end
@@ -1798,7 +1803,7 @@ function _espDrawHealth(data, hp, maxHp, L, R, T, B, height)
             local b = i / segments
             seg.From = Vector2.new(bx, B - (height * a))
             seg.To = Vector2.new(bx, B - (height * b) + 1)
-            seg.Color = GetHealthColor((a + b) * 0.5)
+            seg.Color = GetHealthColor(pct)
             seg.Thickness = (height < 40) and 2 or 3
             seg.Transparency = 1
             seg.Visible = pct > 0 and a < pct
@@ -1822,11 +1827,9 @@ function _espDrawHealth(data, hp, maxHp, L, R, T, B, height)
             end
         end
     end
-    data.HealthText.Text = tostring(math.floor((hp or 0) + 0.5))
-    data.HealthText.Color = GetHealthColor(pct)
-    data.HealthText.Transparency = 1
-    data.HealthText.Position = Vector2.new(bx, T - 10)
-    data.HealthText.Visible = height >= 34
+    -- Numeric HP label removed per user request (bars only).
+    data.HealthText.Visible = false
+
 end
 
 
@@ -2149,7 +2152,7 @@ function _espProcessPlayer(plr, myRoot, center)
         if data.TagBg then data.TagBg.Visible = false end
         if data.TagBorder then for _, l in pairs(data.TagBorder) do l.Visible = false end end
         if data.TagGrad then for _, l in pairs(data.TagGrad) do l.Visible = false end end
-        if not Config.ESP.Ammo then _espHideAmmo(data) end
+        _espHideAmmo(data)
         if data.TagText then data.TagText.Visible = false end
         if data.MoneyText then data.MoneyText.Visible = false end
     end
@@ -2162,11 +2165,7 @@ function _espProcessPlayer(plr, myRoot, center)
         if data.HealthTicks then for _, l in pairs(data.HealthTicks) do l.Visible = false end end
     end
 
-    if Config.ESP.Ammo then
-        _espDrawAmmo(data, L, R, T, cx, plr, weaponName)
-    elseif not wantTag then
-        _espHideAmmo(data)
-    end
+    _espHideAmmo(data)
 
     if PresenceUsers[plr.UserId] then
         data.Presence.Color = Config.ESP.PresenceColor
@@ -3633,6 +3632,48 @@ function UpdateWeather(t)
 end
 
 local SkinSystem = { scriptRunning=false, spawned=false, inspecting=false, swinging=false, lastAttackTime=0, vm=nil, animator=nil, _hidden=nil, _skinRestore={}, _hiddenOwner=nil }
+
+-- ────────────────────────────────────────────────────────────────
+-- ASSET AUTO-MAP (Charms + Badges under game:GetChildren()[109].Assets)
+-- Enumerates Charms (folder → numbered subfolders → Model) and Badges
+-- (folder → MeshPart) into flat lookup tables. Exposed on _G so future
+-- accessory/skinchanger work can consume them without re-walking the tree.
+-- No behavior change on its own; purely a discovery helper.
+-- ────────────────────────────────────────────────────────────────
+local EclipseCharms, EclipseBadges = {}, {}
+local function _buildAssetMaps()
+    local rootAssets
+    pcall(function()
+        local node = game:GetChildren()[109]
+        rootAssets = node and node:FindFirstChild("Assets") or nil
+    end)
+    if not rootAssets then return end
+    local charmsFolder = rootAssets:FindFirstChild("Charms")
+    if charmsFolder then
+        for _, charmGroup in ipairs(charmsFolder:GetChildren()) do
+            local slots = {}
+            for _, slotFolder in ipairs(charmGroup:GetChildren()) do
+                local slotNum = tonumber(slotFolder.Name)
+                if slotNum then
+                    local model = slotFolder:FindFirstChildWhichIsA("Model")
+                    if model then slots[slotNum] = model end
+                end
+            end
+            if next(slots) then EclipseCharms[charmGroup.Name] = slots end
+        end
+    end
+    local badgesFolder = rootAssets:FindFirstChild("Badges")
+    if badgesFolder then
+        for _, badgeGroup in ipairs(badgesFolder:GetChildren()) do
+            local mesh = badgeGroup:FindFirstChildWhichIsA("MeshPart")
+            if mesh then EclipseBadges[badgeGroup.Name] = mesh end
+        end
+    end
+end
+pcall(_buildAssetMaps)
+_G.EclipseCharms = EclipseCharms
+_G.EclipseBadges = EclipseBadges
+
 local knives = {
     ["Karambit"]={Offset=CFrame.new(0,-1.5,1.5)}, ["Butterfly Knife"]={Offset=CFrame.new(0,-1.5,1.5)},
     ["M9 Bayonet"]={Offset=CFrame.new(0,-1.5,1)}, ["Flip Knife"]={Offset=CFrame.new(0,-1.5,1.25)},
@@ -4908,14 +4949,18 @@ function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
             if rec and rec.iconImageRectOffset ~= nil then iconLbl.ImageRectOffset = rec.iconImageRectOffset end
             if rec and rec.iconImageRectSize ~= nil then iconLbl.ImageRectSize = rec.iconImageRectSize end
             if rec and rec.iconScaleType ~= nil then iconLbl.ScaleType = rec.iconScaleType end
-            iconLbl.ImageTransparency = rec and rec.iconImageTransparency or iconLbl.ImageTransparency
-            if rec and rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end
+            iconLbl.ImageTransparency = rec and rec.iconImageTransparency or 0
+            -- Force visible on restore: after death/respawn the snapshot may have
+            -- captured Visible=false (transient hide), which would leave the
+            -- native knife icon invisible forever. Default to true unless the
+            -- snapshot explicitly recorded false.
+            iconLbl.Visible = (rec and rec.iconLabelVisible == false) and false or true
         end)
     end
     if iconViewport then
         pcall(function()
             iconViewport.BackgroundTransparency = rec and rec.iconViewportTransparency or iconViewport.BackgroundTransparency
-            if rec and rec.iconViewportVisible ~= nil then iconViewport.Visible = rec.iconViewportVisible end
+            iconViewport.Visible = (rec and rec.iconViewportVisible == false) and false or true
         end)
     end
 end
@@ -5568,8 +5613,30 @@ function CleanupScript()
         if GPD.Dot then GPD.Dot:Remove() end
         table.clear(GPD.ActiveLines); table.clear(GPD.LinePool); GPD.Dot = nil
     end)
-    -- C4 panel UI
-    pcall(function() if C4UI and C4UI.frame then C4UI.frame:Destroy() end end)
+    -- C4 panel UI (destroy frame AND clear all cached refs so it can't reappear)
+    pcall(function()
+        if C4UI and C4UI.frame then C4UI.frame:Destroy() end
+        if C4UI then
+            C4UI.frame, C4UI.dot, C4UI.text, C4UI.time, C4UI.dots, C4UI.stroke = nil, nil, nil, nil, nil, nil
+            C4UI.shown, C4UI.pinned = false, false
+        end
+        C4Timer.enabled = false; C4Timer.endT = 0; C4Timer.hideAt = 0
+    end)
+    -- WORLD COLOR: restore original lighting by disabling AND destroying our
+    -- ColorCorrectionEffect (was leaking a permanent tint after unload).
+    -- NOTE: _wcEffect / _Lighting are declared later in the file, so we
+    -- can't reference those locals from this function — search Lighting by
+    -- name instead. This also nukes any stray duplicates.
+    pcall(function()
+        local Lighting = game:GetService("Lighting")
+        for _, ch in ipairs(Lighting:GetChildren()) do
+            if ch.Name == "EclipseWorldColor" then
+                pcall(function() ch.Enabled = false end)
+                pcall(function() ch:Destroy() end)
+            end
+        end
+        if Config and Config.WorldColor then Config.WorldColor.Enabled = false end
+    end)
     if WeatherPart then pcall(function() WeatherPart:Destroy() end) end
     if presenceSocket then pcall(function() presenceSocket:Close() end) end
     for inst, e in pairs(WorldEspPool) do pcall(function() e.Tag:Remove() end); pcall(function() e.Box:Remove() end); pcall(function() if e.Fill then e.Fill:Remove() end end); pcall(function() if e.Dot then e.Dot:Remove() end end) end
@@ -5844,8 +5911,8 @@ EspGB:AddToggle("ESP_Target",    { Text="TARGET LINE",Default=true,  Callback=fu
     :AddColorPicker("ESP_LineCol", { Default=Config.ESP.LineColor,     Title="Target line color", Callback=function(c) Config.ESP.LineColor=c end })
 EspGB:AddToggle("ESP_Weapon",    { Text="ESP WEAPON", Default=false, Callback=function(v) Config.ESP.WeaponName=v end })
     :AddColorPicker("ESP_WepNCol", { Default=Config.ESP.WeaponNameColor, Title="Weapon name color", Callback=function(c) Config.ESP.WeaponNameColor=c end })
-EspGB:AddToggle("ESP_Ammo",      { Text="ESP AMMO",   Default=false, Callback=function(v) Config.ESP.Ammo=v end })
-    :AddColorPicker("ESP_AmmoCol", { Default=Config.ESP.AmmoColor, Title="Ammo bar color", Callback=function(c) Config.ESP.AmmoColor=c end })
+-- (ESP AMMO toggle removed per user request. Config.ESP.Ammo stays false.)
+Config.ESP.Ammo = false
 -- IDENTIFY MONEY moved to MISC tab (see MiscGB in the Misc section).
 
 -- HEAD DOT + SKELETON removed by user request (were causing FPS drop).
@@ -6663,35 +6730,8 @@ end)() -- MOVEMENT / WORLD controls
 ;(function() -- MISC controls + spectator list (IIFE for register budget)
 local MiscGB = Tabs.Misc:AddLeftGroupbox("MISC")
 
--- ==== EXPLORER #1 (buy-area bypass, embedded) ==========================
--- Hooks the game's IsInBuyArea module so, while enabled, the game always
--- believes the LocalPlayer is standing in a buy zone. The Money HUD
--- controller reads through this same function, so buy UI stays available
--- anywhere on the map. Gate is a plain Config flag; if the executor lacks
--- hookfunction we still flip LocalPlayer:SetAttribute("BuyMenu", true) as
--- a best-effort fallback.
-local _explorer1 = { hooked=false, original=nil, target=nil }
-task.spawn(function()
-    local ok, mod = pcall(function()
-        local rs = game:GetService("ReplicatedStorage")
-        return require(rs.Database.Components.Common.IsInBuyArea)
-    end)
-    if not ok or type(mod) ~= "function" then return end
-    _explorer1.target = mod
-    if type(hookfunction) == "function" then
-        local wrapper = function(plr, ...)
-            if Config.Misc.Explorer1 and plr == LocalPlayer then return true end
-            return _explorer1.original(plr, ...)
-        end
-        local ok2, orig = pcall(hookfunction, mod, (type(newcclosure)=="function" and newcclosure(wrapper)) or wrapper)
-        if ok2 then _explorer1.original = orig; _explorer1.hooked = true end
-    end
-end)
--- (BuyMenu attribute-spam loop removed: it was firing IsInBuyArea from the
---  Money HUD controller in bad contexts and causing the "attempt to call a
---  nil value" spam. The hookfunction above is enough on executors that
---  support it; on those that don't, the feature is a no-op.)
-Config.Misc.Explorer1 = true
+-- (EXPLORER #1 hook removed per user request.)
+Config.Misc.Explorer1 = false
 
 -- ==== HUD Skin life-gate ===============================================
 -- When the local player dies, hide every skinchanger name/icon overlay so
@@ -6710,6 +6750,15 @@ task.spawn(function()
                 end
             end
         elseif not wasAlive and alive and Config.Skins.SkinChangerEnabled then
+            -- Force-restore native icons/names first so any transient hidden
+            -- state from death frame doesn't leave the knife icon invisible.
+            for slotFrame, rec in pairs(HUDSkin.slots) do
+                if slotFrame and slotFrame.Parent then
+                    local nameLbl, iconLbl, iconViewport = _slotParts(slotFrame)
+                    if nameLbl then pcall(_restoreHUDName, rec, nameLbl) end
+                    if iconLbl or iconViewport then pcall(_restoreOriginalHUDIcon, rec, iconLbl, iconViewport) end
+                end
+            end
             for slotFrame in pairs(HUDSkin.slots) do
                 if slotFrame and slotFrame.Parent then pcall(_queueHUDSlotApply, slotFrame) end
             end
@@ -6736,10 +6785,15 @@ Config.Misc.ForceScope = false
 MiscGB:AddToggle("NoCameraRecoil_Toggle", { Text="NO CAMERA RECOIL", Default=false, Callback=function(v)
     Config.Misc.NoCameraRecoil = v; pcall(_updateNoRecoil)
 end })
--- EXPLORER #1 is now always-on (toggle removed per user request).
-MiscGB:AddToggle("IdentifyMoney_Toggle", { Text="IDENTIFY MONEY (WARMUP)", Default=false, Tooltip="Shows the money value in a fixed green tag. Auto-hides when warmup ends.", Callback=function(v)
+-- IDENTIFY MONEY: shows each player's cash as a fixed green tag during warmup.
+MiscGB:AddToggle("IdentifyMoney_Toggle", { Text="IDENTIFY MONEY", Default=false, Callback=function(v)
     Config.ESP.IdentifyMoney = v
-end })
+    if not v then
+        for _, d in pairs(ESPObjects) do
+            pcall(function() if d.MoneyText then d.MoneyText.Visible = false end end)
+        end
+    end
+end }):AddKeyPicker("IdentifyMoney_Key", { Default="N", SyncToggleState=true, Mode="Toggle", Text="Identify Money" })
 
 
 
