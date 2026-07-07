@@ -32,7 +32,7 @@ local LocalPlayer = Players.LocalPlayer
 -- gatilho automático está off — nada de hooks CoreGui no boot, então o erro
 -- "attempt to index nil with 'Body'" em Obsidian não pode mais acontecer no
 -- 2º load. Para reativar futuramente, basta flipar isso para true.
-local ECLIPSE_BYPASS_ENABLED = true
+local ECLIPSE_BYPASS_ENABLED = false
 
 -- ============================================================
 --   DEVICE SPOOFER (built-in)
@@ -4039,38 +4039,49 @@ local function _collectGloveReferences(originalModel)
 end
 
 local function _fitGloveToReference(mesh, ref, maxScale)
-    if not (mesh and mesh:IsA("BasePart") and ref and ref.Size) then return false end
+    if not (mesh and mesh:IsA("BasePart") and ref and ref.Size) then return false, nil end
     local s, r = mesh.Size, ref.Size
-    if s.X <= 0 or s.Y <= 0 or s.Z <= 0 or r.X <= 0 or r.Y <= 0 or r.Z <= 0 then return false end
+    if s.X <= 0 or s.Y <= 0 or s.Z <= 0 or r.X <= 0 or r.Y <= 0 or r.Z <= 0 then return false, nil end
     -- Uniform fit keeps the glove proportions intact while preventing the
     -- skinned clone from becoming wider/deeper than the player's native glove.
-    local factor = math.min(r.X / s.X, r.Y / s.Y, r.Z / s.Z, maxScale or 1)
+    local factor = math.min((r.X * 0.96) / s.X, (r.Y * 0.96) / s.Y, (r.Z * 0.96) / s.Z, maxScale or 0.96)
     if factor > 0 and factor < 1 then _uniformScale(mesh, factor) end
-    return true
+    return true, factor
 end
 
-local function attachAsset(folder, arm, model, name, offset)
+local function attachAsset(folder, arm, model, name, offset, ref)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
-    -- Ajuste uniforme (sem distorcer) para a luva ficar JUSTA no arm sem engolir
-    -- a mao/faca. Alvo = tamanho do arm * 1.02 (bem justo, so folga minima),
-    -- clampado entre 0.55 e 1.0 para nao sumir nem estourar.
+    local finalOffset = offset
+    -- Luva: usa como base a luva original do viewmodel atual quando ela existe.
+    -- Isso reduz só o volume ocupado (sem esticar eixo por eixo), cobre a mão e
+    -- evita a caixa gigante atravessando a faca. Se não houver referência, cai
+    -- num ajuste uniforme pelo tamanho do Left/Right Arm.
     if name == "Glove" and mesh:IsA("BasePart") and target:IsA("BasePart") then
-        local ts, ms = target.Size, mesh.Size
-        if ms.X > 0 and ms.Y > 0 and ms.Z > 0 then
-            local tX, tY, tZ = ts.X * 1.02, ts.Y * 1.02, ts.Z * 1.02
-            local factor = math.min(tX/ms.X, tY/ms.Y, tZ/ms.Z, 1.0)
-            if factor < 0.55 then factor = 0.55 end
-            pcall(function() mesh.Size = ms * factor end)
-            -- Guarda o menor fator observado para o calculo do offset da faca.
+        local factor
+        if ref and ref.Size then
+            local fitted, f = _fitGloveToReference(mesh, ref, 0.96)
+            if fitted then
+                factor = f or 0.96
+                if ref.Offset then finalOffset = ref.Offset end
+            end
+        end
+        if not factor then
+            local ts, ms = target.Size, mesh.Size
+            if ms.X > 0 and ms.Y > 0 and ms.Z > 0 then
+                factor = math.min((ts.X * 1.10)/ms.X, (ts.Y * 1.10)/ms.Y, (ts.Z * 1.10)/ms.Z, 0.92)
+                if factor > 0 and factor < 1 then pcall(function() mesh.Size = ms * factor end) end
+            end
+        end
+        if factor and factor > 0 then
             local prev = SkinSystem.gloveScale or 1.0
             if factor < prev then SkinSystem.gloveScale = factor end
         end
     end
-    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
+    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=finalOffset; motor.Parent=target
 end
 
 -- Empurra a faca (e demais partes presas ao Right Arm que nao sao luva/manga)
@@ -4080,7 +4091,7 @@ local function _pushKnifeOutward()
     local vm = SkinSystem.vm; if not vm then return end
     local scale = SkinSystem.gloveScale or 1.0
     if scale >= 0.98 then return end
-    local push = (1 - scale) * 0.6  -- 0.24 a 0.27 studs no pior caso
+    local push = math.min((1 - scale) * 0.45, 0.18)  -- pequeno: só tira a faca de dentro da luva
     for _, d in ipairs(vm:GetDescendants()) do
         if d:IsA("Motor6D") and d.Part0 and (d.Part0.Name == "Right Arm" or d.Part0.Name == "Left Arm") then
             local n = d.Part1 and d.Part1.Name or ""
@@ -4238,18 +4249,19 @@ local function spawnViewmodel(knife)
     SkinSystem.vm.Name = Config.Skins.SelectedKnife; SkinSystem.vm.Parent = Camera
     disableCollisions(SkinSystem.vm); hideOriginalKnife(knife)
     SkinSystem.gloveScale = 1.0
+    local gloveRefs = _collectGloveReferences(knife)
     if me.Parent.Name == "Terrorists" then
         local g = weapons:WaitForChild("T Glove", 5)
-        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5))
-        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5))
+        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5), gloveRefs and gloveRefs["Left Arm"])
+        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5), gloveRefs and gloveRefs["Right Arm"])
     else
         local sleeves = assets:WaitForChild("Sleeves", 5)
         local sl = sleeves and sleeves:WaitForChild("IDF", 5)
         local g  = weapons:WaitForChild("CT Glove", 5)
         attachAsset(sl,"Left Arm","Left Arm","Sleeve",CFrame.new(0,0,0.5))
-        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5))
+        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5), gloveRefs and gloveRefs["Left Arm"])
         attachAsset(sl,"Right Arm","Right Arm","Sleeve",CFrame.new(0,0,0.5))
-        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5))
+        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5), gloveRefs and gloveRefs["Right Arm"])
     end
     pcall(_pushKnifeOutward)
 
@@ -5023,8 +5035,13 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
     rec.iconToken = (rec.iconToken or 0) + 1
     local token = rec.iconToken
     _prepHUDImageLabel(img, rec)
+    -- Apply immediately. Some executors/games never report IsLoaded or a good
+    -- AssetFetchStatus for rbxthumb/rbxasset images even when the ImageLabel
+    -- renders fine; waiting for validation made the HUD/icon look broken. We
+    -- still preload/test candidates below, but the first valid candidate stays
+    -- visible instead of restoring the native icon.
     img.Image = candidates[1]
-    img.Visible = false
+    img.Visible = true
     rec.lastIcon = candidates[1]
     _hudDbg("image try", debugTag or "slot", "candidate=", candidates[1], "target=", img:GetFullName())
 
@@ -5043,7 +5060,7 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
             pcall(function()
                 _prepHUDImageLabel(img, rec)
                 img.Image = candidate
-                img.Visible = false
+                img.Visible = true
                 if rec.iconFallbackImage then _syncHUDFallbackGeometry(img, rec.iconFallbackImage) end
             end)
             local preloadStatus = "Unknown"
@@ -5069,7 +5086,7 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
             pcall(function()
                 _prepHUDImageLabel(img, rec)
                 img.Image = thumb
-                img.Visible = false
+                img.Visible = true
             end)
             task.wait(0.25)
             local ready, loaded, fetchStatus = _imageCandidateReady(img, thumb)
@@ -5077,12 +5094,14 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
             _hudDbg("thumb fallback", debugTag or "slot", "status=", tostring(fetchStatus), "loaded=", tostring(loaded), "ready=", tostring(ready))
         end
         if not anyLoaded then
-            _hudDbg("image rejected", debugTag or "slot", "all candidates failed")
+            _hudDbg("image unverified; keeping forced HUD icon", debugTag or "slot", tostring(finalIcon))
             pcall(function()
-                img.Visible = false
+                _prepHUDImageLabel(img, rec)
+                img.Image = finalIcon or candidates[1]
+                img.Visible = true
                 if rec.iconFallbackImage then rec.iconFallbackImage.Visible = false end
             end)
-            if onFailed then pcall(onFailed) end
+            if onLoaded then pcall(onLoaded, finalIcon or candidates[1]) end
             return
         end
         if rec.iconFallbackImage then pcall(function() rec.iconFallbackImage.Visible = false end) end
