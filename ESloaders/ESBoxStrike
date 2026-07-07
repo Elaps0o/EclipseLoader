@@ -3340,8 +3340,8 @@ function updateAimbot()
         if not part then continue end
         -- Skip visibility/smoke checks when scoped (scope raycasts are unreliable
         -- and would drop every eligible target, leaving the aim doing nothing).
-        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
-        if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
+        if not scoped and Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
+        if not scoped and Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
         local sp, on = Camera:WorldToViewportPoint(part.Position)
         if on then
             local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
@@ -3922,12 +3922,6 @@ end
 function _clearGloveSkinRuntime()
     pcall(function()
         for _, obj in ipairs(Camera:GetChildren()) do
-            -- Destroy any leftover custom glove/sleeve parts we attached.
-            for _, d in ipairs(obj:GetDescendants()) do
-                if d:GetAttribute("EclipseAttached") then
-                    pcall(function() d:Destroy() end)
-                end
-            end
             for _, side in ipairs({"Left Arm", "Right Arm"}) do
                 local arm = obj:FindFirstChild(side)
                 local glove = arm and arm:FindFirstChild("Glove")
@@ -4078,11 +4072,10 @@ local function attachAsset(folder, arm, model, name, offset, ref)
     local src = folder:WaitForChild(model, 5); if not src then return end
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
-    pcall(function() mesh:SetAttribute("EclipseAttached", true) end)
     -- Luva: apenas -4% do tamanho original. Nada de tentar encaixar pelo tamanho
     -- do braço, porque isso achatava a luva e virava um "cubinho" em alguns meshes.
     if name == "Glove" and mesh:IsA("BasePart") and target:IsA("BasePart") then
-        local factor = 0.86
+        local factor = 0.96
         _uniformScale(mesh, factor)
         local prev = SkinSystem.gloveScale or 1.0
         if factor < prev then SkinSystem.gloveScale = factor end
@@ -6463,7 +6456,7 @@ SkinGB:AddToggle("Knife_Toggle", { Text="CUSTOM KNIFE", Default=false,
             pcall(function() Toggles.Knife_Toggle:SetValue(false) end)
             return
         end
-        SkinSystem.scriptRunning=v; if not v then removeViewmodel(); pcall(_clearGloveSkinRuntime) end
+        SkinSystem.scriptRunning=v; if not v then removeViewmodel() end
         if IsAlive() then pcall(_applyHUDKnife, true) end
     end })
 SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
