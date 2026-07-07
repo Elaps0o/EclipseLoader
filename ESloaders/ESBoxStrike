@@ -3295,6 +3295,11 @@ function updateAimbot()
     FOVCircleInner.Radius = math.max(1, r - 1)
     FOVCircleInner.Position = mouse
 
+    local heldName = getHeldWeaponName and getHeldWeaponName() or nil
+    local isAWP     = heldName == "AWP"
+    local isSniper  = heldName and SniperWeapons[heldName] or false
+    local scoped = (isAWP or isSniper) and (isScopedIn and isScopedIn())
+
     local keyHeld = false
     pcall(function()
         local kp = Library.Options and Library.Options.Aimbot_Key
@@ -3303,21 +3308,14 @@ function updateAimbot()
     if not keyHeld then
         keyHeld = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
     end
-    local aiming = keyHeld or Config.TriggerBot.Enabled
+    -- Scoped snipers engage aim automatically (RMB scope counts as aiming).
+    local aiming = keyHeld or Config.TriggerBot.Enabled or scoped
     if not aiming then return end
-    -- Aim assist runs on ALL weapons now: leve snap + leve stick with a
-    -- 2-frame ease-out ramp on acquisition. AWP is a special case: hard
-    -- snap (smoothness = 0, no ramp) forced onto the Head, no lateral
-    -- prediction. Other snipers also skip lateral prediction.
-    local heldName = getHeldWeaponName and getHeldWeaponName() or nil
-    local isAWP     = heldName == "AWP"
-    local isSniper  = heldName and SniperWeapons[heldName] or false
 
     -- When scoped in (any sniper), the game locks the mouse and the reticle sits
     -- at screen center — GetMouseLocation() can lag / return offset coords, so
     -- reference viewport center and blow the FOV wide open so the scoped-in
     -- target is always eligible.
-    local scoped = (isAWP or isSniper) and (isScopedIn and isScopedIn())
     local mp
     if scoped then
         local vp = Camera.ViewportSize
@@ -3340,8 +3338,10 @@ function updateAimbot()
         end
 
         if not part then continue end
-        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
-        if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
+        -- Skip visibility/smoke checks when scoped (scope raycasts are unreliable
+        -- and would drop every eligible target, leaving the aim doing nothing).
+        if not scoped and Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
+        if not scoped and Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
         local sp, on = Camera:WorldToViewportPoint(part.Position)
         if on then
             local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
@@ -4049,26 +4049,13 @@ local function _fitGloveToReference(mesh, ref, maxScale)
     return true
 end
 
-local function attachAsset(folder, arm, model, name, offset, scale)
+local function attachAsset(folder, arm, model, name, offset)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
-    local finalOffset = offset
-    if type(scale) == "table" then
-        if scale.Reference then
-            if scale.Reference.Offset then finalOffset = scale.Reference.Offset end
-            if not _fitGloveToReference(mesh, scale.Reference, scale.MaxScale) and scale.FallbackScale then
-                _uniformScale(mesh, scale.FallbackScale)
-            end
-        elseif scale.FallbackScale then
-            _uniformScale(mesh, scale.FallbackScale)
-        end
-    elseif scale then
-        _uniformScale(mesh, scale)
-    end
-    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=finalOffset; motor.Parent=target
+    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
 -- Sound lookup order:
@@ -4217,26 +4204,18 @@ local function spawnViewmodel(knife)
     SkinSystem.vm = camTpl:Clone()
     SkinSystem.vm.Name = Config.Skins.SelectedKnife; SkinSystem.vm.Parent = Camera
     disableCollisions(SkinSystem.vm); hideOriginalKnife(knife)
-    local gloveRefs = _collectGloveReferences(knife)
-    local function gloveFit(side)
-        return { Reference = gloveRefs and gloveRefs[side] or nil, MaxScale = 1, FallbackScale = 0.88 }
-    end
-
-    -- Fit custom glove to the player's native glove dimensions/offset. This
-    -- keeps the full hand covered but prevents the skinned clone from becoming
-    -- wider/deeper than the original glove and swallowing the knife.
     if me.Parent.Name == "Terrorists" then
         local g = weapons:WaitForChild("T Glove", 5)
-        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.55),gloveFit("Left Arm"))
-        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.55),gloveFit("Right Arm"))
+        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5))
+        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5))
     else
         local sleeves = assets:WaitForChild("Sleeves", 5)
         local sl = sleeves and sleeves:WaitForChild("IDF", 5)
         local g  = weapons:WaitForChild("CT Glove", 5)
         attachAsset(sl,"Left Arm","Left Arm","Sleeve",CFrame.new(0,0,0.5))
-        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.55),gloveFit("Left Arm"))
+        attachAsset(g,"Left Arm","Left Arm","Glove",CFrame.new(0,0,-1.5))
         attachAsset(sl,"Right Arm","Right Arm","Sleeve",CFrame.new(0,0,0.5))
-        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.55),gloveFit("Right Arm"))
+        attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5))
     end
 
     local ac = SkinSystem.vm:FindFirstChildOfClass("AnimationController") or SkinSystem.vm:FindFirstChildOfClass("Animator")
@@ -5418,7 +5397,7 @@ function _queueHUDSlotApply(slotFrame)
     if rec then rec.queued = true end
     task.delay(0.04, function()
         if rec then rec.queued = false end
-        if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() and slotFrame and slotFrame.Parent then pcall(function() _applyOneSlot(slotFrame, false) end) end
+        if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() and not _isSpectatingOther() and slotFrame and slotFrame.Parent then pcall(function() _applyOneSlot(slotFrame, false) end) end
     end)
 end
 
