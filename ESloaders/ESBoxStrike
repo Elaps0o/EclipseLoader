@@ -4055,33 +4055,23 @@ local function attachAsset(folder, arm, model, name, offset, ref)
     local src = folder:WaitForChild(model, 5); if not src then return end
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
-    local finalOffset = offset
-    -- Luva: usa como base a luva original do viewmodel atual quando ela existe.
-    -- Isso reduz só o volume ocupado (sem esticar eixo por eixo), cobre a mão e
-    -- evita a caixa gigante atravessando a faca. Se não houver referência, cai
-    -- num ajuste uniforme pelo tamanho do Left/Right Arm.
+    -- Luva: só encolhe se estiver claramente maior que o braço (evita "comer" a faca).
+    -- Nunca amplia, nunca sobrescreve offset — assim a luva sempre aparece na mão.
     if name == "Glove" and mesh:IsA("BasePart") and target:IsA("BasePart") then
-        local factor
-        if ref and ref.Size then
-            local fitted, f = _fitGloveToReference(mesh, ref, 0.96)
-            if fitted then
-                factor = f or 0.96
-                if ref.Offset then finalOffset = ref.Offset end
+        local ts, ms = target.Size, mesh.Size
+        if ms.X > 0 and ms.Y > 0 and ms.Z > 0 then
+            -- alvo: no máximo ~1.35x o braço em qualquer eixo
+            local fx, fy, fz = (ts.X * 1.35)/ms.X, (ts.Y * 1.35)/ms.Y, (ts.Z * 1.35)/ms.Z
+            local factor = math.min(fx, fy, fz, 1.0)
+            factor = math.max(factor, 0.70) -- nunca menor que 0.70 -> nunca some
+            if factor < 1.0 then
+                pcall(function() mesh.Size = ms * factor end)
+                local prev = SkinSystem.gloveScale or 1.0
+                if factor < prev then SkinSystem.gloveScale = factor end
             end
-        end
-        if not factor then
-            local ts, ms = target.Size, mesh.Size
-            if ms.X > 0 and ms.Y > 0 and ms.Z > 0 then
-                factor = math.min((ts.X * 1.10)/ms.X, (ts.Y * 1.10)/ms.Y, (ts.Z * 1.10)/ms.Z, 0.92)
-                if factor > 0 and factor < 1 then pcall(function() mesh.Size = ms * factor end) end
-            end
-        end
-        if factor and factor > 0 then
-            local prev = SkinSystem.gloveScale or 1.0
-            if factor < prev then SkinSystem.gloveScale = factor end
         end
     end
-    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=finalOffset; motor.Parent=target
+    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
 -- Empurra a faca (e demais partes presas ao Right Arm que nao sao luva/manga)
