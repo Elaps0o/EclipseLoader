@@ -3995,11 +3995,10 @@ local function _applySkinSourceToPart(target, source)
     end)
 end
 
--- Uniform mesh scale. Only touches BaseParts, so a single-MeshPart glove/sleeve
--- shrinks in place without breaking welds. Skips models with sub-parts (weld
--- offsets wouldn't scale together). For Part + SpecialMesh gloves, also scales
--- the visual mesh itself; otherwise changing Size can leave the visible glove
--- wrong while the hitbox shrinks.
+-- Uniform mesh scale. The knife viewmodel attaches T/CT gloves separately, so
+-- the glove must be shrunk as one whole piece; axis-only scaling makes knives
+-- look abnormal because the glove grows in one direction while the hand/knife
+-- offset stays original.
 local function _uniformScale(inst, factor)
     if not inst or not factor or factor == 1 then return end
     if inst:IsA("BasePart") then
@@ -4015,27 +4014,6 @@ local function _uniformScale(inst, factor)
             end
         else
             pcall(function() inst.Size = inst.Size * factor end)
-        end
-    end
-end
-
--- Escala anisotropica (Vector3): permite estreitar os lados e alongar a
--- ponta da luva sem virar cubinho nem vazar da mao do player.
-local function _axisScale(inst, vec)
-    if not inst or not vec then return end
-    if inst:IsA("BasePart") then
-        local visualMeshes = {}
-        for _, ch in ipairs(inst:GetChildren()) do
-            if ch:IsA("SpecialMesh") or ch:IsA("BlockMesh") or ch:IsA("CylinderMesh") then
-                table.insert(visualMeshes, ch)
-            end
-        end
-        if #visualMeshes > 0 then
-            for _, ch in ipairs(visualMeshes) do
-                pcall(function() ch.Scale = ch.Scale * vec end)
-            end
-        else
-            pcall(function() inst.Size = inst.Size * vec end)
         end
     end
 end
@@ -4090,6 +4068,8 @@ local function _fitGloveToReference(mesh, ref, maxScale)
     return true, factor
 end
 
+local GLOVE_KNIFE_UNIFORM_SCALE = 0.86
+
 local function attachAsset(folder, arm, model, name, offset, ref)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
@@ -4097,16 +4077,17 @@ local function attachAsset(folder, arm, model, name, offset, ref)
     local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
     pcall(function() mesh:SetAttribute("EclipseAttached", true) end)
-    -- Luva: encolhe -5% nos lados (X) para nao vazar da mao do player e
-    -- estica +5% para frente/cima (Y e Z) so o suficiente para cobrir a mao,
-    -- sem virar cubinho e sem sumir o modelo.
+    -- Luva em knife: voltar ao comportamento antigo, diminuindo o modelo todo
+    -- por igual a partir do tamanho original. Isso evita o bug de ficar grande
+    -- ou torta somente com knives.
     if name == "Glove" and mesh:IsA("BasePart") and target:IsA("BasePart") then
-        local vec = Vector3.new(0.95, 1.05, 1.05)
-        _axisScale(mesh, vec)
-        -- media geometrica ~1.016 → mantem gloveScale ~1 (nao empurra faca).
-        local avg = (vec.X * vec.Y * vec.Z) ^ (1/3)
+        local fitted, factor = _fitGloveToReference(mesh, ref, GLOVE_KNIFE_UNIFORM_SCALE)
+        if not fitted then
+            factor = GLOVE_KNIFE_UNIFORM_SCALE
+            _uniformScale(mesh, factor)
+        end
         local prev = SkinSystem.gloveScale or 1.0
-        if avg < prev then SkinSystem.gloveScale = avg end
+        if factor and factor > 0 and factor < prev then SkinSystem.gloveScale = factor end
     end
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
