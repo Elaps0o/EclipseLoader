@@ -827,6 +827,115 @@ local Tabs = {
 
 
 local Session = Tabs.Home:AddLeftGroupbox("SESSION", "user")
+
+-- ================================================================
+-- AUTO-TOOLTIP: injects a floating hover description on EVERY control
+-- (toggle, button, dropdown, slider, input, colorpicker, keypicker)
+-- that doesn't already declare a Tooltip. Uses a curated dictionary
+-- with sensible defaults per control-type keyed by the .Text field.
+-- Patches the Groupbox metatable ONCE, so every subsequent
+-- Add* call gets a tooltip automatically without touching call sites.
+-- ================================================================
+do
+    local TIP_MAP = {
+        -- Aim
+        ["ENABLE AIMBOT"]      = "Master switch: aims at the closest enemy inside your FOV while the aim key is held.",
+        ["DRAW FOV"]           = "Draws the circular FOV boundary used by the aimbot.",
+        ["DISABLE IN SMOKE"]   = "Aimbot ignores targets behind smoke grenades.",
+        ["DISABLE IN FLASH"]   = "Aimbot pauses while you are flashed.",
+        ["ENABLE TRIGGER"]     = "Automatically fires when your crosshair crosses a valid enemy.",
+        ["TARGET PART"]        = "Body part the aimbot locks on to.",
+        -- ESP
+        ["ENABLE ESP"]         = "Master switch for the visual ESP overlay.",
+        ["CORNER BOX"]         = "Draws stylized corner brackets around enemy hitboxes.",
+        ["NAMES"]              = "Shows enemy display name above their head.",
+        ["DISTANCE"]           = "Shows enemy distance in meters.",
+        ["HEALTH BAR"]         = "Vertical HP bar next to each enemy.",
+        ["TARGET LINE"]        = "Draws a line from screen edge to each enemy.",
+        ["ESP WEAPON"]         = "Adds the enemy's current weapon to the ESP tag.",
+        ["ESP AMMO"]           = "Thin white bar at the bottom of your screen showing your current weapon's ammo.",
+        ["ESP CHARMS"]         = "Full-body chams (colored silhouette) on enemies.",
+        ["ESP C4"]             = "Highlights the planted C4.",
+        ["C4 PANEL"]           = "On-screen bomb timer + defuse info.",
+        ["DROPPED WEAPONS"]    = "Marks dropped weapons in the world.",
+        ["MOLOTOVS"]           = "Highlights active molotov fires.",
+        ["SMOKES"]             = "Highlights active smoke clouds.",
+        ["GRENADE WARNING"]    = "On-screen warning when a nade lands near you.",
+        ["GRENADE PREDICTION"] = "Draws grenade trajectory in real time.",
+        -- Crosshair
+        ["SNIPER CROSSHAIR"]   = "Custom crosshair while scoping any sniper.",
+        ["CENTER DOT"]         = "Adds a central dot to the sniper crosshair.",
+        -- RCS
+        ["RCS"]                = "Recoil-control system: compensates weapon recoil on the client.",
+        -- Skins
+        ["ENABLE SKIN CHANGER"] = "Overrides weapon skins visually (client-side only).",
+        ["CUSTOM KNIFE"]        = "Replaces your knife with the selected model.",
+        ["SELECT KNIFE"]        = "Choose which knife model to force.",
+        -- Movement
+        ["AUTO STRAFER"]        = "Automatic air-strafe assist. Bind a key to hold-activate.",
+        ["JUMPBUG"]             = "Automatic jump-bug on landing.",
+        ["EDGEBUG"]             = "Automatic edge-bug detection & trigger.",
+        ["NO FALL DAMAGE"]      = "Cancels fall damage on the client.",
+        -- World
+        ["WEATHER"]             = "Overrides the map weather effect.",
+        ["WORLD COLOR"]         = "Recolors the entire world using the selected tint.",
+        -- Misc
+        ["NO CAMERA RECOIL"]    = "Removes camera kick from firing.",
+        ["IDENTIFY MONEY"]      = "Reveals every player's cash total during warmup as a green tag above their head. Auto-hides when the round starts.",
+        ["ANTI FLASH"]          = "Suppresses flashbang blindness effects.",
+        ["ANTI SMOKE"]          = "Removes smoke particles from the world.",
+        ["SPECTATOR LIST"]      = "Shows who is currently spectating you (top-right).",
+        -- Menu
+        ["TOGGLE GUI KEY"]      = "Which key opens/closes the Eclipse GUI.",
+        ["Copy Discord"]        = "Copies the Discord invite to your clipboard.",
+        ["Copy Website"]        = "Copies the Eclipse Hub website URL to your clipboard.",
+        ["Rejoin"]              = "Unloads Eclipse and teleports you back to this server.",
+        ["Suicide"]             = "Kicks yourself to instantly respawn / leave.",
+        ["Unload"]              = "Fully unloads Eclipse Hub and restores every override.",
+        ["Copy Discord Link"]   = "Copies the Discord invite to your clipboard.",
+        ["Copy Website Link"]   = "Copies the Eclipse Hub website URL to your clipboard.",
+        -- Stretch / extras
+        ["SCREEN STRETCH"]      = "Applies a screen-stretch / FOV override with client-side bypass.",
+        ["KEYBIND LIST"]        = "Shows the on-screen list of active keybinds.",
+    }
+    local function _tipText(text, kind)
+        if not text or text == "" then return nil end
+        local m = TIP_MAP[text] or TIP_MAP[text:upper()]
+        if m then return m end
+        if kind == "toggle"     then return "Toggle: "     .. tostring(text)
+        elseif kind == "button" then return "Action: "     .. tostring(text)
+        elseif kind == "dropdown" then return "Select the value for: " .. tostring(text)
+        elseif kind == "slider" then return "Adjust: "     .. tostring(text)
+        elseif kind == "input"  then return "Enter: "      .. tostring(text)
+        elseif kind == "color"  then return "Color: "      .. tostring(text)
+        elseif kind == "key"    then return "Bind: "       .. tostring(text) end
+        return tostring(text)
+    end
+    local function _apply(info, kind)
+        if type(info) ~= "table" then return end
+        if info.Tooltip == nil or info.Tooltip == "" then
+            info.Tooltip = _tipText(info.Text or info.Name, kind)
+        end
+    end
+    local mt = getmetatable(Session)
+    local target = (mt and type(mt.__index) == "table") and mt.__index or Session
+    local function _wrap(name, kind, argIdx)
+        local orig = target[name]
+        if type(orig) ~= "function" then return end
+        target[name] = function(self, a, b, ...)
+            if argIdx == 1 then _apply(a, kind) else _apply(b, kind) end
+            return orig(self, a, b, ...)
+        end
+    end
+    _wrap("AddToggle",      "toggle",   2)
+    _wrap("AddButton",      "button",   1)
+    _wrap("AddDropdown",    "dropdown", 2)
+    _wrap("AddSlider",      "slider",   2)
+    _wrap("AddInput",       "input",    2)
+    _wrap("AddColorPicker", "color",    2)
+    _wrap("AddKeyPicker",   "key",      2)
+end
+
 local lblUser    = Session:AddLabel("Username: " .. LocalPlayer.Name)
 local lblGame    = Session:AddLabel("Game: "     .. GameName)
 local lblSess    = Session:AddLabel("Session: 00:00:00")
@@ -1846,18 +1955,52 @@ function _espGetPlayerAmmo(plr, weaponName)
     return math.max(0, cur), mx
 end
 
--- Cheap cached warmup detector for ESP money gating.
+-- Warmup detector — multi-source: workspace GameState attribute, the
+-- Round/Match value objects the game exposes, and the MatchLogging /
+-- RoundHandler module state used by the kov dump. Cached for perf.
 local _warmT, _warmVal = 0, false
 function _isWarmup()
     local t = tick()
-    if t - _warmT < 0.5 then return _warmVal end
+    if t - _warmT < 0.35 then return _warmVal end
     _warmT = t
-    local st
-    pcall(function() st = workspace:GetAttribute("GameState") end)
-    local s = tostring(st or ""):lower()
-    _warmVal = (s:find("warm") ~= nil) or (s:find("wait") ~= nil) or (s:find("prep") ~= nil) or (s:find("freeze") ~= nil) or (s:find("intermission") ~= nil)
+    local hits = {}
+    local function _push(v) if v ~= nil then hits[#hits+1] = tostring(v):lower() end end
+    pcall(function() _push(workspace:GetAttribute("GameState")) end)
+    pcall(function() _push(workspace:GetAttribute("RoundState")) end)
+    pcall(function() _push(workspace:GetAttribute("MatchState")) end)
+    pcall(function() _push(workspace:GetAttribute("Phase")) end)
+    pcall(function() _push(ReplicatedStorage:GetAttribute("GameState")) end)
+    pcall(function() _push(ReplicatedStorage:GetAttribute("RoundState")) end)
+    pcall(function()
+        local status = ReplicatedStorage:FindFirstChild("Status", true) or ReplicatedStorage:FindFirstChild("GameStatus", true)
+        if status and (status:IsA("StringValue") or status:IsA("IntValue")) then _push(status.Value) end
+    end)
+    pcall(function()
+        for _, m in ipairs(ReplicatedStorage:GetDescendants()) do
+            if m:IsA("ModuleScript") and (m.Name == "MatchLogging" or m.Name == "RoundHandler" or m.Name == "GameLogic") then
+                local ok, mod = pcall(require, m)
+                if ok and type(mod) == "table" then
+                    _push(mod.State) _push(mod.CurrentState) _push(mod.Phase) _push(mod.RoundState)
+                end
+                break
+            end
+        end
+    end)
+    -- Buy area / freeze time / warmup flags on the local player.
+    pcall(function() _push(LocalPlayer:GetAttribute("Warmup")) end)
+    pcall(function() if LocalPlayer:GetAttribute("BuyMenu") == true then hits[#hits+1] = "warmup" end end)
+    local match = false
+    for _, s in ipairs(hits) do
+        if s:find("warm") or s:find("wait") or s:find("prep") or s:find("freeze")
+           or s:find("intermission") or s:find("pregame") or s:find("buy")
+           or s == "0" or s == "1" then
+            match = true; break
+        end
+    end
+    _warmVal = match
     return _warmVal
 end
+
 
 -- Draw the premium ESP tag ABOVE the enemy's head.
 
@@ -3854,6 +3997,8 @@ end
 local function spawnViewmodel(knife)
     if SkinSystem.spawned or not SkinSystem.scriptRunning then return end
     local me = IsAlive(); if not me then return end
+    if _hudDeadUiVisible and _hudDeadUiVisible() then return end
+    if _isSpectatingOther and _isSpectatingOther() then return end
     _sanitizeSkinConfig()
     local ok, err = pcall(function()
     local assets = ReplicatedSt:WaitForChild("Assets", 5); if not assets then return end
@@ -3919,6 +4064,8 @@ end
 
 function _applySelectedGloveSkin()
     if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+    if _hudDeadUiVisible and _hudDeadUiVisible() then return end
+    if _isSpectatingOther and _isSpectatingOther() then return end
     local gloveSkin = Config.Skins.SelectedSkins["Sports Gloves"]; if not gloveSkin or gloveSkin == "" then return end
     pcall(function()
         local gf = SkinsFolder:FindFirstChild("Sports Gloves"); if not gf then return end
@@ -3944,6 +4091,8 @@ end
 
 local function applyWeaponSkin(model, forcedSkin)
     if not SkinsFolder or not model or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+    if _hudDeadUiVisible and _hudDeadUiVisible() then return end
+    if _isSpectatingOther and _isSpectatingOther() then return end
     pcall(_applySelectedGloveSkin)
     local skin = forcedSkin or Config.Skins.SelectedSkins[model.Name]; if not skin then return end
     pcall(function()
@@ -3974,7 +4123,7 @@ end
 -- UI-only: never loads weapon modules and never edits real weapon/viewmodel
 -- instances. It replaces only the HUD melee slot visuals and leaves the real
 -- weapon identity intact, so death/respawn/equip reloads keep following the game.
-local HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={}, viewer=nil, debugPrints=0 }
+local HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={}, viewer=nil, debugPrints=0, lastDeadScan=0, deadUi=false }
 
 -- Kept as a defensive no-op. In the previous build this created an external
 -- ScreenGui (`EclipseHUDOverlayRoot`) parented to gethui()/CoreGui, and every
@@ -4319,7 +4468,52 @@ function _cleanHUDWeaponText(t)
     if t:sub(1, 3) == "\xE2\x98\x85" then t = t:sub(4) end
     t = t:gsub("^%s+", ""):gsub("%s+$", "")
     if t == "" then return nil end
+    local low = t:lower()
+    if low == "primary" or low == "secondary" or low == "melee" or low == "knife" or low == "weapon" then return nil end
     return t
+end
+
+function _restoreHUDNameVisibility(rec, nameLbl)
+    if not nameLbl then return end
+    pcall(function()
+        if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
+        if rec then rec.currentOverlayText = nil; rec.eclNameHidden = false end
+        local tx = (rec and rec.nameTextTransparency ~= nil) and rec.nameTextTransparency or 0
+        if type(tx) ~= "number" or tx >= 0.95 then tx = 0 end
+        local sx = (rec and rec.nameTextStrokeTransparency ~= nil) and rec.nameTextStrokeTransparency or 1
+        if type(sx) ~= "number" then sx = 1 end
+        nameLbl.TextTransparency = tx
+        nameLbl.TextStrokeTransparency = sx
+        nameLbl.Visible = true
+    end)
+end
+
+function _restoreHUDIconVisibility(rec, iconLbl, iconViewport)
+    if rec then rec.iconToken = (rec.iconToken or 0) + 1 end
+    if rec and rec.iconOverlay then pcall(function() rec.iconOverlay.Visible = false end) end
+    if rec and rec.iconImage then pcall(function() rec.iconImage:Destroy() end); rec.iconImage = nil end
+    if rec and rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end); rec.iconFallbackImage = nil end
+    if rec then _destroyHUDIconViewport(rec) end
+    if iconLbl then
+        pcall(function()
+            -- Never write a cached Image back here. The game owns the real HUD
+            -- icon and may be rendering a spectated player's AK/Glock/etc. A
+            -- stale cached image is exactly what produced FAMAS/stacked icons.
+            if rec and rec.iconImageColor3 ~= nil then iconLbl.ImageColor3 = rec.iconImageColor3 end
+            if rec and rec.iconImageRectOffset ~= nil then iconLbl.ImageRectOffset = rec.iconImageRectOffset end
+            if rec and rec.iconImageRectSize ~= nil then iconLbl.ImageRectSize = rec.iconImageRectSize end
+            if rec and rec.iconScaleType ~= nil then iconLbl.ScaleType = rec.iconScaleType end
+            iconLbl.ImageTransparency = (rec and rec.iconImageTransparency ~= nil) and rec.iconImageTransparency or 0
+            if rec and rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible else iconLbl.Visible = true end
+        end)
+    end
+    if iconViewport then
+        pcall(function()
+            iconViewport.BackgroundTransparency = rec and rec.iconViewportTransparency or iconViewport.BackgroundTransparency
+            if rec and rec.iconViewportVisible ~= nil then iconViewport.Visible = rec.iconViewportVisible else iconViewport.Visible = true end
+        end)
+    end
+    if rec then rec.eclIconHidden = false; rec.iconAppliedKey = nil end
 end
 
 -- =====================================================================
@@ -4685,6 +4879,10 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
             end
         end
         if rec.iconToken ~= token or not img.Parent then return end
+        if _canApplyHUDSkin and not _canApplyHUDSkin() then
+            pcall(function() img.Visible = false end)
+            return
+        end
         local thumb = _assetThumb(icon)
         if not anyLoaded and thumb then
             finalIcon = thumb
@@ -4705,6 +4903,10 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
                 if rec.iconFallbackImage then rec.iconFallbackImage.Visible = false end
             end)
             if onFailed then pcall(onFailed) end
+            return
+        end
+        if _canApplyHUDSkin and not _canApplyHUDSkin() then
+            pcall(function() img.Visible = false end)
             return
         end
         if rec.iconFallbackImage then pcall(function() rec.iconFallbackImage.Visible = false end) end
@@ -4832,26 +5034,7 @@ function ShowHUDAssetViewer()
 end
 
 function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
-    if rec then rec.iconToken = (rec.iconToken or 0) + 1 end
-    if rec and rec.iconImage then pcall(function() rec.iconImage:Destroy() end); rec.iconImage = nil end
-    if rec and rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end); rec.iconFallbackImage = nil end
-    if iconLbl then
-        pcall(function()
-            if rec and rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end
-            if rec and rec.iconImageColor3 ~= nil then iconLbl.ImageColor3 = rec.iconImageColor3 end
-            if rec and rec.iconImageRectOffset ~= nil then iconLbl.ImageRectOffset = rec.iconImageRectOffset end
-            if rec and rec.iconImageRectSize ~= nil then iconLbl.ImageRectSize = rec.iconImageRectSize end
-            if rec and rec.iconScaleType ~= nil then iconLbl.ScaleType = rec.iconScaleType end
-            iconLbl.ImageTransparency = rec and rec.iconImageTransparency or iconLbl.ImageTransparency
-            if rec and rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end
-        end)
-    end
-    if iconViewport then
-        pcall(function()
-            iconViewport.BackgroundTransparency = rec and rec.iconViewportTransparency or iconViewport.BackgroundTransparency
-            if rec and rec.iconViewportVisible ~= nil then iconViewport.Visible = rec.iconViewportVisible end
-        end)
-    end
+    _restoreHUDIconVisibility(rec, iconLbl, iconViewport)
 end
 
 function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
@@ -4860,7 +5043,8 @@ function _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
         if nameLbl and rec.nameLblRef ~= nameLbl and nameLbl:GetAttribute("EclipseHUD") ~= true then
             rec.nameLblRef = nameLbl
             if not rec.applying and nameLbl.Text ~= rec.currentOverlayText then
-                rec.nameText = nameLbl.Text
+                local clean = _cleanHUDWeaponText(nameLbl.Text)
+                if clean then rec.nameText = nameLbl.Text; rec.baseName = clean end
                 rec.nameTextTransparency = nameLbl.TextTransparency
                 rec.nameTextStrokeTransparency = nameLbl.TextStrokeTransparency
             end
@@ -4924,49 +5108,125 @@ function _restoreHUDName(rec, nameLbl)
         -- rewrites it every frame with the real weapon name. Writing our
         -- cached value would stamp stale text like "Primary"/"Secondary"
         -- or "" (invisible) and the game wouldn't refresh it back.
-        nameLbl.TextTransparency = (rec and rec.nameTextTransparency ~= nil) and rec.nameTextTransparency or 0
-        nameLbl.TextStrokeTransparency = (rec and rec.nameTextStrokeTransparency ~= nil) and rec.nameTextStrokeTransparency or 1
-        nameLbl.Visible = true
+        if rec and rec.eclNameApplied and rec.baseName and nameLbl.Text == rec.eclNameText then
+            nameLbl.Text = rec.baseName
+        end
+        if rec then rec.eclNameApplied = false; rec.eclNameText = nil end
+        _restoreHUDNameVisibility(rec, nameLbl)
     end)
 end
 
 function _applyHUDNameOverlay(rec, nameLbl, text)
     if not (rec and nameLbl and text and text ~= "") then return end
-    if not rec.nameOverlay or not rec.nameOverlay.Parent then
-        rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay")
-    end
-    if not rec.nameOverlay then return end
+    -- New safer path: write the native slot label directly while alive/local.
+    -- The old clone-overlay path hid the real label and could leave blank names
+    -- if Roblox rebuilt the HUD while dead/spectating. Direct text is visible,
+    -- easy to detect, and restored only if it is still our exact string.
     pcall(function()
-        _syncHUDOverlayGeometry(nameLbl, rec.nameOverlay)
-        rec.nameOverlay.Text = text
+        if rec.nameOverlay then rec.nameOverlay.Visible = false end
         rec.currentOverlayText = text
-        rec.nameOverlay.TextColor3 = nameLbl.TextColor3
-        rec.nameOverlay.TextTransparency = 0
-        rec.nameOverlay.TextStrokeTransparency = 1
-        rec.nameOverlay.Visible = true
-        rec.nameOverlay.ZIndex = math.max((nameLbl.ZIndex or 1) + 5, 10)
-        -- Hide the real game label via transparency only. Never mutate
-        -- .Text: the game re-emits its own weapon name each frame, so
-        -- writing to it causes flicker and permanent invisible / "Primary"
-        -- bugs when we later restore.
-        nameLbl.TextTransparency = 1
+        rec.eclNameApplied = true
+        rec.eclNameText = text
+        nameLbl.Text = text
+        nameLbl.TextTransparency = 0
         nameLbl.TextStrokeTransparency = 1
+        nameLbl.Visible = true
     end)
+end
+
+function _hudSlotGenericName(v)
+    v = tostring(v or ""):lower()
+    return v == "" or v == "primary" or v == "secondary" or v == "melee" or v == "knife" or v == "weapon" or v == "inventory"
+end
+
+function _canonicalHUDWeaponName(v)
+    if type(v) ~= "string" or v == "" then return nil end
+    v = _cleanHUDWeaponText(v) or v
+    v = v:gsub("_", " "):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    if _hudSlotGenericName(v) then return nil end
+    local aliases = {
+        ["ak47"]="AK-47", ["ak 47"]="AK-47", ["ka 47"]="AK-47", ["ka-47"]="AK-47",
+        ["glock"]="Glock-18", ["glock18"]="Glock-18", ["glock 18"]="Glock-18",
+        ["famas"]="FAMAS", ["galil"]="Galil AR", ["galil ar"]="Galil AR",
+        ["deagle"]="Desert Eagle", ["desert eagle"]="Desert Eagle",
+        ["usp"]="USP-S", ["usp s"]="USP-S", ["usp-s"]="USP-S",
+        ["m4a1s"]="M4A1-S", ["m4a1 s"]="M4A1-S", ["m4a1-s"]="M4A1-S",
+        ["m4"]="M4A4", ["m4a4"]="M4A4",
+        ["ct knife"]="CT Knife", ["t knife"]="T Knife",
+    }
+    local low = v:lower():gsub("%-", " "):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    local compact = low:gsub("%s+", "")
+    return aliases[low] or aliases[compact] or v
+end
+
+function _hudKnownWeaponName(v)
+    local n = _canonicalHUDWeaponName(v); if not n then return nil end
+    if KNIVES[n] or (SkinsFolder and SkinsFolder:FindFirstChild(n)) or _weaponModule(n) then return n end
+    for _, w in ipairs(AIM_WEAPON_LIST or {}) do if w == n then return n end end
+    return nil
+end
+
+function _hudWeaponFromValue(v)
+    if type(v) == "string" then
+        local ok, decoded = pcall(function() return HttpService:JSONDecode(v) end)
+        if ok and type(decoded) == "table" then
+            return _hudWeaponFromValue(decoded.Name or decoded.Weapon or decoded.WeaponName or decoded.Item or decoded.Value)
+        end
+        return _hudKnownWeaponName(v)
+    end
+    return nil
+end
+
+function _inferHUDSlotWeapon(slotFrame, nameLbl)
+    local slotName = tostring(slotFrame and slotFrame.Name or "")
+    local slotLow = slotName:lower()
+    if slotLow:find("melee", 1, true) or slotLow:find("knife", 1, true) then return _localKnifeByTeam() end
+    local keys = {"Weapon", "WeaponName", "CurrentWeapon", "CurrentEquipped", "Item", "ItemName", "DisplayName", "Name"}
+    local function scanInst(inst)
+        if not inst then return nil end
+        for _, key in ipairs(keys) do
+            local ok, val = pcall(function() return inst:GetAttribute(key) end)
+            local w = ok and _hudWeaponFromValue(val) or nil
+            if w then return w end
+        end
+        return _hudKnownWeaponName(inst.Name)
+    end
+    for _, root in ipairs({slotFrame, slotFrame and slotFrame:FindFirstChild("Weapon")}) do
+        local w = scanInst(root); if w then return w end
+        if root then
+            for _, d in ipairs(root:GetDescendants()) do
+                if not tostring(d.Name):find("^EclipseHUD") and d:GetAttribute("EclipseHUD") ~= true then
+                    if d:IsA("TextLabel") or d:IsA("TextButton") then
+                        w = _hudKnownWeaponName(d.Text); if w then return w end
+                    end
+                    w = scanInst(d); if w then return w end
+                end
+            end
+        end
+    end
+    return nil
 end
 
 function _slotWeaponKey(slotFrame, nameLbl)
     local rec = HUDSkin.slots[slotFrame]
     local clean = _cleanHUDWeaponText(nameLbl.Text)
-    if clean and clean ~= "" then
-        if rec and nameLbl.Text ~= rec.currentOverlayText then
-            rec.baseName = clean
+    local known = _hudKnownWeaponName(clean)
+    if known and known ~= "" then
+        if rec and nameLbl.Text ~= rec.currentOverlayText and not rec.applying then
+            rec.baseName = known
             rec.nameText = nameLbl.Text
-            rec.nameTextTransparency = nameLbl.TextTransparency
+            if type(nameLbl.TextTransparency) == "number" and nameLbl.TextTransparency < 0.95 then rec.nameTextTransparency = nameLbl.TextTransparency end
             rec.nameTextStrokeTransparency = nameLbl.TextStrokeTransparency
         end
-        return clean
+        return known
     end
-    return rec and rec.baseName or nil
+    local inferred = _inferHUDSlotWeapon(slotFrame, nameLbl)
+    if inferred then
+        if rec then rec.baseName = inferred end
+        return inferred
+    end
+    if rec and rec.eclNameApplied and nameLbl.Text == rec.eclNameText and _hudKnownWeaponName(rec.baseName) then return rec.baseName end
+    return nil
 end
 
 function _isHUDMeleeSlot(slotFrame, weaponKey)
@@ -5026,7 +5286,9 @@ function _queueHUDSlotApply(slotFrame)
     if rec then rec.queued = true end
     task.delay(0.04, function()
         if rec then rec.queued = false end
-        if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() and slotFrame and slotFrame.Parent then pcall(function() _applyOneSlot(slotFrame, false) end) end
+        if scriptRunning and Config.Skins.SkinChangerEnabled and slotFrame and slotFrame.Parent then
+            if _canApplyHUDSkin() then pcall(function() _applyOneSlot(slotFrame, false) end) else pcall(function() _recoverNativeHUDSlot(slotFrame, rec) end) end
+        end
     end)
 end
 
@@ -5048,56 +5310,85 @@ function _isSpectatingOther()
     return owner ~= nil and owner ~= LocalPlayer
 end
 
+function _hudDeadUiVisible()
+    -- Game can leave our character folder around while the HUD is already in
+    -- death/spectator mode. This text gate prevents skinchanger HUD writes in
+    -- that state even if IsAlive() returns a stale character model.
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui"); if not pg then return false end
+    local now = tick()
+    if HUDSkin.deadUiCache ~= nil and (now - (HUDSkin.lastDeadScan or 0)) < 0.25 then return HUDSkin.deadUiCache end
+    HUDSkin.lastDeadScan = now
+    local dead = false
+    pcall(function()
+        local main = pg:FindFirstChild("MainGui") or pg
+        for _, d in ipairs(main:GetDescendants()) do
+            if d:IsA("TextLabel") or d:IsA("TextButton") then
+                local txt = tostring(d.Text or ""):upper()
+                if d.Visible ~= false and (txt:find("RESPAWN NEXT ROUND", 1, true) or txt:find("YOU WILL RESPAWN", 1, true)) then
+                    dead = true; break
+                end
+            end
+        end
+    end)
+    HUDSkin.deadUiCache = dead
+    return dead
+end
+
+function _canApplyHUDSkin()
+    return Config.Skins.SkinChangerEnabled and IsAlive() and not _isSpectatingOther() and not _hudDeadUiVisible()
+end
+
+function _recoverNativeHUDSlot(slotFrame, rec)
+    if not (slotFrame and slotFrame.Parent) then return end
+    local nameLbl, iconLbl, iconViewport = _slotParts(slotFrame)
+    if rec and rec.nameLblRef and rec.nameLblRef.Parent then nameLbl = rec.nameLblRef end
+    if rec and rec.iconLabelRef and rec.iconLabelRef.Parent then iconLbl = rec.iconLabelRef end
+    if rec and rec.iconViewportRef and rec.iconViewportRef.Parent then iconViewport = rec.iconViewportRef end
+    if nameLbl then
+        pcall(function()
+            if rec and rec.nameOverlay then rec.nameOverlay.Visible = false end
+            if rec and rec.eclNameApplied and rec.eclNameText and nameLbl.Text == rec.eclNameText then
+                local base = _inferHUDSlotWeapon(slotFrame, nameLbl) or rec.baseName
+                if base then nameLbl.Text = base end
+            end
+            _restoreHUDNameVisibility(rec, nameLbl)
+        end)
+    end
+    _restoreHUDIconVisibility(rec, iconLbl, iconViewport)
+    if rec then
+        rec.iconAppliedKey = nil
+        rec.currentOverlayText = nil
+        rec.lastAppliedWeapon = nil
+        rec.eclNameApplied = false
+        rec.eclNameText = nil
+    end
+    _purgeHUDOverlays(slotFrame)
+end
+
 function _hideAllHUDOverlays()
+    local inv = _hudInventory and _hudInventory() or nil
+    if inv then
+        for _, slot in ipairs(_hudInventorySlots(inv)) do
+            pcall(function() _recoverNativeHUDSlot(slot, HUDSkin.slots[slot]) end)
+        end
+    end
     for slotFrame, rec in pairs(HUDSkin.slots) do
         pcall(function()
-            if rec.nameOverlay then rec.nameOverlay.Visible = false end
-            if rec.iconOverlay then rec.iconOverlay.Visible = false end
-            if rec.iconImage then rec.iconImage.Visible = false end
-            if rec.iconFallbackImage then rec.iconFallbackImage.Visible = false end
-            if rec.iconViewport then rec.iconViewport.Visible = false end
-            rec.iconAppliedKey = nil
-            rec.currentOverlayText = nil
-            rec.lastAppliedWeapon = nil
-            if rec.nameLblRef and rec.nameLblRef.Parent then
-                rec.nameLblRef.TextTransparency = rec.nameTextTransparency or 0
-                rec.nameLblRef.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
-                -- Use the override system's own weapon-key resolver to write
-                -- the CURRENT true base name back into the slot. Prevents
-                -- invisible / stale / swapped names when we hide overlays
-                -- (dead / spectating / unload).
-                local fresh
-                if slotFrame and slotFrame.Parent then
-                    local ok, k = pcall(_slotWeaponKey, slotFrame, rec.nameLblRef)
-                    if ok then fresh = k end
-                end
-                local target = fresh or rec.baseName or rec.nameText
-                if target and rec.nameLblRef.Text ~= target then
-                    rec.nameLblRef.Text = target
-                end
-                rec.nameLblRef.Visible = true
-            end
-            if rec.iconLabelRef and rec.iconLabelRef.Parent then
-                rec.iconLabelRef.Visible = rec.iconLabelVisible ~= false
-                if rec.iconLabelImage ~= nil then rec.iconLabelRef.Image = rec.iconLabelImage end
-                rec.iconLabelRef.ImageTransparency = rec.iconImageTransparency or 0
-            end
-            if rec.iconViewportRef and rec.iconViewportRef.Parent then
-                rec.iconViewportRef.Visible = rec.iconViewportVisible ~= false
-            end
+            _recoverNativeHUDSlot(slotFrame, rec)
         end)
     end
 end
 
 function _applyOneSlot(slotFrame, forceKnife)
-    if not slotFrame or not slotFrame.Parent or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-    if _isSpectatingOther() then return end
+    if not slotFrame or not slotFrame.Parent or not Config.Skins.SkinChangerEnabled then return end
+    if not _canApplyHUDSkin() then _recoverNativeHUDSlot(slotFrame, HUDSkin.slots[slotFrame]); return end
     local nameLbl, iconLbl, iconViewport, iconAnchor = _slotParts(slotFrame); if not nameLbl then return end
     local rec = _ensureSlotRec(slotFrame, nameLbl, iconLbl, iconViewport, iconAnchor)
     local rawWeapon = _slotWeaponKey(slotFrame, nameLbl) or rec.baseName or tostring(slotFrame.Name)
     if forceKnife then rawWeapon = rawWeapon or _localKnifeByTeam() end
     local isMelee = _isHUDMeleeSlot(slotFrame, rawWeapon)
-    local text, icon, baseName, hasSkin = _desiredHUDForSlot(slotFrame, rawWeapon); if not text then return end
+    local text, icon, baseName, hasSkin = _desiredHUDForSlot(slotFrame, rawWeapon)
+    if not text then _recoverNativeHUDSlot(slotFrame, rec); return end
 
     -- Se a arma no slot mudou desde a última aplicação, limpa overlay antigo
     -- ANTES de escrever o novo (evita "Glock-18|Aurora" ficar por cima de
@@ -5174,30 +5465,30 @@ function _applyOneSlot(slotFrame, forceKnife)
     rec.applying = false
 
     if not rec.conn then
-        rec.conn = nameLbl:GetPropertyChangedSignal("Text"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled and IsAlive() then _queueHUDSlotApply(slotFrame) end end)
+        rec.conn = nameLbl:GetPropertyChangedSignal("Text"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled then _queueHUDSlotApply(slotFrame) end end)
         table.insert(UnloadConnections, rec.conn)
     end
     if not rec.nameVisConn then
-        rec.nameVisConn = nameLbl:GetPropertyChangedSignal("Visible"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled and IsAlive() then _queueHUDSlotApply(slotFrame) end end)
+        rec.nameVisConn = nameLbl:GetPropertyChangedSignal("Visible"):Connect(function() if not rec.applying and Config.Skins.SkinChangerEnabled then _queueHUDSlotApply(slotFrame) end end)
         table.insert(UnloadConnections, rec.nameVisConn)
     end
     if isMelee and iconLbl and not rec.iconImgConn then
         rec.iconImgConn = iconLbl:GetPropertyChangedSignal("Image"):Connect(function()
-            if rec.applying or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
             _queueHUDSlotApply(slotFrame)
         end)
         table.insert(UnloadConnections, rec.iconImgConn)
     end
     if isMelee and iconLbl and not rec.iconConn then
         rec.iconConn = iconLbl:GetPropertyChangedSignal("Visible"):Connect(function()
-            if rec.applying or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
             if not iconLbl.Visible then _queueHUDSlotApply(slotFrame) end
         end)
         table.insert(UnloadConnections, rec.iconConn)
     end
     if isMelee and iconViewport and not rec.vpVisConn then
         rec.vpVisConn = iconViewport:GetPropertyChangedSignal("Visible"):Connect(function()
-            if rec.applying or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+            if rec.applying or not Config.Skins.SkinChangerEnabled then return end
             if iconViewport.Visible then _queueHUDSlotApply(slotFrame) end
         end)
         table.insert(UnloadConnections, rec.vpVisConn)
@@ -5244,7 +5535,9 @@ function _scheduleHUDApply(delayT)
     HUDSkin.applyQueued = true
     task.delay(delayT or 0.08, function()
         HUDSkin.applyQueued = false
-        if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() then pcall(_applyHUDKnife, true) end
+        if scriptRunning and Config.Skins.SkinChangerEnabled then
+            if _canApplyHUDSkin() then pcall(_applyHUDKnife, true) else pcall(_hideAllHUDOverlays) end
+        end
     end)
 end
 
@@ -5283,7 +5576,7 @@ _applyHUDKnife = function(_force)
     if not Config.Skins.SkinChangerEnabled then return end
     -- Espectando OUTRO player: nunca reaplica; força hide dos overlays para
     -- não vazar nome/ícone no HUD do espectado.
-    if not IsAlive() or _isSpectatingOther() then
+    if not _canApplyHUDSkin() then
         pcall(_hideAllHUDOverlays)
         return
     end
@@ -5309,7 +5602,9 @@ function _postSkinConfigLoadApply()
     end)
     for _, delayT in ipairs({0, 0.2, 0.6, 1.2, 2.0}) do
         task.delay(delayT, function()
-            if Config.Skins.SkinChangerEnabled and IsAlive() then pcall(_applyHUDKnife, true) end
+            if Config.Skins.SkinChangerEnabled then
+                if _canApplyHUDSkin() then pcall(_applyHUDKnife, true) else pcall(_hideAllHUDOverlays) end
+            end
         end)
     end
 end
@@ -5325,27 +5620,7 @@ function _restoreHUDKnife()
         if rec.iconImgConn then pcall(function() rec.iconImgConn:Disconnect() end); rec.iconImgConn = nil end
         if rec.vpVisConn then pcall(function() rec.vpVisConn:Disconnect() end); rec.vpVisConn = nil end
         if slotFrame and slotFrame.Parent then
-            local nameLbl, iconLbl, iconViewport = _slotParts(slotFrame)
-            if nameLbl then pcall(function()
-                if rec.nameOverlay then rec.nameOverlay.Visible = false end
-                nameLbl.TextTransparency = rec.nameTextTransparency or 0
-                nameLbl.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
-                -- Restore the raw game-name text so the label never keeps our
-                -- "★ Knife | Skin" string after cleanup. Also force Visible so
-                -- unloads never leave a blank slot.
-                -- Ask the override system's own resolver for the CURRENT
-                -- weapon in this slot so we always restore the real name,
-                -- not a stale cached one (fixes invisible / swapped / stacked
-                -- weapon names on deactivate & unload).
-                local fresh
-                local okK, k = pcall(_slotWeaponKey, slotFrame, nameLbl)
-                if okK then fresh = k end
-                local target = fresh or rec.baseName or rec.nameText
-                if target and nameLbl.Text ~= target then nameLbl.Text = target end
-                nameLbl.Visible = true
-            end) end
-            if iconLbl then pcall(function() if rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end; iconLbl.ImageTransparency = rec.iconImageTransparency or 0; if rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end end) end
-            if iconViewport then pcall(function() iconViewport.BackgroundTransparency = rec.iconViewportTransparency or iconViewport.BackgroundTransparency; iconViewport.Visible = rec.iconViewportVisible ~= false end) end
+            _recoverNativeHUDSlot(slotFrame, rec)
         end
         if rec.nameOverlay then pcall(function() rec.nameOverlay:Destroy() end) end
         if rec.iconOverlay then pcall(function() rec.iconOverlay:Destroy() end) end
@@ -5375,7 +5650,7 @@ end
 task.spawn(function()
     while scriptRunning do
         if Config.Skins.SkinChangerEnabled then
-            if IsAlive() and not _isSpectatingOther() then
+            if _canApplyHUDSkin() then
                 pcall(_applyHUDKnife, false)
             else
                 pcall(_hideAllHUDOverlays)
@@ -5386,15 +5661,15 @@ task.spawn(function()
 end)
 
 pcall(function()
-    LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function() pcall(_applyHUDKnife, true) end)
+    LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function() if _canApplyHUDSkin() then pcall(_applyHUDKnife, true) else pcall(_hideAllHUDOverlays) end end)
     LocalPlayer.CharacterAdded:Connect(function()
-        for _, delayT in ipairs({0.35, 0.85, 1.5}) do task.delay(delayT, function() pcall(_applyHUDKnife, true) end) end
+        for _, delayT in ipairs({0.35, 0.85, 1.5}) do task.delay(delayT, function() if _canApplyHUDSkin() then pcall(_applyHUDKnife, true) else pcall(_hideAllHUDOverlays) end end) end
     end)
     -- Spectator gate: quando o CameraSubject muda (morre / troca de alvo /
     -- respawn), esconde ou reaplica na hora.
     if Camera then
         Camera:GetPropertyChangedSignal("CameraSubject"):Connect(function()
-            if _isSpectatingOther() or not IsAlive() then
+            if not _canApplyHUDSkin() then
                 pcall(_hideAllHUDOverlays)
             else
                 task.delay(0.15, function() pcall(_applyHUDKnife, true) end)
@@ -6683,9 +6958,10 @@ MiscGB:AddToggle("NoCameraRecoil_Toggle", { Text="NO CAMERA RECOIL", Default=fal
     Config.Misc.NoCameraRecoil = v; pcall(_updateNoRecoil)
 end })
 -- EXPLORER #1 is now always-on (toggle removed per user request).
-MiscGB:AddToggle("IdentifyMoney_Toggle", { Text="IDENTIFY MONEY (WARMUP)", Default=false, Tooltip="Shows the money value in a fixed green tag. Auto-hides when warmup ends.", Callback=function(v)
+MiscGB:AddToggle("IdentifyMoney_Toggle", { Text="IDENTIFY MONEY", Default=false, Callback=function(v)
     Config.ESP.IdentifyMoney = v
-end })
+end }):AddKeyPicker("IdentifyMoney_Key", { Default="N", SyncToggleState=true, Mode="Toggle", Text="Identify Money" })
+
 
 
 
@@ -7055,23 +7331,19 @@ pcall(function()
         return ok, err
     end
 
-    SaveManager:BuildConfigSection(Tabs.Configs)
+    -- Force ConfigManager into the LEFT column of the Configs tab.
+    -- SaveManager:BuildConfigSection uses AddRightGroupbox internally; we
+    -- temporarily alias it to the left constructor for the duration of the
+    -- call and restore it right after so unrelated code isn't affected.
+    do
+        local origRight = Tabs.Configs.AddRightGroupbox
+        Tabs.Configs.AddRightGroupbox = Tabs.Configs.AddLeftGroupbox
+        local ok, err = pcall(function() SaveManager:BuildConfigSection(Tabs.Configs) end)
+        Tabs.Configs.AddRightGroupbox = origRight
+        if not ok then warn("[Eclipse] BuildConfigSection failed: " .. tostring(err)) end
+    end
     ThemeManager:ApplyToTab(Tabs.Configs)
-    -- Fill the right column of the Configuration tab so it isn't visually
-    -- empty when the SaveManager only builds a left-side group.
-    pcall(function()
-        local InfoGB = Tabs.Configs:AddRightGroupbox("ECLIPSE HUB", "info")
-        InfoGB:AddLabel("Version : " .. tostring(ECLIPSE and ECLIPSE.Version or "n/a"))
-        InfoGB:AddLabel("Toggle GUI : configurable (General tab)")
-        InfoGB:AddLabel("Configs are saved locally by name.")
-        InfoGB:AddDivider()
-        InfoGB:AddButton({ Text="Open Configs Folder", Func=function()
-            pcall(function()
-                if type(makefolder) == "function" then makefolder("EclipseHub/configs") end
-            end)
-            Library:Notify({Title="Eclipse Hub", Description="Configs live under EclipseHub/", Time=3})
-        end })
-    end)
+
     SaveManager:SetIgnoreIndexes({
         "SaveManager_ConfigList",
         "SaveManager_ConfigName",
