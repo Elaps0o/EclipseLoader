@@ -1317,17 +1317,10 @@ local SprayCache = {}
 function _getSpray(name)
     if not name then return nil end
     if SprayCache[name] ~= nil then return SprayCache[name] or nil end
-    local ok, mod = pcall(function()
-        local db = game:GetService("ReplicatedStorage"):FindFirstChild("Database", true)
-        if not db then return nil end
-        local cust = db:FindFirstChild("Custom", true); if not cust then return nil end
-        local sp = cust:FindFirstChild("SprayPatterns", true); if not sp then return nil end
-        local m = sp:FindFirstChild(name); if not m then return nil end
-        return require(m)
-    end)
-    local pat = (ok and type(mod) == "table") and mod or false
-    SprayCache[name] = pat
-    return pat or nil
+    -- BAC/Frog modules can be RobloxScript-only. Do not require internal game
+    -- ModuleScripts from local/executor context; fall back to camera RCS only.
+    SprayCache[name] = false
+    return nil
 end
 -- ============================================================
 -- RCS (Recoil Control System) — module-driven, AK-47 baseline.
@@ -1351,7 +1344,14 @@ local function _rcsGetWeaponModule(name)
         local assets = ReplicatedSt:FindFirstChild("Assets")
         local weapons = assets and assets:FindFirstChild("Weapons")
         local m = weapons and weapons:FindFirstChild(name)
-        if m and m:IsA("ModuleScript") then return require(m) end
+        if m then
+            return {
+                RecoilY = m:GetAttribute("RecoilY"),
+                RecoilX = m:GetAttribute("RecoilX"),
+                FireRate = m:GetAttribute("FireRate"),
+                WeaponType = m:GetAttribute("WeaponType"),
+            }
+        end
         return nil
     end)
     local t = (ok and type(mod) == "table") and mod or false
@@ -1827,10 +1827,9 @@ function _espGetPlayerAmmo(plr, weaponName)
     if not mx and weaponName and _weaponModule then
         local mod = _weaponModule(weaponName)
         if mod then
-            local ok, data = pcall(function() return require(mod) end)
-            if ok and type(data) == "table" then
-                mx = num(rawget(data, "MagazineSize") or rawget(data, "Magazine") or rawget(data, "MaxAmmo"))
-            end
+            pcall(function()
+                mx = num(mod:GetAttribute("MagazineSize") or mod:GetAttribute("Magazine") or mod:GetAttribute("MaxAmmo"))
+            end)
         end
     end
     if not cur or not mx or mx <= 0 then return nil end
@@ -2744,16 +2743,8 @@ local AutoDefuse = { remote=nil, resolved=false, lastFire=0, holding=false, VIM=
 function resolveDefuseRemote()
     if AutoDefuse.resolved then return AutoDefuse.remote end
     AutoDefuse.resolved = true
-    pcall(function()
-        local db = ReplicatedSt:WaitForChild("Database", 10)
-        local R = require(db:WaitForChild("Security"):WaitForChild("Remotes"))
-        local candidates = { R.DefuseBomb, R.StartDefuse, R.Defuse, R.BombDefuse }
-        for _, r in ipairs(candidates) do
-            if r and (r.Fire or r.InvokeServer or r.FireServer) then
-                AutoDefuse.remote = r; return
-            end
-        end
-    end)
+    -- Do not require Database.Security.Remotes: it is RobloxScript-context in
+    -- BAC and causes the exact console spam/whole-HUD break shown by the user.
     return AutoDefuse.remote
 end
 function _getVIM()
@@ -3250,15 +3241,10 @@ local ControllerCache = {}
 local function _getController(name)
     local cached = ControllerCache[name]
     if cached ~= nil then return cached or nil end
-    local ok, mod = pcall(function()
-        local rs = game:GetService("ReplicatedStorage")
-        local folder = rs:FindFirstChild("Controllers")
-        local child = folder and folder:FindFirstChild(name)
-        if not child then return nil end
-        return require(child)
-    end)
-    ControllerCache[name] = (ok and mod) or false
-    return ControllerCache[name] or nil
+    -- Controller modules are owned by the game's RobloxScript context in BAC.
+    -- Requiring them from here can corrupt viewmodel/ammo observers, so skip.
+    ControllerCache[name] = false
+    return nil
 end
 
 -- =====================================================================
@@ -3904,6 +3890,20 @@ end
 -- weapon identity intact, so death/respawn/equip reloads keep following the game.
 local HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={}, viewer=nil, debugPrints=0 }
 
+function _hudOverlayRoot()
+    if HUDSkin.overlayGui and HUDSkin.overlayGui.Parent then return HUDSkin.overlayGui end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "EclipseHUDOverlayRoot"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.DisplayOrder = 2147483600
+    pcall(function() gui.Parent = (gethui and gethui()) or CoreGui end)
+    HUDSkin.overlayGui = gui
+    table.insert(UnloadConnections, { Disconnect = function() pcall(function() gui:Destroy() end) end })
+    return gui
+end
+
 local function _hudDbg(...)
     -- Keep console clean: a few HUD lines for diagnosis, no constant spam.
     HUDSkin.debugPrints = (HUDSkin.debugPrints or 0) + 1
@@ -4004,7 +4004,7 @@ end
 
 local function _hudConfirmedKnifeKey()
     local sel = Config.Skins.SelectedKnife or "Butterfly Knife"
-    local data = _weaponInfo(sel) or HUD_KNIFE_ASSETS[sel]
+    local data = HUD_KNIFE_ASSETS[sel]
     local id = data and (_assetIdFromString(data.Icon) or "") or ""
     return tostring(sel) .. ":" .. tostring(id)
 end
@@ -4049,17 +4049,11 @@ local function _readWeaponModuleSourceInfo(name)
 end
 
 local function _readWeaponRuntimeInfo(name)
-    local mod = _weaponModule(name); if not mod then return nil end
-    local okReq, data = pcall(function() return require(mod) end)
-    if not okReq or type(data) ~= "table" then return nil end
-    local info = {}
-    info.Team = type(rawget(data, "Team")) == "string" and rawget(data, "Team") or nil
-    for _, key in ipairs(HUD_ICON_KEYS) do
-        local a = _assetString(rawget(data, key))
-        if a then info.Icon = a; break end
-    end
-    info.ReverseIcon = _assetString(rawget(data, "ReverseIcon") or rawget(data, "ReverseHUDIcon") or rawget(data, "ReverseImage"))
-    if info.Icon or info.ReverseIcon or info.Team then return info end
+    -- Never require game ModuleScripts from the executor/local context here.
+    -- Some BAC/Frog modules are RobloxScript-only and requiring them prints
+    -- "Cannot require a RobloxScript module from a non RobloxScript context",
+    -- then breaks unrelated HUD systems (ammo/viewmodel/observers). HUD icon
+    -- override must stay UI-only: hardcoded dump + safe attributes/instances.
     return nil
 end
 
@@ -4067,9 +4061,8 @@ local function _weaponInfo(name)
     if type(name) ~= "string" or name == "" then return nil end
     if HUDSkin.infoCache[name] ~= nil then return HUDSkin.infoCache[name] or nil end
     local hardcoded = HUD_KNIFE_ASSETS[name]
-    local runtime = _readWeaponRuntimeInfo(name)
     local source = _readWeaponModuleSourceInfo(name)
-    local info = runtime or source or hardcoded
+    local info = source or hardcoded
     if info and hardcoded then
         info.Icon = info.Icon or hardcoded.Icon
         info.ReverseIcon = info.ReverseIcon or hardcoded.ReverseIcon
@@ -4244,23 +4237,28 @@ end
 local function _syncHUDOverlayGeometry(original, overlay)
     if not (original and overlay) then return end
     pcall(function()
-        overlay.AnchorPoint = original.AnchorPoint
-        overlay.Position = original.Position
-        overlay.Size = original.Size
+        local pos = original.AbsolutePosition
+        local size = original.AbsoluteSize
+        overlay.AnchorPoint = Vector2.new(0, 0)
+        overlay.Position = UDim2.fromOffset(pos.X, pos.Y)
+        overlay.Size = UDim2.fromOffset(size.X, size.Y)
         overlay.Rotation = original.Rotation
         overlay.Visible = original.Visible
-        overlay.ZIndex = original.ZIndex + 20
+        overlay.ZIndex = math.max((original.ZIndex or 1) + 100, 150)
     end)
 end
 
 local function _cloneHUDOverlay(original, overlayName)
-    if not original or not original.Parent then return nil end
-    local old = original.Parent:FindFirstChild(overlayName); if old then pcall(function() old:Destroy() end) end
+    if not original then return nil end
+    local root = _hudOverlayRoot(); if not root then return nil end
     local clone; local ok = pcall(function() clone = original:Clone() end)
     if not ok or not clone then return nil end
-    clone.Name = overlayName; clone.Parent = original.Parent; clone.Visible = true
+    clone.Name = overlayName; clone.Parent = root; clone.Visible = true
     clone.Active = false; clone.Selectable = false
-    pcall(function() clone.ZIndex = original.ZIndex + 20 end)
+    pcall(function()
+        clone:SetAttribute("EclipseExternalHUD", true)
+        clone.ZIndex = math.max((original.ZIndex or 1) + 100, 150)
+    end)
     return clone
 end
 
@@ -4345,8 +4343,8 @@ local function _showKnifeViewportIcon(rec, iconLbl, knifeName)
 end
 
 local function _ensureIconImage(rec, anchor)
-    if not (rec and anchor and anchor.Parent) then return nil end
-    local parent = anchor.Parent
+    if not (rec and anchor) then return nil end
+    local parent = _hudOverlayRoot(); if not parent then return nil end
     local img = rec.iconImage
     if not (img and img.Parent) then
         local old = parent:FindFirstChild("EclipseHUDIcon"); if old then pcall(function() old:Destroy() end) end
@@ -4354,6 +4352,7 @@ local function _ensureIconImage(rec, anchor)
         img.Name = "EclipseHUDIcon"; img.BackgroundTransparency = 1; img.BorderSizePixel = 0
         img.ScaleType = Enum.ScaleType.Fit; img.Active = false; img.Selectable = false
         img.ClipsDescendants = false
+        pcall(function() img:SetAttribute("EclipseExternalHUD", true) end)
         img.Parent = parent
         rec.iconImage = img
     elseif img.Parent ~= parent then
@@ -4395,8 +4394,8 @@ local function _syncHUDFallbackGeometry(source, fallback)
 end
 
 local function _ensureIconFallbackImage(rec, source)
-    if not (rec and source and source.Parent) then return nil end
-    local parent = source.Parent
+    if not (rec and source) then return nil end
+    local parent = _hudOverlayRoot(); if not parent then return nil end
     local img = rec.iconFallbackImage
     if not (img and img.Parent) then
         local old = parent:FindFirstChild("EclipseHUDIconThumbFallback"); if old then pcall(function() old:Destroy() end) end
@@ -4405,6 +4404,7 @@ local function _ensureIconFallbackImage(rec, source)
         img.BackgroundTransparency = 1; img.BorderSizePixel = 0
         img.ScaleType = Enum.ScaleType.Fit; img.Active = false; img.Selectable = false
         img.ClipsDescendants = false
+        pcall(function() img:SetAttribute("EclipseExternalHUD", true) end)
         img.Parent = parent
         rec.iconFallbackImage = img
     elseif img.Parent ~= parent then
@@ -4868,14 +4868,11 @@ function _applyOneSlot(slotFrame, forceKnife)
         -- rbxthumb first so Roblox renders it as a stable thumbnail image.
         local directIcon = _assetString(icon) or icon
         local img = nil
-        local usingNativeImage = iconLbl and (iconLbl:IsA("ImageLabel") or iconLbl:IsA("ImageButton"))
-        if usingNativeImage then
-            img = iconLbl
-        else
-            img = _ensureIconImage(rec, iconViewport or iconAnchor or slotFrame)
-        end
+        local usingNativeImage = false
+        img = _ensureIconImage(rec, iconLbl or iconViewport or iconAnchor or slotFrame)
         if img then
             if iconViewport then pcall(function() iconViewport.Visible = false end) end
+            if iconLbl then pcall(function() iconLbl.Visible = false end) end
             if rec.iconViewport then pcall(function() rec.iconViewport.Visible = false end) end
             local alreadyApplied = rec.iconAppliedKey == directIcon and img.Visible ~= false and (not usingNativeImage or tostring(img.Image or "") ~= tostring(rec.iconLabelImage or ""))
             if alreadyApplied then
@@ -4890,6 +4887,7 @@ function _applyOneSlot(slotFrame, forceKnife)
                     _hudDbg("melee HUD icon injected", Config.Skins.SelectedKnife, finalIcon)
                 end, function()
                     rec.iconAppliedKey = nil
+                    if iconLbl then pcall(function() iconLbl.Visible = rec.iconLabelVisible ~= false end) end
                     if iconViewport then pcall(function() iconViewport.Visible = rec.iconViewportVisible ~= false end) end
                     _hudDbg("melee HUD icon failed", Config.Skins.SelectedKnife)
                 end)
