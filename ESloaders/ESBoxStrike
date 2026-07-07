@@ -500,27 +500,34 @@ local Window = Library:CreateWindow({
     AutoShow         = false,
     Resizable        = true,
     Size             = UDim2.fromOffset(880, 580),
-    ToggleKeybind    = Enum.KeyCode.RightShift, -- keyboard-only; Unknown would match mouse clicks
+    ToggleKeybind    = Enum.KeyCode.F13, -- unused sentinel: the library's own binding is disabled so our listener below is the single source of truth (avoids double-toggle that left the GUI stuck open).
 })
 
 -- (loading notification removed per user request)
 
 local loadingComplete = false
+_EclipseGuiKey = _EclipseGuiKey or Enum.KeyCode.RightShift
+function _setGuiKey(kc)
+    if typeof(kc) == "EnumItem" and kc.EnumType == Enum.KeyCode then
+        _EclipseGuiKey = kc
+    end
+end
 do
     local origToggle = Library.Toggle
     Library.Toggle = function(...)
         if not loadingComplete then return end
         return origToggle(...)
     end
-    -- Fallback RightShift toggle: some builds of the UI lib only OPEN on the
-    -- keybind and never CLOSE it again. We listen ourselves so it always toggles.
+    -- Single toggle listener (library binding is F13/no-op). Reads the
+    -- current configurable keybind from _EclipseGuiKey so users can rebind
+    -- it from the General tab.
     pcall(function()
         UserInput.InputBegan:Connect(function(input, gpe)
             if gpe then return end
             if not loadingComplete then return end
-            if input.KeyCode == Enum.KeyCode.RightShift then
-                pcall(function() Library:Toggle() end)
-            end
+            if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+            if input.KeyCode ~= _EclipseGuiKey then return end
+            pcall(function() Library:Toggle() end)
         end)
     end)
 end
@@ -5042,7 +5049,7 @@ function _isSpectatingOther()
 end
 
 function _hideAllHUDOverlays()
-    for _, rec in pairs(HUDSkin.slots) do
+    for slotFrame, rec in pairs(HUDSkin.slots) do
         pcall(function()
             if rec.nameOverlay then rec.nameOverlay.Visible = false end
             if rec.iconOverlay then rec.iconOverlay.Visible = false end
@@ -5051,9 +5058,23 @@ function _hideAllHUDOverlays()
             if rec.iconViewport then rec.iconViewport.Visible = false end
             rec.iconAppliedKey = nil
             rec.currentOverlayText = nil
+            rec.lastAppliedWeapon = nil
             if rec.nameLblRef and rec.nameLblRef.Parent then
                 rec.nameLblRef.TextTransparency = rec.nameTextTransparency or 0
                 rec.nameLblRef.TextStrokeTransparency = rec.nameTextStrokeTransparency or 1
+                -- Use the override system's own weapon-key resolver to write
+                -- the CURRENT true base name back into the slot. Prevents
+                -- invisible / stale / swapped names when we hide overlays
+                -- (dead / spectating / unload).
+                local fresh
+                if slotFrame and slotFrame.Parent then
+                    local ok, k = pcall(_slotWeaponKey, slotFrame, rec.nameLblRef)
+                    if ok then fresh = k end
+                end
+                local target = fresh or rec.baseName or rec.nameText
+                if target and rec.nameLblRef.Text ~= target then
+                    rec.nameLblRef.Text = target
+                end
                 rec.nameLblRef.Visible = true
             end
             if rec.iconLabelRef and rec.iconLabelRef.Parent then
@@ -5312,7 +5333,15 @@ function _restoreHUDKnife()
                 -- Restore the raw game-name text so the label never keeps our
                 -- "★ Knife | Skin" string after cleanup. Also force Visible so
                 -- unloads never leave a blank slot.
-                if rec.nameText ~= nil and nameLbl.Text ~= rec.nameText then nameLbl.Text = rec.nameText end
+                -- Ask the override system's own resolver for the CURRENT
+                -- weapon in this slot so we always restore the real name,
+                -- not a stale cached one (fixes invisible / swapped / stacked
+                -- weapon names on deactivate & unload).
+                local fresh
+                local okK, k = pcall(_slotWeaponKey, slotFrame, nameLbl)
+                if okK then fresh = k end
+                local target = fresh or rec.baseName or rec.nameText
+                if target and nameLbl.Text ~= target then nameLbl.Text = target end
                 nameLbl.Visible = true
             end) end
             if iconLbl then pcall(function() if rec.iconLabelImage ~= nil then iconLbl.Image = rec.iconLabelImage end; iconLbl.ImageTransparency = rec.iconImageTransparency or 0; if rec.iconLabelVisible ~= nil then iconLbl.Visible = rec.iconLabelVisible end end) end
@@ -5763,7 +5792,7 @@ EspGB:AddToggle("ESP_Weapon",    { Text="ESP WEAPON", Default=false, Callback=fu
     :AddColorPicker("ESP_WepNCol", { Default=Config.ESP.WeaponNameColor, Title="Weapon name color", Callback=function(c) Config.ESP.WeaponNameColor=c end })
 EspGB:AddToggle("ESP_Ammo",      { Text="ESP AMMO",   Default=false, Callback=function(v) Config.ESP.Ammo=v end })
     :AddColorPicker("ESP_AmmoCol", { Default=Config.ESP.AmmoColor, Title="Ammo bar color", Callback=function(c) Config.ESP.AmmoColor=c end })
-EspGB:AddToggle("ESP_Money",     { Text="IDENTIFY MONEY (WARMUP)", Default=false, Callback=function(v) Config.ESP.IdentifyMoney=v end })
+-- IDENTIFY MONEY moved to MISC tab (see MiscGB in the Misc section).
 
 -- HEAD DOT + SKELETON removed by user request (were causing FPS drop).
 Config.ESP.HeadDot = false
@@ -6604,14 +6633,11 @@ task.spawn(function()
         if ok2 then _explorer1.original = orig; _explorer1.hooked = true end
     end
 end)
-task.spawn(function()
-    while scriptRunning do
-        if Config.Misc.Explorer1 then
-            pcall(function() LocalPlayer:SetAttribute("BuyMenu", true) end)
-        end
-        task.wait(0.5)
-    end
-end)
+-- (BuyMenu attribute-spam loop removed: it was firing IsInBuyArea from the
+--  Money HUD controller in bad contexts and causing the "attempt to call a
+--  nil value" spam. The hookfunction above is enough on executors that
+--  support it; on those that don't, the feature is a no-op.)
+Config.Misc.Explorer1 = true
 
 -- ==== HUD Skin life-gate ===============================================
 -- When the local player dies, hide every skinchanger name/icon overlay so
@@ -6656,9 +6682,9 @@ Config.Misc.ForceScope = false
 MiscGB:AddToggle("NoCameraRecoil_Toggle", { Text="NO CAMERA RECOIL", Default=false, Callback=function(v)
     Config.Misc.NoCameraRecoil = v; pcall(_updateNoRecoil)
 end })
-MiscGB:AddToggle("Explorer1_Toggle", { Text="EXPLORER #1 (BUY ANYWHERE)", Default=true, Callback=function(v)
-    Config.Misc.Explorer1 = v
-    if not v then pcall(function() LocalPlayer:SetAttribute("BuyMenu", nil) end) end
+-- EXPLORER #1 is now always-on (toggle removed per user request).
+MiscGB:AddToggle("IdentifyMoney_Toggle", { Text="IDENTIFY MONEY (WARMUP)", Default=false, Tooltip="Shows the money value in a fixed green tag. Auto-hides when warmup ends.", Callback=function(v)
+    Config.ESP.IdentifyMoney = v
 end })
 
 
@@ -7031,6 +7057,21 @@ pcall(function()
 
     SaveManager:BuildConfigSection(Tabs.Configs)
     ThemeManager:ApplyToTab(Tabs.Configs)
+    -- Fill the right column of the Configuration tab so it isn't visually
+    -- empty when the SaveManager only builds a left-side group.
+    pcall(function()
+        local InfoGB = Tabs.Configs:AddRightGroupbox("ECLIPSE HUB", "info")
+        InfoGB:AddLabel("Version : " .. tostring(ECLIPSE and ECLIPSE.Version or "n/a"))
+        InfoGB:AddLabel("Toggle GUI : configurable (General tab)")
+        InfoGB:AddLabel("Configs are saved locally by name.")
+        InfoGB:AddDivider()
+        InfoGB:AddButton({ Text="Open Configs Folder", Func=function()
+            pcall(function()
+                if type(makefolder) == "function" then makefolder("EclipseHub/configs") end
+            end)
+            Library:Notify({Title="Eclipse Hub", Description="Configs live under EclipseHub/", Time=3})
+        end })
+    end)
     SaveManager:SetIgnoreIndexes({
         "SaveManager_ConfigList",
         "SaveManager_ConfigName",
@@ -7044,7 +7085,17 @@ end)
 
 ;(function() -- GENERAL controls + server hop (IIFE for register budget)
 local GenGB = Tabs.General:AddLeftGroupbox("MENU")
-GenGB:AddLabel("Toggle GUI: RightShift")
+do
+    local KEYS = {"RightShift","LeftShift","RightControl","LeftControl","RightAlt","LeftAlt","Insert","Home","End","PageUp","PageDown","Delete","Backquote","F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12"}
+    local defaultKey = "RightShift"
+    SafeAddDropdown(GenGB, "Gui_ToggleKey", {
+        Text="TOGGLE GUI KEY", Values=KEYS, Default=defaultKey,
+        Callback=function(v)
+            local kc = Enum.KeyCode[v]
+            if kc then _setGuiKey(kc) end
+        end,
+    })
+end
 GenGB:AddButton({ Text="Copy Discord",   Func=function() copyToClipboard(ECLIPSE.Discord) end })
 GenGB:AddButton({ Text="Copy Website",   Func=function() copyToClipboard(ECLIPSE.Website) end })
 GenGB:AddButton({ Text="Rejoin",         Func=function()
