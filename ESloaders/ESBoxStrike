@@ -3871,7 +3871,7 @@ function _hudOverlayRoot()
     return nil
 end
 
-local function _hudDbg(...)
+function _hudDbg(...)
     -- Keep console clean: a few HUD lines for diagnosis, no constant spam.
     HUDSkin.debugPrints = (HUDSkin.debugPrints or 0) + 1
     if HUDSkin.debugPrints <= 6 then print("[EclipseHUD]", ...) end
@@ -3901,7 +3901,7 @@ local HUD_KNIFE_TEAMS = {
     ["T Knife"]  = "Terrorists",
 }
 
-local function _hudInventory()
+function _hudInventory()
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui"); if not pg then return nil end
     local ok, node = pcall(function()
         return pg:WaitForChild("MainGui", 1)
@@ -3912,7 +3912,7 @@ local function _hudInventory()
     return ok and node or nil
 end
 
-local function _assetString(v)
+function _assetString(v)
     if typeof(v) == "Instance" then
         if v:IsA("StringValue") then v = v.Value
         elseif v:IsA("IntValue") or v:IsA("NumberValue") then v = v.Value
@@ -3931,25 +3931,25 @@ local function _assetString(v)
     return v
 end
 
-local function _assetIdFromString(v)
+function _assetIdFromString(v)
     v = _assetString(v)
     if type(v) ~= "string" or v == "" then return nil end
     return v:match("rbxassetid://(%d+)") or v:match("[?&]id=(%d+)") or v:match("[?&]assetId=(%d+)") or v:match("^(%d+)$")
 end
 
-local function _assetThumb(v)
+function _assetThumb(v)
     local id = _assetIdFromString(v)
     if not id then return nil end
     return "rbxthumb://type=Asset&id=" .. id .. "&w=420&h=420"
 end
 
-local function _assetThumbSmall(v)
+function _assetThumbSmall(v)
     local id = _assetIdFromString(v)
     if not id then return nil end
     return "rbxthumb://type=Asset&id=" .. id .. "&w=150&h=150"
 end
 
-local function _iconCandidates(icon)
+function _iconCandidates(icon)
     local out, seen = {}, {}
     local function add(v)
         v = _assetString(v) or v
@@ -3969,7 +3969,7 @@ local function _iconCandidates(icon)
     return out
 end
 
-local function _hudConfirmedKnifeKey()
+function _hudConfirmedKnifeKey()
     local sel = Config.Skins.SelectedKnife or "Butterfly Knife"
     local data = HUD_KNIFE_ASSETS[sel]
     local id = data and (_assetIdFromString(data.Icon) or "") or ""
@@ -3979,14 +3979,14 @@ end
 -- Confirmation GUI was removed; HUD icon override is always allowed while
 -- the skin changer is on. The apply pipeline still validates the fetched
 -- asset before swapping in, so no confirmation step is required.
-local function _hudIconOverrideAllowed()
+function _hudIconOverrideAllowed()
     return true
 end
 
 -- IMPORTANT: the inventory slot wants the normal Icon only.
 local HUD_ICON_KEYS = {"Icon","InventoryIcon","SlotIcon","DisplayIcon","WeaponIcon","HUDIcon","HudIcon","Image","ImageId","ImageID","TextureId","TextureID","DecalId","DecalID","Thumbnail","ThumbnailId"}
 
-local function _weaponModule(name)
+function _weaponModule(name)
     if type(name) ~= "string" or name == "" then return nil end
     local ok, mod = pcall(function()
         return ReplicatedSt:FindFirstChild("Database")
@@ -3997,7 +3997,7 @@ local function _weaponModule(name)
     return ok and mod or nil
 end
 
-local function _readWeaponModuleSourceInfo(name)
+function _readWeaponModuleSourceInfo(name)
     local mod = _weaponModule(name); if not mod then return nil end
     local info = {}
     for _, key in ipairs(HUD_ICON_KEYS) do
@@ -4015,7 +4015,7 @@ local function _readWeaponModuleSourceInfo(name)
     return nil
 end
 
-local function _readWeaponRuntimeInfo(name)
+function _readWeaponRuntimeInfo(name)
     -- Never require game ModuleScripts from the executor/local context here.
     -- Some BAC/Frog modules are RobloxScript-only and requiring them prints
     -- "Cannot require a RobloxScript module from a non RobloxScript context",
@@ -4024,7 +4024,7 @@ local function _readWeaponRuntimeInfo(name)
     return nil
 end
 
-local function _weaponInfo(name)
+function _weaponInfo(name)
     if type(name) ~= "string" or name == "" then return nil end
     if HUDSkin.infoCache[name] ~= nil then return HUDSkin.infoCache[name] or nil end
     local hardcoded = HUD_KNIFE_ASSETS[name]
@@ -4039,7 +4039,7 @@ local function _weaponInfo(name)
     return info
 end
 
-local function _iconFromModule(name)
+function _iconFromModule(name)
     local mod = _weaponModule(name); if not mod then return nil end
     for _, key in ipairs(HUD_ICON_KEYS) do
         local ok, val = pcall(function() return mod:GetAttribute(key) end)
@@ -4059,7 +4059,7 @@ local function _iconFromModule(name)
     return nil
 end
 
-local function _iconFromAssetsFolder(name)
+function _iconFromAssetsFolder(name)
     if type(name) ~= "string" or name == "" then return nil end
     local ok, root = pcall(function()
         local assets = ReplicatedSt:FindFirstChild("Assets")
@@ -4085,7 +4085,7 @@ local function _iconFromAssetsFolder(name)
     return nil
 end
 
-local function _iconForWeapon(name, fallbackName)
+function _iconForWeapon(name, fallbackName)
     -- If the selected thing is a knife, do not ever borrow the T/CT Knife icon.
     -- Missing custom icon means keep the game's original visible instead.
     local function read(n)
@@ -4101,7 +4101,7 @@ local function _iconForWeapon(name, fallbackName)
     return read(fallbackName)
 end
 
-local function _localKnifeByTeam()
+function _localKnifeByTeam()
     -- Original slot identity: CT side owns CT Knife, T side owns T Knife.
     -- Check CT first because "Counter-Terrorists" contains "Terrorists".
     local teamName = ""
@@ -4127,13 +4127,13 @@ local function _localKnifeByTeam()
     return "T Knife"
 end
 
-local function _selectedHUDKnife()
+function _selectedHUDKnife()
     local sel = Config.Skins.SelectedKnife or "Butterfly Knife"
     if KNIVES[sel] or tostring(sel):lower():find("knife", 1, true) or tostring(sel):lower():find("bayonet", 1, true) then return sel end
     return _localKnifeByTeam()
 end
 
-local function _prettySkinName(raw)
+function _prettySkinName(raw)
     if type(raw) ~= "string" or raw == "" then return "" end
     local normalized = raw:gsub("_", " "):gsub("%-", " "):lower():gsub("^%s+", ""):gsub("%s+$", "")
     if normalized == "stock" or normalized == "vanilla" or normalized == "default" or normalized == "none"
@@ -4192,7 +4192,7 @@ function _slotParts(slotFrame)
     return nameLbl, iconLbl, iconViewport, iconAnchor
 end
 
-local function _cleanHUDWeaponText(t)
+function _cleanHUDWeaponText(t)
     if type(t) ~= "string" then return nil end
     local pipe = t:find(" | ", 1, true); if pipe then t = t:sub(1, pipe - 1) end
     if t:sub(1, 3) == "\xE2\x98\x85" then t = t:sub(4) end
@@ -4246,13 +4246,13 @@ function _cloneHUDOverlay(original, overlayName)
     return clone
 end
 
-local function _destroyHUDIconViewport(rec)
+function _destroyHUDIconViewport(rec)
     if not rec then return end
     if rec.iconViewport then pcall(function() rec.iconViewport:Destroy() end) end
     rec.iconViewport = nil; rec.iconViewportKnife = nil
 end
 
-local function _visibleBBox(model)
+function _visibleBBox(model)
     local minP, maxP
     for _, p in ipairs(model:GetDescendants()) do
         if p:IsA("BasePart") and p.Transparency < 1 then
@@ -4270,7 +4270,7 @@ local function _visibleBBox(model)
     return CFrame.new((minP + maxP) * 0.5), (maxP - minP)
 end
 
-local function _hudKnifeViewportSource(knifeName)
+function _hudKnifeViewportSource(knifeName)
     local ok, src = pcall(function()
         local assets = ReplicatedSt:FindFirstChild("Assets")
         local weapons = assets and assets:FindFirstChild("Weapons")
@@ -4280,7 +4280,7 @@ local function _hudKnifeViewportSource(knifeName)
     return ok and src or nil
 end
 
-local function _showKnifeViewportIcon(rec, iconLbl, knifeName)
+function _showKnifeViewportIcon(rec, iconLbl, knifeName)
     if not (rec and iconLbl and knifeName) then return false end
     local src = _hudKnifeViewportSource(knifeName); if not src then return false end
     if not rec.iconViewport or not rec.iconViewport.Parent then
@@ -4426,7 +4426,7 @@ function _ensureIconFallbackImage(rec, source)
     return img
 end
 
-local function _preloadHUDIcon(icon)
+function _preloadHUDIcon(icon)
     local candidates = _iconCandidates(icon)
     if #candidates == 0 then return end
     task.spawn(function()
@@ -4451,7 +4451,7 @@ local function _preloadHUDIcon(icon)
     end)
 end
 
-local function _prepHUDImageLabel(img)
+function _prepHUDImageLabel(img)
     if not img then return end
     pcall(function()
         img.BackgroundTransparency = 1
@@ -4464,13 +4464,13 @@ local function _prepHUDImageLabel(img)
     end)
 end
 
-local function _isImageLoaded(img)
+function _isImageLoaded(img)
     local loaded = false
     pcall(function() loaded = img.IsLoaded == true end)
     return loaded
 end
 
-local function _assetFetchStatus(candidate)
+function _assetFetchStatus(candidate)
     local status = "Unknown"
     pcall(function()
         status = tostring(ContentProvider:GetAssetFetchStatus(candidate)):gsub("Enum.AssetFetchStatus%.", "")
@@ -4478,18 +4478,18 @@ local function _assetFetchStatus(candidate)
     return status
 end
 
-local function _statusIsGood(status)
+function _statusIsGood(status)
     status = tostring(status or "")
     return status:find("Success", 1, true) ~= nil or status:find("Loaded", 1, true) ~= nil
 end
 
-local function _statusIsBad(status)
+function _statusIsBad(status)
     status = tostring(status or "")
     return status:find("Failure", 1, true) ~= nil or status:find("Failed", 1, true) ~= nil
         or status:find("Error", 1, true) ~= nil or status:find("TimedOut", 1, true) ~= nil
 end
 
-local function _imageCandidateReady(img, candidate)
+function _imageCandidateReady(img, candidate)
     local loaded = _isImageLoaded(img)
     local status = _assetFetchStatus(candidate)
     return (loaded or _statusIsGood(status)) and not _statusIsBad(status), loaded, status
@@ -4569,9 +4569,9 @@ function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed
     return true
 end
 
-local _applyHUDKnife
+_applyHUDKnife = nil
 
-local function _ensureHUDAssetViewer()
+function _ensureHUDAssetViewer()
     if HUDSkin.viewer and HUDSkin.viewer.gui and HUDSkin.viewer.gui.Parent then return HUDSkin.viewer end
     local parent = (gethui and gethui()) or CoreGui
     local gui = Instance.new("ScreenGui")
@@ -4625,7 +4625,7 @@ local function _ensureHUDAssetViewer()
     return HUDSkin.viewer
 end
 
-local function _refreshHUDAssetViewer()
+function _refreshHUDAssetViewer()
     local v = _ensureHUDAssetViewer(); if not v then return end
     for _, ch in ipairs(v.list:GetChildren()) do
         if ch:IsA("Frame") then ch:Destroy() end
@@ -4684,7 +4684,7 @@ function ShowHUDAssetViewer()
     v.gui.Enabled = true
 end
 
-local function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
+function _restoreOriginalHUDIcon(rec, iconLbl, iconViewport)
     if rec then rec.iconToken = (rec.iconToken or 0) + 1 end
     if rec and rec.iconImage then pcall(function() rec.iconImage:Destroy() end); rec.iconImage = nil end
     if rec and rec.iconFallbackImage then pcall(function() rec.iconFallbackImage:Destroy() end); rec.iconFallbackImage = nil end
@@ -4778,14 +4778,14 @@ function _applyHUDNameOverlay(rec, nameLbl, text)
     end)
 end
 
-local function _slotWeaponKey(slotFrame, nameLbl)
+function _slotWeaponKey(slotFrame, nameLbl)
     local rec = HUDSkin.slots[slotFrame]
     local clean = _cleanHUDWeaponText(nameLbl.Text)
     if clean and clean ~= "" then if rec then rec.baseName = clean end; return clean end
     return rec and rec.baseName or nil
 end
 
-local function _isHUDMeleeSlot(slotFrame, weaponKey)
+function _isHUDMeleeSlot(slotFrame, weaponKey)
     weaponKey = _cleanHUDWeaponText(weaponKey) or weaponKey
     local sn = tostring(slotFrame and slotFrame.Name or ""):lower()
     if sn:find("primary", 1, true) or sn:find("secondary", 1, true) or sn:find("pistol", 1, true) then return false end
@@ -4816,7 +4816,7 @@ function _hudDefaultKnifeText()
     return originalKnife
 end
 
-local function _desiredHUDForSlot(slotFrame, rawWeapon)
+function _desiredHUDForSlot(slotFrame, rawWeapon)
     rawWeapon = _cleanHUDWeaponText(rawWeapon) or rawWeapon
     if _isHUDMeleeSlot(slotFrame, rawWeapon) then
         local originalKnife = _localKnifeByTeam()
