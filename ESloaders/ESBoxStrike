@@ -4005,7 +4005,7 @@ end
 -- Source-style glove system: the viewmodel keeps ONE real T/CT glove mesh per
 -- hand, then the selected Sports Gloves skin is copied onto that mesh. No extra
 -- skin-piece injection, no nested cloned glove parts, no per-frame rebuild.
-local GLOVE_SOURCE_SCALE = 1.03
+local GLOVE_SOURCE_SCALE = 1.00
 
 local function _uniformScale(inst, factor)
     if not inst or not factor or factor == 1 then return end
