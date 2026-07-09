@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.0 [OFFICIAL]",
+    Version       = "2.0.0",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -909,7 +909,13 @@ local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
 _ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
-_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v9" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v10" .. _ECLIPSE_AUTOCONFIG_EXT
+pcall(function()
+    if type(delfile) == "function" and type(isfile) == "function" then
+        local old9 = "EclipseHub/autosave_v9.ehcfg"
+        if isfile(old9) then pcall(delfile, old9) end
+    end
+end)
 _EclipseAutoConfig = { loaded=nil, started=false, lastJson="", lastWrite=0 }
 pcall(function()
     if type(delfile) == "function" and type(isfile) == "function" then
@@ -1823,7 +1829,7 @@ function updateGrenadePrediction()
         for _ = 1, math.floor(4.0 / dts) do
             elapsed = elapsed + dts
             vel = vel + (grav * dts)
-            vel = vel * (1 - 0.01)
+            vel = vel * (1 - 0.02)
             local np = gPos + (vel * dts)
             local hit = Workspace:Raycast(gPos, np - gPos, rp)
             if hit then
@@ -4005,14 +4011,7 @@ function updateAimbot()
 
         if not part then continue end
 
-        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then
-            if not Config.Crosshair.Wallbang then continue end
-            local origin = Camera.CFrame.Position
-            local dir = (part.Position - origin)
-            if dir.Magnitude < 0.001 then continue end
-            local pStats = GetPenetrationStats(origin, dir.Unit, 4, { LocalPlayer.Character, Camera }, char)
-            if not pStats or not pStats.Success then continue end
-        end
+        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
 
         if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
         local sp, on = Camera:WorldToViewportPoint(part.Position)
@@ -4385,11 +4384,35 @@ function UpdateWeather(t)
         WeatherEmitter.Color=ColorSequence.new(Color3.fromRGB(255,255,255))
         WeatherEmitter.Size=NumberSequence.new(0.25,0.35); WeatherEmitter.Speed=NumberRange.new(30,30)
         WeatherEmitter.Lifetime=NumberRange.new(5,10); WeatherEmitter.SpreadAngle=Vector2.new(50,50)
-    elseif t == "Hell Fire" then
-        WeatherEmitter.Texture="rbxassetid://242205518"; WeatherEmitter.Rate=400
-        WeatherEmitter.Color=ColorSequence.new(Color3.fromRGB(255,100,0), Color3.fromRGB(150,0,0))
-        WeatherEmitter.Size=NumberSequence.new(2,4); WeatherEmitter.Speed=NumberRange.new(40,60)
-        WeatherEmitter.Lifetime=NumberRange.new(2,3); WeatherEmitter.Acceleration=Vector3.new(0,-10,0)
+    elseif t == "Aurora" then
+        WeatherEmitter.Texture="rbxassetid://243660364"; WeatherEmitter.Rate=180
+        WeatherEmitter.Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(120,80,255)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(80,220,255)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(180,120,255)),
+        })
+        WeatherEmitter.LightEmission=1; WeatherEmitter.LightInfluence=0
+        WeatherEmitter.Size=NumberSequence.new(1.6,3.2); WeatherEmitter.Transparency=NumberSequence.new({
+            NumberSequenceKeypoint.new(0,1), NumberSequenceKeypoint.new(0.3,0.2), NumberSequenceKeypoint.new(1,1)
+        })
+        WeatherEmitter.Lifetime=NumberRange.new(4,7); WeatherEmitter.Speed=NumberRange.new(6,10)
+        WeatherEmitter.Rotation=NumberRange.new(-180,180); WeatherEmitter.RotSpeed=NumberRange.new(-40,40)
+        WeatherEmitter.SpreadAngle=Vector2.new(35,35); WeatherEmitter.Acceleration=Vector3.new(0,-2,0)
+    elseif t == "Stardust" then
+        WeatherEmitter.Texture="rbxassetid://241594157"; WeatherEmitter.Rate=350
+        WeatherEmitter.Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255,240,180)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255,180,220)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(180,220,255)),
+        })
+        WeatherEmitter.LightEmission=1; WeatherEmitter.LightInfluence=0
+        WeatherEmitter.Size=NumberSequence.new(0.35,0.6)
+        WeatherEmitter.Transparency=NumberSequence.new({
+            NumberSequenceKeypoint.new(0,1), NumberSequenceKeypoint.new(0.2,0.1), NumberSequenceKeypoint.new(1,1)
+        })
+        WeatherEmitter.Lifetime=NumberRange.new(3,6); WeatherEmitter.Speed=NumberRange.new(4,8)
+        WeatherEmitter.SpreadAngle=Vector2.new(180,180); WeatherEmitter.Acceleration=Vector3.new(0,-1,0)
+        WeatherEmitter.RotSpeed=NumberRange.new(-90,90)
     end
 end
 
@@ -5005,7 +5028,11 @@ local function handleAction(actionName, state)
                 playSound("Inspect","1")
             end
             if isButterfly and SkinSystem.inspectAlt then SkinSystem._inspectFlip = not SkinSystem._inspectFlip end
-            _signalOnce(track.Stopped, function() SkinSystem.inspecting = false end)
+            SkinSystem._inspectToken = (SkinSystem._inspectToken or 0) + 1
+            local myTok = SkinSystem._inspectToken
+            _signalOnce(track.Stopped, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
+            local dur = (track.Length and track.Length > 0) and track.Length or 2.2
+            task.delay(dur + 1.2, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
         else SkinSystem.inspecting = false end
 
 
@@ -5033,7 +5060,11 @@ local function handleAction(actionName, state)
         local ok = pcall(function() chosen:Play() end)
         if ok then
             playSound(sf, "1")
-            _signalOnce(chosen.Stopped, function() SkinSystem.swinging = false end)
+            SkinSystem._swingToken = (SkinSystem._swingToken or 0) + 1
+            local swTok = SkinSystem._swingToken
+            _signalOnce(chosen.Stopped, function() if SkinSystem._swingToken == swTok then SkinSystem.swinging = false end end)
+            local sdur = (chosen.Length and chosen.Length > 0) and chosen.Length or 1.2
+            task.delay(sdur + 0.8, function() if SkinSystem._swingToken == swTok then SkinSystem.swinging = false end end)
         else
             SkinSystem.swinging = false
         end
@@ -7357,7 +7388,57 @@ connectSignal(RunService.RenderStepped:Connect(function()
         safeUpdate("Weather", function()
             if WeatherPart then
                 local cam = Workspace.CurrentCamera
-                if cam then WeatherPart.CFrame = cam.CFrame * CFrame.new(0,30,0) end
+                if cam then
+                    WeatherPart.CFrame = cam.CFrame * CFrame.new(0,30,0)
+                    if WeatherEmitter then
+                        local ch = LocalPlayer.Character
+                        local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart"))
+                        local underCover = false
+                        if head then
+                            local rp = RaycastParams.new()
+                            rp.FilterType = Enum.RaycastFilterType.Exclude
+                            rp.IgnoreWater = true
+                            pcall(function() rp.FilterDescendantsInstances = { ch, WeatherPart } end)
+                            local res = Workspace:Raycast(head.Position, Vector3.new(0, 100, 0), rp)
+                            if res and res.Instance and res.Instance.Transparency < 1 then underCover = true end
+                        end
+                        WeatherEmitter.Enabled = not underCover
+                    end
+                end
+            end
+        end)
+        safeUpdate("Footstep", function()
+            if not (Config.GlobalEnable and Config.ESP.Footstep) then return end
+            _EclipseFootstepTick = _EclipseFootstepTick or {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer then
+                    local ch = p.Character
+                    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+                    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                    if hrp and hum and hum.Health > 0 and (IsAlly == nil or not IsAlly(p)) then
+                        local st = _EclipseFootstepTick[p] or { last=0, lastPos=hrp.Position }
+                        _EclipseFootstepTick[p] = st
+                        local now = tick()
+                        local moved = (hrp.Position - st.lastPos).Magnitude
+                        if now - st.last > 0.35 and moved > 3.5 then
+                            st.last = now; st.lastPos = hrp.Position
+                            local origin = hrp.Position - Vector3.new(0, 3, 0)
+                            local ring = Instance.new("Part")
+                            ring.Name = "EclipseFootstep"
+                            ring.Shape = Enum.PartType.Cylinder
+                            ring.Anchored = true; ring.CanCollide = false; ring.CanQuery = false; ring.CanTouch = false
+                            ring.CastShadow = false
+                            ring.Material = Enum.Material.Neon
+                            ring.Color = Config.ESP.FootstepColor
+                            ring.Size = Vector3.new(0.05, 0.5, 0.5)
+                            ring.CFrame = CFrame.new(origin) * CFrame.Angles(0, 0, math.rad(90))
+                            ring.Transparency = 0.2
+                            ring.Parent = Workspace
+                            TweenService:Create(ring, TweenInfo.new(1.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = Vector3.new(0.05, 4, 4), Transparency = 1 }):Play()
+                            Debris:AddItem(ring, 1.5)
+                        end
+                    end
+                end
             end
         end)
     end
@@ -7492,11 +7573,12 @@ AimGB:AddToggle("Aimbot_NoFlash", { Text="DISABLE IN FLASH", Default=true, Callb
 AimGB:AddToggle("Pen_CH_Toggle", { Text="PENETRATION CROSSHAIR", Default=false,
     Callback=function(v) Config.Crosshair.PenetrationEnabled=v; if not v then pcall(_pen3dHide) end end })
 
-    :AddColorPicker("Pen_CH_OkCol", { Default=Config.Crosshair.PenetrationOkColor, Title="Wallbang YES color",
+    :AddColorPicker("Pen_CH_OkCol", { Default=Config.Crosshair.PenetrationOkColor, Title="Penetration YES color",
         Callback=function(c) Config.Crosshair.PenetrationOkColor=c end })
-    :AddColorPicker("Pen_CH_NoCol", { Default=Config.Crosshair.PenetrationNoColor, Title="Wallbang NO color",
+    :AddColorPicker("Pen_CH_NoCol", { Default=Config.Crosshair.PenetrationNoColor, Title="Penetration NO color",
         Callback=function(c) Config.Crosshair.PenetrationNoColor=c end })
-AimGB:AddToggle("Aim_Wallbang", { Text="WALLBANG", Default=false, Callback=function(v) Config.Crosshair.Wallbang=v end })
+
+
 
 local TrigGB = Tabs.Aim:AddLeftGroupbox("TRIGGER BOT")
 TrigGB:AddToggle("Trigger_Toggle", { Text="ENABLE TRIGGER", Default=false, Callback=function(v) Config.TriggerBot.Enabled=v end })
@@ -7545,6 +7627,11 @@ Config.ESP.Skeleton = false
 EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=function(v) Config.ESP.Chams=v end })
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
 
+Config.ESP.Footstep = Config.ESP.Footstep or false
+Config.ESP.FootstepColor = Config.ESP.FootstepColor or Color3.fromRGB(150, 95, 255)
+EspGB:AddToggle("ESP_Footstep", { Text="ESP FOOTSTEP", Default=false, Callback=function(v) Config.ESP.Footstep=v end })
+    :AddColorPicker("ESP_FootstepCol", { Default=Config.ESP.FootstepColor, Title="Footstep color", Callback=function(c) Config.ESP.FootstepColor=c end })
+
 EspGB:AddDivider()
 
 local WorldEspGB = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
@@ -7575,7 +7662,7 @@ local PVGB = Tabs.Visuals:AddRightGroupbox("PLAYER VISUALS", "user")
 PVGB:AddToggle("PV_KillEffect", { Text="KILL EFFECT", Default=false,
     Callback=function(v) Config.Visuals.KillEffect=v end })
 SafeAddDropdown(PVGB, "PV_KillEffectType", {
-    Text="EFFECT", Values={"Eclipse","Prism","Vortex","Zeus"},
+    Text="EFFECT", Values={"Eclipse","Prism","Vortex","Zeus","Nova","Astral"},
     Default=Config.Visuals.KillEffectType,
     Callback=function(v) Config.Visuals.KillEffectType=v end,
 })
@@ -8299,7 +8386,7 @@ MoveGB:AddToggle("NoFallDmg_Toggle", { Text="NO FALL DAMAGE", Default=false, Cal
 end })
 
 local WorldGB = Tabs.World:AddLeftGroupbox("ENVIRONMENT")
-SafeAddDropdown(WorldGB, "Weather_Select", { Text="WEATHER", Values={"None","Rain","Snow","Hell Fire"},
+SafeAddDropdown(WorldGB, "Weather_Select", { Text="WEATHER", Values={"None","Rain","Snow","Aurora","Stardust"},
     Default=(Config.World and Config.World.Weather) or "None", Callback=function(v) Config.World.Weather=v; UpdateWeather(v) end })
 
 local WorldColorGB = Tabs.World:AddRightGroupbox("WORLD COLOR", "sun")
@@ -8422,6 +8509,42 @@ MiscGB:AddSlider("StretchedRes_Slider", { Text="STRETCHED RESOLUTION", Default=0
         Config.Misc.StretchedResolution = v
         pcall(_applyStretch, v)
     end })
+
+Config.Misc.NightMode = Config.Misc.NightMode or false
+do
+    local Lighting = game:GetService("Lighting")
+    local _nmSaved
+    local function _applyNightMode(on)
+        if on then
+            if not _nmSaved then
+                _nmSaved = {
+                    Ambient = Lighting.Ambient,
+                    OutdoorAmbient = Lighting.OutdoorAmbient,
+                    Brightness = Lighting.Brightness,
+                    ClockTime = Lighting.ClockTime,
+                    FogColor = Lighting.FogColor,
+                    FogEnd = Lighting.FogEnd,
+                    ColorShift_Bottom = Lighting.ColorShift_Bottom,
+                    ColorShift_Top = Lighting.ColorShift_Top,
+                }
+            end
+            Lighting.Ambient = Color3.fromRGB(18, 22, 42)
+            Lighting.OutdoorAmbient = Color3.fromRGB(24, 30, 55)
+            Lighting.Brightness = 0.4
+            Lighting.ClockTime = 0
+            Lighting.FogColor = Color3.fromRGB(20, 24, 45)
+            Lighting.ColorShift_Bottom = Color3.fromRGB(30, 40, 90)
+            Lighting.ColorShift_Top = Color3.fromRGB(80, 90, 160)
+        elseif _nmSaved then
+            for k, v in pairs(_nmSaved) do pcall(function() Lighting[k] = v end) end
+            _nmSaved = nil
+        end
+    end
+    _EclipseApplyNightMode = _applyNightMode
+end
+MiscGB:AddToggle("NightMode_Toggle", { Text="NIGHT MODE", Default=false, Callback=function(v)
+    Config.Misc.NightMode = v; pcall(_EclipseApplyNightMode, v)
+end })
 
 
 
@@ -10137,6 +10260,8 @@ end)()
             Prism = { Color3.fromRGB(255,85,170), Color3.fromRGB(120,245,255) },
             Vortex = { Color3.fromRGB(95,40,190), Color3.fromRGB(15,15,30) },
             Zeus = { Color3.fromRGB(185,225,255), Color3.fromRGB(255,255,255) },
+            Nova = { Color3.fromRGB(255,180,80), Color3.fromRGB(255,255,220) },
+            Astral = { Color3.fromRGB(120,180,255), Color3.fromRGB(220,180,255) },
         }
         local c = colors[etype] or colors.Eclipse
         local colorA, colorB = c[1], c[2]
@@ -10144,9 +10269,11 @@ end)()
         local core = _newFxPart("EclipseKillCore", Enum.PartType.Ball, Vector3.new(1.1,1.1,1.1), base, colorA, 0.15)
         local light = Instance.new("PointLight")
         light.Color = colorA
-        light.Brightness = 7
-        light.Range = 18
+        light.Brightness = 0
+        light.Range = 22
         light.Parent = core
+        _fxTween(light, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Brightness = 9 })
+        task.delay(0.22, function() pcall(function() _fxTween(light, TweenInfo.new(0.75, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Brightness = 0, Range = 4 }) end) end)
         _emitPremiumBurst(core, colorA, colorB, 110)
         _fxTween(core, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = Vector3.new(7,7,7), Transparency = 1 })
         if ghost then
@@ -10193,6 +10320,25 @@ end)()
             fl.Range = 28
             _emitPremiumBurst(flash, colorB, colorA, 90)
             _fxTween(flash, TweenInfo.new(0.45, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = Vector3.new(9,9,9), Transparency = 1 })
+        elseif etype == "Nova" then
+            local shock = _newFxPart("EclipseNovaShock", Enum.PartType.Ball, Vector3.new(1,1,1), base, colorB, 0.1)
+            _fxTween(shock, TweenInfo.new(0.9, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = Vector3.new(14,14,14), Transparency = 1 })
+            for i = 1, 22 do
+                local a = (i / 22) * math.pi * 2
+                local ray = _newFxPart("EclipseNovaRay", Enum.PartType.Block, Vector3.new(0.08, math.random(20,40)/10, 0.08), CFrame.new(pos), i % 2 == 0 and colorA or colorB, 0.1)
+                local dir = Vector3.new(math.cos(a), math.random(-30,30)/100, math.sin(a)).Unit
+                ray.CFrame = CFrame.lookAt(pos, pos + dir)
+                _fxTween(ray, TweenInfo.new(0.85, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { CFrame = ray.CFrame + dir * math.random(8,14), Transparency = 1 })
+            end
+        elseif etype == "Astral" then
+            for i = 1, 3 do
+                local ring = _newFxPart("EclipseAstralRing", Enum.PartType.Cylinder, Vector3.new(0.1, 1, 1), CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90)), i % 2 == 0 and colorB or colorA, 0.25)
+                _fxTween(ring, TweenInfo.new(1.1 + i * 0.15, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), { Size = Vector3.new(0.1, 10 + i * 2, 10 + i * 2), Transparency = 1 })
+            end
+            for i = 1, 12 do
+                local star = _newFxPart("EclipseAstralStar", Enum.PartType.Ball, Vector3.new(0.25,0.25,0.25), CFrame.new(pos + Vector3.new(math.random(-15,15)/10, math.random(0,10)/10, math.random(-15,15)/10)), colorB, 0)
+                _fxTween(star, TweenInfo.new(1.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { CFrame = star.CFrame + Vector3.new(math.random(-30,30)/10, math.random(30,60)/10, math.random(-30,30)/10), Transparency = 1, Size = Vector3.new(0.05,0.05,0.05) })
+            end
         else
             for i = 1, 3 do
                 local ring = _newFxPart("EclipseKillWave", Enum.PartType.Ball, Vector3.new(0.6,0.08,0.6), CFrame.new(pos + Vector3.new(0, i * 0.6, 0)), i % 2 == 0 and colorB or colorA, 0.45)
@@ -10232,10 +10378,17 @@ end)()
         return false
     end
 
+    local function _localIsAlive()
+        local ch = LocalPlayer and LocalPlayer.Character
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        return hum and hum.Health > 0
+    end
+
     local function _triggerLocalKillEffect(plr, char)
         if not char or _killEffectDone[char] then return end
         if plr == LocalPlayer then return end
         if plr and IsAlly and IsAlly(plr) then return end
+        if not _localIsAlive() then return end
         _killEffectDone[char] = tick()
         if Config.Logging.Enabled then
             local vname = (plr and plr.Name) or (char and char.Name) or "enemy"
