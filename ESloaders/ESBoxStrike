@@ -7490,50 +7490,37 @@ connectSignal(RunService.RenderStepped:Connect(function()
                         _EclipseFootstepTick[p] = st
                         local now = tick()
                         local moved = (hrp.Position - st.lastPos).Magnitude
-                        if now - st.last > 0.35 and moved > 3.5 then
+                        if now - st.last > 0.42 and moved > 3.5 then
                             st.last = now; st.lastPos = hrp.Position
-                            local origin = hrp.Position - Vector3.new(0, 2.9, 0)
                             local col = Config.ESP.FootstepColor
-                            local anchor = Instance.new("Part")
-                            anchor.Name = "EclipseFootstep"
-                            anchor.Anchored = true; anchor.CanCollide = false; anchor.CanQuery = false; anchor.CanTouch = false
-                            anchor.CastShadow = false
-                            anchor.Transparency = 1
-                            anchor.Size = Vector3.new(0.1, 0.1, 0.1)
-                            anchor.CFrame = CFrame.new(origin)
-                            anchor.Parent = Workspace
-                            local bb = Instance.new("BillboardGui")
-                            bb.Name = "Ring"
-                            bb.AlwaysOnTop = true
-                            bb.LightInfluence = 0
-                            bb.Size = UDim2.fromScale(2, 2)
-                            bb.Adornee = anchor
-                            bb.Parent = anchor
-                            local ring = Instance.new("Frame")
-                            ring.BackgroundTransparency = 1
-                            ring.Size = UDim2.fromScale(1, 1)
-                            ring.AnchorPoint = Vector2.new(0.5, 0.5)
-                            ring.Position = UDim2.fromScale(0.5, 0.5)
-                            ring.Parent = bb
-                            local corner = Instance.new("UICorner")
-                            corner.CornerRadius = UDim.new(1, 0)
-                            corner.Parent = ring
-                            local stroke = Instance.new("UIStroke")
-                            stroke.Thickness = 3
-                            stroke.Color = col
-                            stroke.Transparency = 0
-                            stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-                            stroke.Parent = ring
-                            local glow = Instance.new("UIStroke")
-                            glow.Thickness = 7
-                            glow.Color = col
-                            glow.Transparency = 0.55
-                            glow.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-                            glow.Parent = ring
-                            TweenService:Create(bb, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = UDim2.fromScale(9, 9) }):Play()
-                            TweenService:Create(stroke, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Transparency = 1, Thickness = 1 }):Play()
-                            TweenService:Create(glow, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Transparency = 1, Thickness = 2 }):Play()
-                            Debris:AddItem(anchor, 1.7)
+                            local rayParams = RaycastParams.new()
+                            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                            rayParams.FilterDescendantsInstances = { ch, LocalPlayer.Character }
+                            rayParams.IgnoreWater = true
+                            local hit = Workspace:Raycast(hrp.Position, Vector3.new(0, -12, 0), rayParams)
+                            local floorPos = hit and hit.Position or (hrp.Position - Vector3.new(0, 3, 0))
+                            local floorNormal = hit and hit.Normal or Vector3.new(0, 1, 0)
+                            local disc = Instance.new("Part")
+                            disc.Name = "EclipseFootstep"
+                            disc.Shape = Enum.PartType.Cylinder
+                            disc.Anchored = true; disc.CanCollide = false; disc.CanQuery = false; disc.CanTouch = false
+                            disc.CastShadow = false
+                            disc.Material = Enum.Material.Neon
+                            disc.Color = col
+                            disc.Transparency = 1
+                            disc.Size = Vector3.new(0.08, 2.2, 2.2)
+                            disc.CFrame = CFrame.lookAt(floorPos + floorNormal * 0.05, floorPos + floorNormal * 0.05 + floorNormal) * CFrame.Angles(0, math.rad(90), 0)
+                            disc.Parent = Workspace
+                            local hl = Instance.new("Highlight")
+                            hl.Adornee = disc
+                            hl.FillTransparency = 1
+                            hl.OutlineTransparency = 0
+                            hl.OutlineColor = col
+                            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                            hl.Parent = disc
+                            TweenService:Create(disc, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = Vector3.new(0.08, 9, 9) }):Play()
+                            TweenService:Create(hl, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { OutlineTransparency = 1 }):Play()
+                            Debris:AddItem(disc, 1.7)
                         end
                     end
                 end
@@ -8622,16 +8609,16 @@ do
             _nmEffect.Name = "EclipseNightMode"
             _nmEffect.Parent = Lighting
         end
-        _nmEffect.TintColor = Color3.fromRGB(180, 150, 220)
-        _nmEffect.Brightness = -0.15
-        _nmEffect.Contrast = 0.05
-        _nmEffect.Saturation = -0.05
+        _nmEffect.TintColor = Color3.fromRGB(205, 185, 235)
+        _nmEffect.Brightness = -0.06
+        _nmEffect.Contrast = 0.04
+        _nmEffect.Saturation = -0.03
         return _nmEffect
     end
     local TweenService = game:GetService("TweenService")
     local _nmTween
     local _nmToken = 0
-    local NM_TARGET = { TintColor = Color3.fromRGB(180,150,220), Brightness = -0.15, Contrast = 0.05, Saturation = -0.05 }
+    local NM_TARGET = { TintColor = Color3.fromRGB(205,185,235), Brightness = -0.06, Contrast = 0.04, Saturation = -0.03 }
     local NM_OFF    = { TintColor = Color3.fromRGB(255,255,255), Brightness = 0,     Contrast = 0,    Saturation = 0 }
     local function _applyNightMode(on)
         local e = _ensureNMEffect()
@@ -9945,13 +9932,14 @@ end)()
 ;(function() 
     
     EX.SoundPresets = {
-        ["Default"]        = { Id="", Volume=1, Pitch=1 },
-        ["Crystal Chime"]  = { Id="rbxasset://sounds/electronicpingshort.wav", Volume=1.75, Pitch=1.18 },
-        ["Glass Bell"]     = { Id="rbxasset://sounds/button.wav", Volume=1.55, Pitch=1.42 },
-        ["Ethereal Ding"]  = { Id="rbxasset://sounds/snap.wav", Volume=1.45, Pitch=0.82 },
-        ["Diamond Ping"]   = { Id="rbxasset://sounds/electronicpingshort.wav", Volume=1.9, Pitch=1.55 },
-        ["Crystal Shard"]  = { Id="rbxasset://sounds/unsheath.wav", Volume=1.55, Pitch=1.35 },
-        ["Metal Pipe"]     = { Id="rbxasset://sounds/impact_water.mp3", Volume=1.85, Pitch=0.72 },
+        ["Default"]         = { Id="", Volume=1, Pitch=1 },
+        ["Electronic Ping"] = { Id="rbxasset://sounds/electronicpingshort.wav", Volume=1.75, Pitch=1.0 },
+        ["High Ping"]       = { Id="rbxasset://sounds/electronicpingshort.wav", Volume=1.85, Pitch=1.55 },
+        ["Button Click"]    = { Id="rbxasset://sounds/button.wav", Volume=1.55, Pitch=1.0 },
+        ["Snap"]            = { Id="rbxasset://sounds/snap.wav", Volume=1.55, Pitch=1.0 },
+        ["Unsheath"]        = { Id="rbxasset://sounds/unsheath.wav", Volume=1.55, Pitch=1.0 },
+        ["Water Impact"]    = { Id="rbxasset://sounds/impact_water.mp3", Volume=1.85, Pitch=1.0 },
+        ["Deep Thud"]       = { Id="rbxasset://sounds/impact_water.mp3", Volume=1.85, Pitch=0.7 },
     }
 
     local SoundService = game:GetService("SoundService")
@@ -10838,7 +10826,70 @@ end)()
     end
     for _, plr in ipairs(Players:GetPlayers()) do _bindPlayer(plr) end
     table.insert(UnloadConnections, Players.PlayerAdded:Connect(_bindPlayer))
+
+    -- Fallback: watch LocalPlayer leaderstats.Kills / Score. On increment, trigger the effect
+    -- on the nearest recently-dead enemy. Bypasses damage/attribution heuristics that can miss.
+    local function _forceKillEffectOnNearestDead()
+        if not (Config.GlobalEnable and Config.Visuals.KillEffect) then return end
+        if not _localIsAlive() then return end
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar:FindFirstChild("Torso"))
+        if not myRoot then return end
+        local best, bd
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if _isEnemyPlayer(plr) and plr.Character then
+                local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+                local r = plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Torso") or plr.Character:FindFirstChild("UpperTorso")
+                if hum and r and hum.Health <= 0 and not _killEffectDone[plr.Character] then
+                    local d = (r.Position - myRoot.Position).Magnitude
+                    if not bd or d < bd then bd = d; best = plr.Character end
+                end
+            end
+        end
+        if best then
+            _killEffectDone[best] = tick()
+            task.spawn(function() pcall(_spawnKillEffect, best) end)
+        end
+    end
+    local function _bindKillsWatcher()
+        pcall(function()
+            local ls = LocalPlayer:FindFirstChild("leaderstats")
+            if not ls then return end
+            for _, stat in ipairs(ls:GetChildren()) do
+                local n = tostring(stat.Name or ""):lower()
+                if (n == "kills" or n == "score" or n == "frags") and stat:IsA("ValueBase") and not stat:GetAttribute("EclipseKillWatch") then
+                    stat:SetAttribute("EclipseKillWatch", true)
+                    local last = tonumber(stat.Value) or 0
+                    local conn = stat.Changed:Connect(function(v)
+                        local cur = tonumber(v) or 0
+                        if cur > last then
+                            last = cur
+                            task.defer(_forceKillEffectOnNearestDead)
+                            task.delay(0.25, _forceKillEffectOnNearestDead)
+                        else
+                            last = cur
+                        end
+                    end)
+                    table.insert(UnloadConnections, conn)
+                end
+            end
+        end)
+    end
+    _bindKillsWatcher()
+    table.insert(UnloadConnections, LocalPlayer.ChildAdded:Connect(function(c)
+        if c.Name == "leaderstats" then
+            task.wait(0.3); _bindKillsWatcher()
+            table.insert(UnloadConnections, c.ChildAdded:Connect(function() task.wait(0.1); _bindKillsWatcher() end))
+        end
+    end))
+    do
+        local ls = LocalPlayer:FindFirstChild("leaderstats")
+        if ls then
+            table.insert(UnloadConnections, ls.ChildAdded:Connect(function() task.wait(0.1); _bindKillsWatcher() end))
+        end
+    end
 end)()
+
 
 UpdateWeather(Config.World.Weather)
 
