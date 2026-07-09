@@ -25,6 +25,20 @@ local MarketplaceSvc = game:GetService("MarketplaceService")
 
 local LocalPlayer = Players.LocalPlayer
 
+do
+    local exec = ""
+    pcall(function()
+        if type(identifyexecutor) == "function" then exec = tostring(select(1, identifyexecutor()) or "") end
+        if (not exec or exec == "") and type(getexecutorname) == "function" then exec = tostring(getexecutorname() or "") end
+    end)
+    if exec and exec:lower():find("potassium", 1, true) then
+        pcall(function()
+            LocalPlayer:Kick("[Eclipse Hub] Executor 'Potassium' nao e suportado.\nRecomendados: Medium, Velocity, Xeno ou Solara.")
+        end)
+        return
+    end
+end
+
 local ECLIPSE_BYPASS_ENABLED = false
 
 local _deviceSpooferInstalled = false
@@ -801,9 +815,11 @@ task.spawn(function()
     end
 end)
 
+local _IS_DEATHMATCH = (game.PlaceId == 135434213652028)
 local Config = {
     GlobalEnable = true,
-    TeamCheck    = true, 
+    TeamCheck    = not _IS_DEATHMATCH,
+
     Aimbot   = {
         Enabled=false, FOV=150, Smoothness=0.35, TargetPart="Head",
         DrawFOV=true, VisibilityCheck=true, FOVColor=Color3.fromRGB(255,255,255),
@@ -811,7 +827,7 @@ local Config = {
         PerWeapon={}, PerCategory={},
         DisableInSmoke=true, DisableInFlash=true,
     },
-    TriggerBot = { Enabled=false, Delay=0.01, Mode="HitChance", HitChance=100, Spread=0 },
+    TriggerBot = { Enabled=false, Delay=0.01, Mode="HitChance", HitChance=100, Spread=0, AutoWall=false },
     ESP      = {
         Enabled=false, MaxDistance=500,
         CornerBox=true, Name=true, Distance=true, HealthBar=true, TargetLine=true, Position="Top",
@@ -841,7 +857,7 @@ local Config = {
         IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90), 
         
     },
-    Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true, PenetrationEnabled=false, PenetrationOkColor=Color3.fromRGB(0,255,0), PenetrationNoColor=Color3.fromRGB(255,60,60) },
+    Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true, PenetrationEnabled=false, PenetrationOkColor=Color3.fromRGB(0,255,0), PenetrationNoColor=Color3.fromRGB(255,60,60), Wallbang=false },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={}, PerCategory={}, Mode="Global", SelectedWeapon="AK-47", SelectedCategory="Rifles" },
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
@@ -854,9 +870,16 @@ local Config = {
     Stretch   = { Enabled=false, Ratio=1.30 },
     Logging   = { Enabled=false },
 
-    
+
+    Visuals = {
+        KillEffect=false, KillEffectType="Explode",
+        WeaponGlow=false, WeaponGlowColor=Color3.fromRGB(170, 50, 255),
+        PlayerMaterial=false, PlayerMaterialType="Glass",
+        PlayerMaterialColor=Color3.fromRGB(120, 200, 255), PlayerMaterialWeapons=false,
+    },
     UI = { PanelPositions = {} },
 }
+
 
 function _bindPanelPosition(name, frame)
     if not frame or type(name) ~= "string" then return end
@@ -885,17 +908,38 @@ end
 local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
-_ECLIPSE_AUTOCONFIG_PATH = "EclipseHub/autosave_v7.json"
+_ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v9" .. _ECLIPSE_AUTOCONFIG_EXT
 _EclipseAutoConfig = { loaded=nil, started=false, lastJson="", lastWrite=0 }
 pcall(function()
-    if typeof(delfile) == "function" and typeof(isfile) == "function" then
-        for i = 1, 6 do
+    if type(delfile) == "function" and type(isfile) == "function" then
+        for i = 1, 8 do
             local p = "EclipseHub/autosave_v" .. i .. ".json"
-            if isfile(p) then pcall(delfile, p) end
+            pcall(function() if isfile(p) then delfile(p) end end)
         end
-        if isfile("EclipseHub/autosave.json") then pcall(delfile, "EclipseHub/autosave.json") end
+        pcall(function() if isfile("EclipseHub/autosave.json") then delfile("EclipseHub/autosave.json") end end)
     end
 end)
+pcall(function()
+    if type(isfolder) == "function" and type(makefolder) == "function" then
+        if not isfolder(_ECLIPSE_AUTOCONFIG_DIR) then pcall(makefolder, _ECLIPSE_AUTOCONFIG_DIR) end
+    end
+    if type(delfile) == "function" and type(listfiles) == "function" then
+        local ok, files = pcall(listfiles, _ECLIPSE_AUTOCONFIG_DIR)
+        if ok and type(files) == "table" then
+            local keep = _ECLIPSE_AUTOCONFIG_PATH:gsub("\\", "/")
+            for _, f in ipairs(files) do
+                local s = tostring(f or "")
+                local sn = s:gsub("\\", "/")
+                if sn:sub(-#keep) ~= keep and sn:sub(-#_ECLIPSE_AUTOCONFIG_EXT):lower() == _ECLIPSE_AUTOCONFIG_EXT then
+                    pcall(delfile, s)
+                end
+            end
+        end
+    end
+end)
+if not _ECLIPSE_AUTOCONFIG_PATH then _ECLIPSE_AUTOCONFIG_PATH = "EclipseHub/eclipse.ehcfg" end
+
 
 local _ECLIPSE_TOGGLE_NORESTORE = {
     Skin_Toggle = true,
@@ -1035,12 +1079,9 @@ function _ecfgLoadIntoConfig()
     local data = _ecfgReadRaw()
     if type(data) ~= "table" then return end
     _EclipseAutoConfig.loaded = data
-    if type(data.Config) == "table" then
-        _ecfgMerge(Config, _ecfgDecode(data.Config))
-    end
-
     _ecfgForceSkinChangerInactive(false)
 end
+
 
 task.defer(function()
     pcall(function()
@@ -1059,6 +1100,67 @@ local function _ecfgIsKeyPicker(opt)
     return opt.Mode ~= nil and opt.SyncToggleState ~= nil
 end
 
+local function _ecfgOptType(opt)
+    if not opt then return "" end
+    return tostring(rawget(opt, "Type") or opt.Type or "")
+end
+
+local function _ecfgReadOptValue(opt)
+    if not opt then return nil end
+    local v = rawget(opt, "Value")
+    if v == nil then v = opt.Value end
+    if v == nil then v = rawget(opt, "CurrentValue") or opt.CurrentValue end
+    if v == nil then v = rawget(opt, "Current") or opt.Current end
+    if v == nil and type(opt.GetValue) == "function" then
+        local ok, got = pcall(function() return opt:GetValue() end)
+        if ok then v = got end
+    end
+    if v == nil then v = rawget(opt, "Default") or opt.Default end
+    return v
+end
+
+local function _ecfgSetObjValue(obj, val)
+    if not obj then return false end
+    local used = false
+    local oldDisabled = obj.Disabled
+    if oldDisabled ~= nil and (_ecfgOptType(obj) == "Slider" or _ecfgOptType(obj) == "Dropdown") then
+        pcall(function() obj.Disabled = false end)
+    end
+    if type(obj.SetValue) == "function" then
+        local ok = pcall(function() obj:SetValue(val) end)
+        used = ok or used
+    elseif type(obj.Set) == "function" then
+        local ok = pcall(function() obj:Set(val) end)
+        used = ok or used
+    end
+    if oldDisabled ~= nil then pcall(function() obj.Disabled = oldDisabled end) end
+    if not used then
+        pcall(function() obj.Value = val end)
+        if type(obj.Callback) == "function" then pcall(obj.Callback, val) end
+        if type(obj.Changed) == "function" then pcall(obj.Changed, val) end
+    end
+    return used
+end
+
+local function _ecfgApplyPriority(id)
+    local opt = Library.Options and Library.Options[id]
+    local tog = Library.Toggles and Library.Toggles[id]
+    if tog then return 10 end
+    local t = _ecfgOptType(opt)
+    if t == "Dropdown" then
+        local s = tostring(id)
+        if s:find("_Mode$") then return 20 end
+        if s:find("_Category$") then return 21 end
+        if s:find("_Weapon$") then return 22 end
+        return 25
+    end
+    if _ecfgIsKeyPicker(opt) then return 30 end
+    if t == "ColorPicker" then return 35 end
+    if t == "Input" then return 40 end
+    if t == "Slider" then return 80 end
+    return 50
+end
+
 function _ecfgControlSnapshot()
     local out = {}
     pcall(function()
@@ -1071,13 +1173,11 @@ function _ecfgControlSnapshot()
         for id, opt in pairs(Library.Options or {}) do
             if _ecfgIsKeyPicker(opt) then
                 
-                local key = opt.Value
+                local key = _ecfgReadOptValue(opt)
                 if typeof(key) == "EnumItem" then key = key.Name end
                 out[id] = { __eclipseKP = true, Key = key or opt.Default, Mode = opt.Mode }
             else
-                local v = opt.Value
-                if v == nil then v = opt.Default end
-                out[id] = v
+                out[id] = _ecfgReadOptValue(opt)
             end
         end
     end)
@@ -1087,19 +1187,27 @@ end
 function _ecfgApplyLoadedControls()
     local data = _EclipseAutoConfig.loaded
     if type(data) ~= "table" or type(data.Controls) ~= "table" then return end
+    local cfg = _ecfgDecode(data.Config)
+    if type(cfg) == "table" then
+        _ecfgMerge(Config, cfg)
+        _ecfgForceSkinChangerInactive(false)
+    end
     local controls = _ecfgDecode(data.Controls)
     _EclipseConfigLoading = true
-    for id, val in pairs(controls) do
+    local entries = {}
+    for id, val in pairs(controls) do entries[#entries + 1] = { id = id, val = val, pr = _ecfgApplyPriority(id) } end
+    table.sort(entries, function(a, b)
+        if a.pr == b.pr then return tostring(a.id) < tostring(b.id) end
+        return a.pr < b.pr
+    end)
+    for _, ent in ipairs(entries) do
+        local id, val = ent.id, ent.val
         pcall(function()
             local tog = Library.Toggles and Library.Toggles[id]
             if tog then
                 if _ECLIPSE_TOGGLE_NORESTORE[id] then val = false end
                 local bv = val and true or false
-                tog.Value = bv
-                if type(tog.SetValue) == "function" then pcall(function() tog:SetValue(bv) end)
-                elseif type(tog.Set) == "function" then pcall(function() tog:Set(bv) end) end
-                if type(tog.Callback) == "function" then pcall(tog.Callback, bv) end
-                if type(tog.Changed) == "function" then pcall(tog.Changed, tog, bv) end
+                _ecfgSetObjValue(tog, bv)
                 return
             end
 
@@ -1116,18 +1224,12 @@ function _ecfgApplyLoadedControls()
                         key = val
                     end
                     if type(key) == "string" and key ~= "" then
-                        opt.Value = key
                         if mode and type(mode) == "string" then opt.Mode = mode end
                         pcall(function() if type(opt.SetValue) == "function" then opt:SetValue({ key, opt.Mode }) end end)
                         pcall(function() if type(opt.Update)   == "function" then opt:Update() end end)
-                        pcall(function() if type(opt.Changed)  == "function" then opt:Changed() end end)
                     end
                 else
-                    opt.Value = val
-                    if type(opt.SetValue) == "function" then pcall(function() opt:SetValue(val) end)
-                    elseif type(opt.Set) == "function" then pcall(function() opt:Set(val) end) end
-                    if type(opt.Callback) == "function" then pcall(opt.Callback, val) end
-                    if type(opt.Changed) == "function" then pcall(opt.Changed, opt, val) end
+                    _ecfgSetObjValue(opt, val)
                 end
             end
         end)
@@ -1524,39 +1626,63 @@ local function GetPenetrationStats(origin, direction, maxPen, ignoreList, target
     return stats
 end
 
-local PenText = nil
-if GPD_OK then
-    PenText = Drawing.new("Text")
-    PenText.Visible = false
-    PenText.Center = true
-    PenText.Size = 16
-    PenText.Font = 2
-    PenText.Outline = true
-    PenText.Color = Color3.fromRGB(0,255,0)
+_EclipsePen3D = _EclipsePen3D or {}
+local function _pen3dEnsure()
+    if _EclipsePen3D.part and _EclipsePen3D.part.Parent then return _EclipsePen3D end
+    local p = Instance.new("Part")
+    p.Name = "EclipsePenMarker"
+    p.Size = Vector3.new(1.2, 1.2, 0.05)
+    p.Anchored = true; p.CanCollide = false; p.CanQuery = false; p.CanTouch = false
+    p.Massless = true; p.CastShadow = false
+    p.Material = Enum.Material.Neon
+    p.Transparency = 0.5
+    p.Color = Color3.fromRGB(0,255,0)
+    p.Parent = Workspace
+    local mesh = Instance.new("BlockMesh")
+    mesh.Parent = p
+    _EclipsePen3D.part = p
+    return _EclipsePen3D
+end
+function _pen3dHide()
+    if _EclipsePen3D.part then pcall(function() _EclipsePen3D.part.Transparency = 1; _EclipsePen3D.part.CFrame = CFrame.new(0, -5000, 0) end) end
+    if _EclipsePen3D.ring then pcall(function() _EclipsePen3D.ring:Destroy() end); _EclipsePen3D.ring = nil end
+end
+function _pen3dDestroy()
+    if _EclipsePen3D.part then pcall(function() _EclipsePen3D.part:Destroy() end); _EclipsePen3D.part = nil end
+    if _EclipsePen3D.ring then pcall(function() _EclipsePen3D.ring:Destroy() end); _EclipsePen3D.ring = nil end
 end
 
+local _PEN_LAST = 0
 function updatePenetrationCrosshair()
-    if not PenText then return end
     local on = Config.GlobalEnable and Config.Crosshair.PenetrationEnabled
-    if not on or not Camera then PenText.Visible = false; return end
-    local vs = Camera.ViewportSize
-    PenText.Position = Vector2.new(vs.X/2, vs.Y/2 - 40)
+    if not on or not Camera then _pen3dHide(); return end
+    local t = tick()
+    if t - _PEN_LAST < 0.05 then return end
+    _PEN_LAST = t
+    local st = _pen3dEnsure()
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     pcall(function() params.CollisionGroup = "Bullet" end)
-    params.FilterDescendantsInstances = { LocalPlayer.Character, Camera }
-    local res = Workspace:Raycast(Camera.CFrame.Position, Camera.CFrame.LookVector * 1000, params)
-    if not res then PenText.Visible = false; return end
-    local stats = GetPenetrationStats(Camera.CFrame.Position, Camera.CFrame.LookVector, 4, { LocalPlayer.Character, Camera }, nil)
-    PenText.Visible = true
-    if stats.Success then
-        PenText.Text = string.format("WALLBANG: YES (%.1f)", stats.TotalThickness or 0)
-        PenText.Color = Config.Crosshair.PenetrationOkColor or Color3.fromRGB(0,255,0)
-    else
-        PenText.Text = "WALLBANG: NO"
-        PenText.Color = Config.Crosshair.PenetrationNoColor or Color3.fromRGB(255,60,60)
-    end
+    params.FilterDescendantsInstances = { LocalPlayer.Character, Camera, st.part }
+    local origin = Camera.CFrame.Position
+    local dir = Camera.CFrame.LookVector
+    local res = Workspace:Raycast(origin, dir * 4500, params)
+    if not res then _pen3dHide(); return end
+    local stats = GetPenetrationStats(origin, dir, 4, { LocalPlayer.Character, Camera, st.part }, nil)
+    local col = stats.Success and (Config.Crosshair.PenetrationOkColor or Color3.fromRGB(0,255,0))
+                              or (Config.Crosshair.PenetrationNoColor or Color3.fromRGB(255,60,60))
+    local pos = res.Position + (res.Normal or Vector3.new(0,1,0)) * 0.05
+    local dist = (pos - origin).Magnitude
+    local scale = math.clamp(0.7 + dist * 0.014, 1.0, 9.5)
+    st.part.Color = col
+    st.part.Transparency = 0.5
+    st.part.Size = Vector3.new(1.2 * scale, 1.2 * scale, 0.05)
+    local cf = CFrame.lookAt(pos, pos + (res.Normal or Vector3.new(0,1,0)))
+    pcall(function() st.part.CFrame = cf end)
 end
+
+
+
 
 local GPD_OK = (type(Drawing) == "table" or type(Drawing) == "userdata") and type(Drawing.new) == "function"
 local GPD = {
@@ -1906,9 +2032,11 @@ function IsAlly(plr)
 end
 function IsEnemy(plr)
     if plr == LocalPlayer or not GetCharacter(plr) then return false end
+    if _IS_DEATHMATCH then return true end
     if Config.TeamCheck then return not IsAlly(plr) end
     return true
 end
+
 function IsVisible(part)
     if not part then return false end
     local origin = Camera.CFrame.Position
@@ -2548,10 +2676,10 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
         weaponIconAsset = data.LastWeaponIcon
     end
     local showIcon = hasWeapon and weaponIconAsset ~= nil
-    local baseW = math.max(150, math.min(230, (R - L) + 40))
+    local baseW = math.max(170, math.min(250, (R - L) + 48))
 
     
-    local ICON_BASE = 26
+    local ICON_BASE = 34
     local _wn = tostring(weaponName or "")
     local _wnLower = _wn:lower()
     local _isSniperW = SniperWeapons and SniperWeapons[_wn] == true
@@ -2559,33 +2687,33 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     local _isKnifeW = (KNIVES and KNIVES[_wn] == true) or _wnLower:find("knife", 1, true) ~= nil or _wnLower:find("bayonet", 1, true) ~= nil or _wnLower == "karambit"
     local ICON_SIZE
     if _isSniperW or _isRifleW then
-        ICON_SIZE = math.floor(ICON_BASE * 1.40 + 0.5)
+        ICON_SIZE = math.floor(ICON_BASE * 1.45 + 0.5)
     elseif _isKnifeW then
-        ICON_SIZE = math.floor(ICON_BASE * 1.30 + 0.5)
+        ICON_SIZE = math.floor(ICON_BASE * 1.32 + 0.5)
     else
         ICON_SIZE = ICON_BASE
     end
     local ICON_PAD  = 3
 
-    local baseH = 26
+    local baseH = 24
 
-    local width  = math.floor(baseW * (0.65 + 0.35 * math.min(1, s)))
-    local height = math.floor(baseH * (0.65 + 0.35 * math.min(1, s)))
+    local width  = math.floor(baseW * (0.68 + 0.32 * math.min(1, s)))
+    local height = math.floor(baseH * (0.68 + 0.32 * math.min(1, s)))
     local x  = math.floor(cx - width / 2)
-    local y  = math.floor((B or (T + 120)) + 10)
+    local y  = math.floor((B or (T + 120)) + 12)
     local trBase = 1 * math.min(1, s)  
 
     
     data.TagBg.Size = Vector2.new(width, height)
     data.TagBg.Position = Vector2.new(x, y)
-    data.TagBg.Filled = true; data.TagBg.Color = Color3.fromRGB(15,15,20)
-    data.TagBg.Transparency = 0.72 * math.min(1, s); data.TagBg.Visible = true
+    data.TagBg.Filled = true; data.TagBg.Color = Color3.fromRGB(10,10,14)
+    data.TagBg.Transparency = 0.55 * math.min(1, s); data.TagBg.Visible = true
     local tl, tr, bl, br = Vector2.new(x,y), Vector2.new(x+width,y), Vector2.new(x,y+height), Vector2.new(x+width,y+height)
     data.TagBorder[1].From, data.TagBorder[1].To = tl, tr
     data.TagBorder[2].From, data.TagBorder[2].To = tr, br
     data.TagBorder[3].From, data.TagBorder[3].To = br, bl
     data.TagBorder[4].From, data.TagBorder[4].To = bl, tl
-    for _, l in ipairs(data.TagBorder) do l.Transparency = 0.85 * math.min(1,s); l.Color = Color3.fromRGB(70,70,78); l.Visible = true end
+    for _, l in ipairs(data.TagBorder) do l.Thickness = 1; l.Transparency = 0.65 * math.min(1,s); l.Color = Color3.fromRGB(140,140,160); l.Visible = true end
     
     local segs = ESP_TAG_GRAD_SEGS
     local segW = width / segs
@@ -2727,7 +2855,7 @@ function _espWeaponTierBars(_) return "" end
 
 function _espProcessPlayer(plr, myRoot, center)
 
-    if Config.TeamCheck and IsAlly(plr) then
+    if not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(plr) then
         local old = ESPObjects[plr]
         if old then hideESP(old) end
         return nil
@@ -2847,8 +2975,14 @@ function updateChams()
     for plr, hl in pairs(ChamsHL) do
         if not plr.Parent or not on then
             pcall(function() hl:Destroy() end); ChamsHL[plr] = nil
+            local ch = plr and plr.Character
+            if ch then
+                local root = ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChild("Torso") or ch:FindFirstChild("UpperTorso")
+                if root then local lt = root:FindFirstChild("EclipseChamsLight"); if lt then pcall(function() lt:Destroy() end) end end
+            end
         end
     end
+
     if not on then return end
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr == LocalPlayer then continue end
@@ -2874,13 +3008,20 @@ function updateChams()
         else
             if hl.Adornee ~= char then hl.Adornee = char end
         end
-        
         hl.FillColor           = Config.ESP.ChamsColor
-        hl.OutlineColor        = Color3.fromRGB(255, 255, 255)
-        hl.FillTransparency    = 0
+        hl.OutlineColor        = Config.ESP.ChamsColor
+        hl.FillTransparency    = 0.55
         hl.OutlineTransparency = 0
+
+        local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+        if root then
+            local lt = root:FindFirstChild("EclipseChamsLight")
+            if lt then pcall(function() lt:Destroy() end) end
+        end
+
     end
 end
+
 
 function updateESP()
     local wantOn = Config.GlobalEnable and Config.ESP.Enabled and IsAlive()
@@ -3864,7 +4005,15 @@ function updateAimbot()
 
         if not part then continue end
 
-        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
+        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then
+            if not Config.Crosshair.Wallbang then continue end
+            local origin = Camera.CFrame.Position
+            local dir = (part.Position - origin)
+            if dir.Magnitude < 0.001 then continue end
+            local pStats = GetPenetrationStats(origin, dir.Unit, 4, { LocalPlayer.Character, Camera }, char)
+            if not pStats or not pStats.Success then continue end
+        end
+
         if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
         local sp, on = Camera:WorldToViewportPoint(part.Position)
         if on and sp.Z > 0 and sp.X == sp.X and sp.Y == sp.Y then
@@ -3933,20 +4082,41 @@ function updateTriggerBot()
     local ig = { Camera }; if LocalPlayer.Character then table.insert(ig, LocalPlayer.Character) end
     rp.FilterDescendantsInstances = ig
     local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
+    local function _tryFireOnPlayer(pl)
+        if not pl then return false end
+        if pl and not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl) then return false end
+        local ch = pl.Character; if not ch then return false end
+        local h = ch:FindFirstChildOfClass("Humanoid"); if not h or h.Health <= 0 then return false end
+        lastTrigger = tick()
+        if mouse1click then mouse1click() end
+        return true
+    end
     if r and r.Instance then
         local m = r.Instance:FindFirstAncestorOfClass("Model")
         if m and m:FindFirstChildOfClass("Humanoid") then
-            local h = m:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then
-                local plr = Players:GetPlayerFromCharacter(m)
-                if plr and Config.TeamCheck and IsAlly(plr) then return end
-                lastTrigger = tick()
-                if mouse1click then mouse1click() end
-            
+            local plr = Players:GetPlayerFromCharacter(m)
+            if _tryFireOnPlayer(plr) then return end
+        elseif Config.TriggerBot.AutoWall then
+            local origin = ray.Origin
+            local dir = ray.Direction.Unit
+            for _, pl in ipairs(Players:GetPlayers()) do
+                if pl ~= LocalPlayer and pl.Character then
+                    local root = pl.Character:FindFirstChild("HumanoidRootPart")
+                    if root then
+                        local toRoot = (root.Position - origin)
+                        if toRoot.Magnitude > 0 and math.acos(math.clamp(dir:Dot(toRoot.Unit), -1, 1)) < math.rad(2.5) then
+                            local pStats = GetPenetrationStats(origin, dir, 4, { LocalPlayer.Character, Camera }, pl.Character)
+                            if pStats and pStats.Success then
+                                if _tryFireOnPlayer(pl) then return end
+                            end
+                        end
+                    end
+                end
             end
         end
     end
 end
+
 
 local ControllerCache = {}
 local function _getController(name)
@@ -4652,21 +4822,24 @@ end
 
 local function _uniformScale(inst, factor)
     if not inst or not factor or factor == 1 then return end
-    if inst:IsA("BasePart") then
+    local function _scaleBP(bp)
         local visualMeshes = {}
-        for _, ch in ipairs(inst:GetChildren()) do
+        for _, ch in ipairs(bp:GetChildren()) do
             if ch:IsA("SpecialMesh") or ch:IsA("BlockMesh") or ch:IsA("CylinderMesh") then
                 table.insert(visualMeshes, ch)
             end
         end
         if #visualMeshes > 0 then
-
-            for _, ch in ipairs(visualMeshes) do
-                pcall(function() ch.Scale = ch.Scale * factor end)
-            end
+            for _, ch in ipairs(visualMeshes) do pcall(function() ch.Scale = ch.Scale * factor end) end
         else
-            
-            pcall(function() inst.Size = inst.Size * factor end)
+            pcall(function() bp.Size = bp.Size * factor end)
+        end
+    end
+    if inst:IsA("BasePart") then
+        _scaleBP(inst)
+    elseif inst:IsA("Model") or inst:IsA("Folder") then
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d:IsA("BasePart") then _scaleBP(d) end
         end
     end
 end
@@ -4730,7 +4903,7 @@ local function attachAsset(folder, arm, model, name, offset, ref)
 
     
     
-    if name == "Glove" and mesh:IsA("BasePart") and target:IsA("BasePart") then
+    if name == "Glove" and target:IsA("BasePart") and Config.Skins.SelectedKnife ~= "Gut Knife" then
         local factor = 0.86
         _uniformScale(mesh, factor)
         local prev = SkinSystem.gloveScale or 1.0
@@ -4832,7 +5005,18 @@ local function handleAction(actionName, state)
             end
             if SkinSystem.inspectAlt then SkinSystem._inspectFlip = not SkinSystem._inspectFlip end
             _signalOnce(track.Stopped, function() SkinSystem.inspecting = false end)
+            local _inspectTok = (SkinSystem._inspectTok or 0) + 1
+            SkinSystem._inspectTok = _inspectTok
+            local _len = 5
+            pcall(function() if track.Length and track.Length > 0 then _len = track.Length + 1.5 end end)
+            task.delay(_len, function()
+                if SkinSystem._inspectTok == _inspectTok and SkinSystem.inspecting then
+                    SkinSystem.inspecting = false
+                    pcall(function() track:Stop() end)
+                end
+            end)
         else SkinSystem.inspecting = false end
+
     elseif actionName == "AttackKnifeAction" or actionName == "RightAttackKnifeAction" then
         local now = os.clock()
         if now - SkinSystem.lastAttackTime < 1 then return Enum.ContextActionResult.Pass end
@@ -7111,7 +7295,16 @@ function CleanupScript()
         end
         local pool = Workspace:FindFirstChild("EclipseTracerPool")
         if pool then pool:Destroy() end
+        _EclipseTracerPool = nil
     end)
+    pcall(_pen3dDestroy)
+    pcall(function()
+        if _EclipseStretch and _EclipseStretch.conn then _EclipseStretch.conn:Disconnect(); _EclipseStretch.conn = nil end
+        _EclipseStretch = { v = 0, conn = nil }
+    end)
+
+
+
     if Library and type(Library.Unload) == "function" then pcall(function() Library:Unload() end) end
     getgenv().EclipseHubLoaded = nil
 end
@@ -7234,12 +7427,13 @@ do
     local GlobGB = Tabs.Aim:AddLeftGroupbox("GLOBAL", "settings")
     GlobGB:AddToggle("Global_Enable", { Text="GLOBAL SETTINGS", Default=true,
         Callback=function(v) Config.GlobalEnable = v end })
-    GlobGB:AddToggle("Global_TeamCheck", { Text="TEAM CHECK", Default=true,
+    GlobGB:AddToggle("Global_TeamCheck", { Text="TEAM CHECK", Default=not _IS_DEATHMATCH,
         Callback=function(v)
+            if _IS_DEATHMATCH then Config.TeamCheck = false; pcall(syncAllESP); return end
             Config.TeamCheck = v
-
             pcall(syncAllESP)
         end })
+
 end
 
 local AimGB = Tabs.Aim:AddRightGroupbox("AIMBOT")
@@ -7303,18 +7497,22 @@ AimGB:AddToggle("Aimbot_DrawFOV", { Text="DRAW FOV",    Default=true, Callback=f
 AimGB:AddToggle("Aimbot_NoSmoke", { Text="DISABLE IN SMOKE", Default=true, Callback=function(v) Config.Aimbot.DisableInSmoke=v end })
 AimGB:AddToggle("Aimbot_NoFlash", { Text="DISABLE IN FLASH", Default=true, Callback=function(v) Config.Aimbot.DisableInFlash=v end })
 AimGB:AddToggle("Pen_CH_Toggle", { Text="PENETRATION CROSSHAIR", Default=false,
-    Callback=function(v) Config.Crosshair.PenetrationEnabled=v; if PenText and not v then PenText.Visible=false end end })
+    Callback=function(v) Config.Crosshair.PenetrationEnabled=v; if not v then pcall(_pen3dHide) end end })
+
     :AddColorPicker("Pen_CH_OkCol", { Default=Config.Crosshair.PenetrationOkColor, Title="Wallbang YES color",
         Callback=function(c) Config.Crosshair.PenetrationOkColor=c end })
     :AddColorPicker("Pen_CH_NoCol", { Default=Config.Crosshair.PenetrationNoColor, Title="Wallbang NO color",
         Callback=function(c) Config.Crosshair.PenetrationNoColor=c end })
+AimGB:AddToggle("Aim_Wallbang", { Text="WALLBANG", Default=false, Callback=function(v) Config.Crosshair.Wallbang=v end })
 
 local TrigGB = Tabs.Aim:AddLeftGroupbox("TRIGGER BOT")
 TrigGB:AddToggle("Trigger_Toggle", { Text="ENABLE TRIGGER", Default=false, Callback=function(v) Config.TriggerBot.Enabled=v end })
     :AddKeyPicker("Trigger_Key", { Default="T", SyncToggleState=true, Mode="Toggle", Text="Trigger" })
+TrigGB:AddToggle("Trigger_AutoWall", { Text="AUTO WALL", Default=false, Callback=function(v) Config.TriggerBot.AutoWall=v end })
 local trigDelay   = TrigGB:AddSlider("Trigger_Delay",     { Text="DELAY",        Default=0.01, Min=0.01, Max=0.5, Rounding=2, Callback=function(v) Config.TriggerBot.Delay=v end })
 local trigHC      = TrigGB:AddSlider("Trigger_HitChance", { Text="HIT CHANCE %", Default=100,  Min=1,    Max=100, Rounding=0, Callback=function(v) Config.TriggerBot.HitChance=v end })
 local trigSpread  = TrigGB:AddSlider("Trigger_Spread",    { Text="SPREAD",       Default=0,    Min=0,    Max=10,  Rounding=0, Callback=function(v) Config.TriggerBot.Spread=v end })
+
 function updateTriggerModeUI(m)
     if m == "NoSpread" then
         Config.TriggerBot.HitChance=100; Config.TriggerBot.Spread=0; Config.TriggerBot.Delay=0.01
@@ -7380,6 +7578,17 @@ WorldEspGB:AddToggle("Grenade_Pred", { Text="GRENADE PREDICTION", Default=false,
 end })
     :AddColorPicker("Grenade_LineCol", { Default=Config.Grenade.LineColor, Title="Trajectory color", Callback=function(c) Config.Grenade.LineColor=c end })
 
+local PVGB = Tabs.Visuals:AddRightGroupbox("PLAYER VISUALS", "user")
+PVGB:AddToggle("PV_KillEffect", { Text="KILL EFFECT", Default=false,
+    Callback=function(v) Config.Visuals.KillEffect=v end })
+SafeAddDropdown(PVGB, "PV_KillEffectType", {
+    Text="EFFECT", Values={"Explode","Blackhole","Ascend","Confetti","Zeus"},
+    Default=Config.Visuals.KillEffectType,
+    Callback=function(v) Config.Visuals.KillEffectType=v end,
+})
+
+
+
 local ChGB = Tabs.Visuals:AddLeftGroupbox("SNIPER CROSSHAIR", "crosshair")
 ChGB:AddToggle("Sniper_CH_Toggle", { Text="SNIPER CROSSHAIR", Default=false,
     Callback=function(v) Config.Crosshair.SniperEnabled=v; for _,o in pairs(CH) do o.Visible=false end end })
@@ -7390,6 +7599,15 @@ ChGB:AddSlider("Sniper_CH_Size",  { Text="SIZE",     Default=10, Min=2,  Max=40,
 ChGB:AddSlider("Sniper_CH_Gap",   { Text="GAP",      Default=4,  Min=0,  Max=30, Rounding=0, Callback=function(v) Config.Crosshair.Gap=v end })
 ChGB:AddSlider("Sniper_CH_Thick", { Text="THICKNESS",Default=1,  Min=1,  Max=5,  Rounding=0, Callback=function(v) Config.Crosshair.Thickness=v end })
 ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=function(v) Config.Crosshair.Dot=v end })
+
+
+Config.Extras = Config.Extras or {}
+Config.Extras.BulletTracer = false
+function _drawTracer() end
+
+
+
+
 
 
 
@@ -8180,6 +8398,43 @@ end)
 
 Config.Misc.AutoDefuse = false
 Config.Misc.ForceScope = false
+Config.Misc.StretchedResolution = Config.Misc.StretchedResolution or 0
+
+_EclipseStretch = _EclipseStretch or { v = 0, conn = nil }
+local function _stretchFactor(v)
+    v = tonumber(v) or 0
+    v = math.clamp(v, 0, 10)
+    return 1 - (v * 0.03)
+end
+local function _applyStretch(v)
+    if not Camera then return end
+    _EclipseStretch.v = tonumber(v) or 0
+    if (_EclipseStretch.v or 0) <= 0 then
+        if _EclipseStretch.conn then pcall(function() _EclipseStretch.conn:Disconnect() end); _EclipseStretch.conn = nil end
+        return
+    end
+    if _EclipseStretch.conn then return end
+    _EclipseStretch.conn = RunService.RenderStepped:Connect(function()
+        if not Camera then return end
+        if (_EclipseStretch.v or 0) <= 0 then return end
+        local f = _stretchFactor(_EclipseStretch.v)
+        pcall(function()
+            Camera.CFrame = Camera.CFrame * CFrame.new(0, 0, 0, 1, 0, 0, 0, f, 0, 0, 0, 1)
+        end)
+    end)
+    connectSignal(_EclipseStretch.conn)
+end
+MiscGB:AddSlider("StretchedRes_Slider", { Text="STRETCHED RESOLUTION", Default=0, Min=0, Max=10, Rounding=1,
+    Callback=function(v)
+        Config.Misc.StretchedResolution = v
+        pcall(_applyStretch, v)
+    end })
+
+
+
+
+
+
 MiscGB:AddToggle("NoCameraRecoil_Toggle", { Text="NO CAMERA RECOIL", Default=false, Callback=function(v)
     Config.Misc.NoCameraRecoil = v; pcall(_updateNoRecoil)
 end })
@@ -8480,13 +8735,8 @@ end)
 end)() 
 end)() 
 
-pcall(function()
 
-    task.defer(function()
-        pcall(_ecfgApplyLoadedControls)
-        pcall(_ecfgStartAutosave)
-    end)
-end)
+
 
 ;(function() 
 local GenGB = Tabs.General:AddLeftGroupbox("MENU")
@@ -9161,24 +9411,25 @@ EX.ChatFrame = nil
     if GPD_OK then
         pcall(function()
             local ring = Drawing.new("Circle")
-            ring.Radius = 16; ring.Filled = false; ring.Thickness = 2
-            ring.NumSides = 40; ring.Transparency = 1; ring.Visible = false
+            ring.Radius = 20; ring.Filled = false; ring.Thickness = 1
+            ring.NumSides = 64; ring.Transparency = 1; ring.Visible = false
             EX.WarnRing = ring
 
             local aura = Drawing.new("Circle")
-            aura.Radius = 22; aura.Filled = true; aura.NumSides = 40
-            aura.Transparency = 0.25; aura.Visible = false
+            aura.Radius = 30; aura.Filled = true; aura.NumSides = 64
+            aura.Transparency = 0.18; aura.Visible = false
             EX.WarnRingGlow = aura
 
             local dot = Drawing.new("Circle")
-            dot.Radius = 5; dot.Filled = true; dot.NumSides = 24
+            dot.Radius = 3; dot.Filled = true; dot.NumSides = 32
             dot.Transparency = 1; dot.Visible = false
             EX.WarnDot = dot
 
             local lbl = Drawing.new("Text")
-            lbl.Size = 15; lbl.Center = true; lbl.Outline = true
+            lbl.Size = 13; lbl.Center = true; lbl.Outline = true
+            lbl.Font = 2
             lbl.OutlineColor = Color3.new(0,0,0)
-            lbl.Color = Color3.fromRGB(255,255,255); lbl.Visible = false
+            lbl.Color = Color3.fromRGB(240,240,250); lbl.Visible = false
             EX.WarnLabel = lbl
         end)
     end
@@ -9187,10 +9438,10 @@ EX.ChatFrame = nil
         if pair then return pair end
         if not GPD_OK then return nil end
         local ok, outer = pcall(function()
-            local x = Drawing.new("Line"); x.Thickness = 5; x.Transparency = 0.35; x.Visible = false; return x
+            local x = Drawing.new("Line"); x.Thickness = 3; x.Transparency = 0.22; x.Visible = false; return x
         end); if not ok then return nil end
         local ok2, inner = pcall(function()
-            local x = Drawing.new("Line"); x.Thickness = 2; x.Transparency = 1; x.Visible = false; return x
+            local x = Drawing.new("Line"); x.Thickness = 1; x.Transparency = 0.95; x.Visible = false; return x
         end); if not ok2 then return nil end
         return { outer = outer, inner = inner }
     end
@@ -9419,25 +9670,30 @@ EX.ChatFrame = nil
                         local sp, so = Camera:WorldToViewportPoint(bestEnd)
                         if so then
                             local pos = Vector2.new(sp.X, sp.Y)
-                            local pulse = 0.6 + 0.4 * (0.5 + 0.5 * math.sin(tick() * 4))
+                            local pulse = 0.75 + 0.25 * (0.5 + 0.5 * math.sin(tick() * 3.2))
                             if EX.WarnRingGlow then
                                 EX.WarnRingGlow.Position = pos
-                                EX.WarnRingGlow.Radius = 24 * pulse
+                                EX.WarnRingGlow.Radius = 34 * pulse
                                 EX.WarnRingGlow.Color = col
+                                EX.WarnRingGlow.Transparency = 0.15
                                 EX.WarnRingGlow.Visible = true
                             end
                             EX.WarnRing.Position = pos
-                            EX.WarnRing.Radius = 16
+                            EX.WarnRing.Radius = 20 * pulse
+                            EX.WarnRing.Thickness = 1
+                            EX.WarnRing.Transparency = 0.95
                             EX.WarnRing.Color = col
                             EX.WarnRing.Visible = true
                             if EX.WarnDot then
                                 EX.WarnDot.Position = pos
+                                EX.WarnDot.Radius = 3
                                 EX.WarnDot.Color = col
                                 EX.WarnDot.Visible = true
                             end
                             if EX.WarnLabel then
-                                EX.WarnLabel.Position = Vector2.new(sp.X, sp.Y - 30)
+                                EX.WarnLabel.Position = Vector2.new(sp.X, sp.Y - 36)
                                 EX.WarnLabel.Text = bestType
+                                EX.WarnLabel.Color = col
                                 EX.WarnLabel.Visible = true
                             end
                         end
@@ -9701,7 +9957,235 @@ end)()
     end)
 end)() 
 
+;(function()
+    local PV = {}
+    PV.WeaponHL   = setmetatable({}, { __mode="k" })
+    PV.MaterialSaved = setmetatable({}, { __mode="k" })
+
+    local function _weaponModelsFor(char)
+        local out = {}
+        if not char then return out end
+        for _, d in ipairs(char:GetChildren()) do
+            if d:IsA("Model") and d ~= char and d.Name ~= "Head" and d.Name ~= "HumanoidRootPart" then
+                local hasPart = false
+                for _, x in ipairs(d:GetDescendants()) do
+                    if x:IsA("BasePart") then hasPart = true; break end
+                end
+                if hasPart then table.insert(out, d) end
+            end
+            if d:IsA("Tool") then table.insert(out, d) end
+        end
+        return out
+    end
+
+    local function _isPlayerBodyPart(part)
+        local p = part.Parent
+        while p do
+            if p:FindFirstChildOfClass("Humanoid") then return true end
+            p = p.Parent
+        end
+        return false
+    end
+
+    local _lastDamagedByLP = setmetatable({}, { __mode="k" })
+    local _killEffectDone = setmetatable({}, { __mode="k" })
+
+
+    local function _spawnKillEffect(victimChar)
+        if not victimChar then return end
+        local hrp = victimChar:FindFirstChild("HumanoidRootPart") or victimChar:FindFirstChild("Torso") or victimChar:FindFirstChild("UpperTorso")
+        if not hrp then return end
+        local etype = Config.Visuals.KillEffectType or "Explode"
+        if etype == "Explode" then
+            local ex = Instance.new("Explosion")
+            ex.BlastRadius = 8; ex.BlastPressure = 0; ex.DestroyJointRadiusPercent = 0
+            ex.Position = hrp.Position; ex.Parent = workspace
+        elseif etype == "Blackhole" then
+            local orb = Instance.new("Part")
+            orb.Shape = Enum.PartType.Ball; orb.Material = Enum.Material.Neon
+            orb.Color = Color3.new(0.05,0.02,0.15); orb.Size = Vector3.new(6,6,6)
+            orb.Anchored = true; orb.CanCollide = false; orb.CFrame = hrp.CFrame
+            orb.Parent = workspace
+            for _, p in ipairs(victimChar:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.Anchored = false; p.CanCollide = false
+                    local at = Instance.new("Attachment", p)
+                    local a = Instance.new("AlignPosition")
+                    a.Attachment0 = at; a.Mode = Enum.PositionAlignmentMode.OneAttachment
+                    a.Position = hrp.Position; a.MaxForce = 1e6; a.Responsiveness = 30
+                    a.Parent = p
+                end
+            end
+            task.delay(1.2, function() pcall(function() orb:Destroy() end) end)
+        elseif etype == "Ascend" then
+            for _, p in ipairs(victimChar:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.Anchored = false; p.CanCollide = false
+                    local bv = Instance.new("BodyVelocity", p)
+                    bv.MaxForce = Vector3.new(1e6,1e6,1e6)
+                    bv.Velocity = Vector3.new(math.random(-4,4), 40 + math.random(0,20), math.random(-4,4))
+                    game:GetService("Debris"):AddItem(bv, 1.5)
+                end
+            end
+        elseif etype == "Confetti" then
+            local at = Instance.new("Attachment", hrp)
+            local pe = Instance.new("ParticleEmitter", at)
+            pe.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+            pe.Rate = 0; pe.Lifetime = NumberRange.new(1.2)
+            pe.Speed = NumberRange.new(20,40); pe.SpreadAngle = Vector2.new(180,180)
+            pe.Size = NumberSequence.new(1); pe.Color = ColorSequence.new(Color3.new(1,0.6,0.9), Color3.new(0.5,0.8,1))
+            pe:Emit(120); game:GetService("Debris"):AddItem(at, 2)
+        elseif etype == "Zeus" then
+            local ex = Instance.new("Explosion")
+            ex.BlastRadius = 4; ex.BlastPressure = 0; ex.Position = hrp.Position + Vector3.new(0,8,0); ex.Parent = workspace
+            local bolt = Instance.new("Part")
+            bolt.Anchored = true; bolt.CanCollide = false; bolt.Material = Enum.Material.Neon
+            bolt.Color = Color3.fromRGB(180, 220, 255); bolt.Size = Vector3.new(0.4, 30, 0.4)
+            bolt.CFrame = CFrame.new(hrp.Position + Vector3.new(0,15,0))
+            bolt.Parent = workspace
+            local lt = Instance.new("PointLight", bolt); lt.Brightness = 8; lt.Range = 20; lt.Color = bolt.Color
+            game:GetService("Debris"):AddItem(bolt, 0.6)
+        end
+    end
+
+
+    local function _isEnemyPlayer(plr)
+        if not plr or plr == LocalPlayer then return false end
+        if IsAlly and IsAlly(plr) then return false end
+        return true
+    end
+
+    local function _attackerIsLocal(attacker)
+        if attacker == LocalPlayer then return true end
+        if typeof(attacker) == "Instance" then
+            if attacker.Name == LocalPlayer.Name then return true end
+            local ch = LocalPlayer.Character
+            if ch and attacker:IsDescendantOf(ch) then return true end
+        elseif tostring(attacker) == LocalPlayer.Name then
+            return true
+        end
+        return false
+    end
+
+    local function _tryKillEffectFromHealth(plr, char)
+        if not char or _killEffectDone[char] then return end
+        if plr == LocalPlayer then return end
+        if IsAlly and IsAlly(plr) then return end
+        local recent = _lastDamagedByLP[plr] and (tick()-_lastDamagedByLP[plr]) < 2.5
+        if not recent then return end
+        _killEffectDone[char] = tick()
+        if Config.GlobalEnable and Config.Visuals.KillEffect then
+            task.spawn(function() pcall(_spawnKillEffect, char) end)
+        end
+    end
+
+    local function _nearestEnemyName()
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar:FindFirstChild("Torso"))
+        if not myRoot then return nil, nil end
+        local best, bd
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if _isEnemyPlayer(plr) and plr.Character then
+                local r = plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Torso")
+                if r then
+                    local d = (r.Position - myRoot.Position).Magnitude
+                    if not bd or d < bd then bd = d; best = plr end
+                end
+            end
+        end
+        return best, bd
+    end
+
+    pcall(function()
+        local Rem = require(ReplicatedStorage.Database.Security.Remotes)
+        if Rem and Rem.Character then
+            if Rem.Character.CharacterDamaged and Rem.Character.CharacterDamaged.Listen then
+                local conn = Rem.Character.CharacterDamaged.Listen(function(victim, dmg, attacker)
+                    local didLPDamage = _attackerIsLocal(attacker)
+                    if Config.Logging.Enabled then
+                        local aname = typeof(attacker)=="Instance" and attacker.Name or tostring(attacker)
+                        if didLPDamage then
+                            local vname = typeof(victim)=="Instance" and victim.Name or tostring(victim)
+                            pcall(function() Library:Notify({ Title="Damage Dealt", Description=string.format("%s took %s dmg", vname, tostring(dmg)), Time=3 }) end)
+                        end
+                    end
+                    if didLPDamage and typeof(victim)=="Instance" then
+                        local vp = Players:GetPlayerFromCharacter(victim) or victim:FindFirstAncestorOfClass("Model")
+                        if typeof(vp) == "Instance" and vp:IsA("Player") then
+                            _lastDamagedByLP[vp] = tick()
+                        else
+                            local vchar = victim:IsA("Model") and victim or victim.Parent
+                            local vplr = Players:GetPlayerFromCharacter(vchar)
+                            if vplr then _lastDamagedByLP[vplr] = tick() end
+                        end
+                    end
+                end)
+                if conn and typeof(conn)=="RBXScriptConnection" then table.insert(UnloadConnections, conn) end
+            end
+            if Rem.Character.CharacterDied and Rem.Character.CharacterDied.Listen then
+                local conn = Rem.Character.CharacterDied.Listen(function(victim, killer)
+                    local killedByLP = false
+                    local kname = typeof(killer)=="Instance" and killer.Name or tostring(killer)
+                    if kname == LocalPlayer.Name then killedByLP = true end
+                    local vplr, vchar
+                    if typeof(victim)=="Instance" then
+                        vchar = victim:IsA("Model") and victim or victim.Parent
+                        vplr  = Players:GetPlayerFromCharacter(vchar)
+                    end
+                    if not killedByLP and vplr and _lastDamagedByLP[vplr] and (tick()-_lastDamagedByLP[vplr]) < 1.0 then
+                        killedByLP = true
+                    end
+                    if killedByLP then
+                        if Config.Logging.Enabled then
+                            local vname = vplr and vplr.Name or (vchar and vchar.Name) or "?"
+                            pcall(function() Library:Notify({ Title="Enemy Eliminated", Description="You killed "..vname, Time=4 }) end)
+                        end
+                        if Config.GlobalEnable and Config.Visuals.KillEffect and vchar then
+                            if not _killEffectDone[vchar] then
+                                _killEffectDone[vchar] = tick()
+                                task.spawn(function() pcall(_spawnKillEffect, vchar) end)
+                            end
+                        end
+                    end
+                end)
+                if conn and typeof(conn)=="RBXScriptConnection" then table.insert(UnloadConnections, conn) end
+            end
+        end
+    end)
+
+    local function _hookHumanoidDied(plr, char)
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        if hum:GetAttribute("EclipseKillHooked") then return end
+        hum:SetAttribute("EclipseKillHooked", true)
+        local hConn, dConn
+        hConn = hum.HealthChanged:Connect(function(hp)
+            if tonumber(hp) and hp <= 0 then
+                if hConn then pcall(function() hConn:Disconnect() end) end
+                pcall(_tryKillEffectFromHealth, plr, char)
+            end
+        end)
+        dConn = hum.Died:Connect(function()
+            if dConn then pcall(function() dConn:Disconnect() end) end
+            if hConn then pcall(function() hConn:Disconnect() end) end
+            pcall(_tryKillEffectFromHealth, plr, char)
+        end)
+        table.insert(UnloadConnections, hConn)
+        table.insert(UnloadConnections, dConn)
+    end
+
+    local function _bindPlayer(plr)
+        if plr.Character then _hookHumanoidDied(plr, plr.Character) end
+        table.insert(UnloadConnections, plr.CharacterAdded:Connect(function(c)
+            task.wait(0.2); _hookHumanoidDied(plr, c)
+        end))
+    end
+    for _, plr in ipairs(Players:GetPlayers()) do _bindPlayer(plr) end
+    table.insert(UnloadConnections, Players.PlayerAdded:Connect(_bindPlayer))
+end)()
+
 UpdateWeather(Config.World.Weather)
+
 
 task.spawn(function()
     if getgenv().Eclipse.sessionSeen then
@@ -9717,4 +10201,15 @@ task.spawn(function()
             Library:Notify({ Title="Eclipse Hub", Description="<b>Eclipse has been loaded.</b> RightShift to open/hide.", Time=6 })
         end)
     end
+end)
+
+pcall(function()
+    task.defer(function()
+        task.wait(0.5)
+        pcall(_ecfgApplyLoadedControls)
+        pcall(_ecfgStartAutosave)
+        for _, d in ipairs({0.8, 2.0, 4.0}) do
+            task.delay(d, function() pcall(_ecfgApplyLoadedControls) end)
+        end
+    end)
 end)
