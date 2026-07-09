@@ -5,7 +5,7 @@ local ECLIPSE = {
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
     PresenceWS    = "wss://eclipssehub.lovable.app/api/presence",
     PresenceHTTP  = "https://eclipssehub.lovable.app/api/presence",
-    GameLock      = 114234929420007,
+    GameLock      = { 114234929420007, 135434213652028 },
     PresenceColor = Color3.fromRGB(160, 90, 255),
 }
 
@@ -170,9 +170,14 @@ local function InstallDeviceSpoofer()
     end)
 end
 
-if ECLIPSE.GameLock and game.PlaceId ~= ECLIPSE.GameLock then
-    LocalPlayer:Kick("Eclipse Hub: incompatible game.")
-    return
+if ECLIPSE.GameLock then
+    local locks = type(ECLIPSE.GameLock) == "table" and ECLIPSE.GameLock or { ECLIPSE.GameLock }
+    local ok = false
+    for _, id in ipairs(locks) do if game.PlaceId == id or game.GameId == id then ok = true; break end end
+    if not ok then
+        LocalPlayer:Kick("Eclipse Hub: incompatible game.")
+        return
+    end
 end
 
 do
@@ -836,7 +841,7 @@ local Config = {
         IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90), 
         
     },
-    Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true },
+    Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true, PenetrationEnabled=false, PenetrationOkColor=Color3.fromRGB(0,255,0), PenetrationNoColor=Color3.fromRGB(255,60,60) },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={}, PerCategory={}, Mode="Global", SelectedWeapon="AK-47", SelectedCategory="Rifles" },
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
@@ -1456,6 +1461,102 @@ end
 local Debris = game:GetService("Debris")
 
 function updateRemoveScope() end
+
+local PenMaterialLimits = {
+    [Enum.Material.Plastic]=7,[Enum.Material.SmoothPlastic]=7,[Enum.Material.Wood]=7,
+    [Enum.Material.WoodPlanks]=7,[Enum.Material.Cardboard]=7,
+}
+local PenMaterialVariantLimits = { ["IndoorWall"]=0.25, ["Sandy Brick"]=0.25 }
+local function _penMatLimit(mat) return PenMaterialLimits[mat] or 0.25 end
+
+local function GetPenetrationStats(origin, direction, maxPen, ignoreList, targetRoot)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    pcall(function() params.CollisionGroup = "Bullet" end)
+    local filter = ignoreList or { LocalPlayer.Character, Camera }
+    params.FilterDescendantsInstances = filter
+    local backParams = RaycastParams.new()
+    backParams.FilterType = Enum.RaycastFilterType.Include
+    pcall(function() backParams.CollisionGroup = "Bullet" end)
+    local currentOrigin, currentDir = origin, direction
+    local accMat, accVar = {}, {}
+    local stats = { TotalThickness=0, Success=false, FailReason="Max Steps", EndPos=Vector3.zero }
+    for _ = 1, 40 do
+        if not currentOrigin or not currentDir then break end
+        local result = Workspace:Raycast(currentOrigin, currentDir * 1000, params)
+        if not result then
+            if not targetRoot then stats.Success=true; stats.EndPos=currentOrigin+currentDir*1000
+            else stats.FailReason="Void" end
+            break
+        end
+        if not result.Instance or not result.Instance.Parent then stats.FailReason="Destroyed"; break end
+        if targetRoot and result.Instance:IsDescendantOf(targetRoot) then
+            stats.Success=true; stats.EndPos=result.Position; stats.FailReason="Hit"; return stats
+        end
+        table.insert(filter, result.Instance); params.FilterDescendantsInstances = filter
+        local enterPos = result.Position
+        local fakeEnd = enterPos + currentDir * 1000
+        backParams.FilterDescendantsInstances = { result.Instance }
+        local backRes = Workspace:Raycast(fakeEnd, enterPos - fakeEnd, backParams)
+        local thickness, limit = 0.5, 0.25
+        if not backRes then thickness = 5; stats.FailReason="Infinite/Block"
+        else
+            thickness = (enterPos - backRes.Position).Magnitude
+            local variant = backRes.Instance and backRes.Instance.MaterialVariant or ""
+            if variant ~= "" and PenMaterialVariantLimits[variant] then
+                limit = PenMaterialVariantLimits[variant]
+                accVar[variant] = (accVar[variant] or 0) + thickness
+                if accVar[variant] > limit + maxPen then
+                    stats.FailReason = string.format("Var:%s", variant); return stats
+                end
+            else
+                local mat = backRes.Material
+                limit = _penMatLimit(mat)
+                accMat[mat] = (accMat[mat] or 0) + thickness
+                if accMat[mat] > limit + maxPen then
+                    stats.FailReason = string.format("%s", mat.Name); return stats
+                end
+            end
+            currentOrigin = backRes.Position
+        end
+        stats.TotalThickness = stats.TotalThickness + thickness
+    end
+    return stats
+end
+
+local PenText = nil
+if GPD_OK then
+    PenText = Drawing.new("Text")
+    PenText.Visible = false
+    PenText.Center = true
+    PenText.Size = 16
+    PenText.Font = 2
+    PenText.Outline = true
+    PenText.Color = Color3.fromRGB(0,255,0)
+end
+
+function updatePenetrationCrosshair()
+    if not PenText then return end
+    local on = Config.GlobalEnable and Config.Crosshair.PenetrationEnabled
+    if not on or not Camera then PenText.Visible = false; return end
+    local vs = Camera.ViewportSize
+    PenText.Position = Vector2.new(vs.X/2, vs.Y/2 - 40)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    pcall(function() params.CollisionGroup = "Bullet" end)
+    params.FilterDescendantsInstances = { LocalPlayer.Character, Camera }
+    local res = Workspace:Raycast(Camera.CFrame.Position, Camera.CFrame.LookVector * 1000, params)
+    if not res then PenText.Visible = false; return end
+    local stats = GetPenetrationStats(Camera.CFrame.Position, Camera.CFrame.LookVector, 4, { LocalPlayer.Character, Camera }, nil)
+    PenText.Visible = true
+    if stats.Success then
+        PenText.Text = string.format("WALLBANG: YES (%.1f)", stats.TotalThickness or 0)
+        PenText.Color = Config.Crosshair.PenetrationOkColor or Color3.fromRGB(0,255,0)
+    else
+        PenText.Text = "WALLBANG: NO"
+        PenText.Color = Config.Crosshair.PenetrationNoColor or Color3.fromRGB(255,60,60)
+    end
+end
 
 local GPD_OK = (type(Drawing) == "table" or type(Drawing) == "userdata") and type(Drawing.new) == "function"
 local GPD = {
@@ -4909,9 +5010,15 @@ local function applyWeaponSkin(model, forcedSkin)
         local src = st and st:FindFirstChild("Camera") and st.Camera:FindFirstChild("Factory New")
         if not src then return end
         if not GLOVES[model.Name] then
-            local wf = model:FindFirstChild("Weapon")
-            if wf then
-                for _, p in wf:GetDescendants() do
+            local roots = {}
+            for _, ch in ipairs(model:GetChildren()) do
+                if ch.Name == "Weapon" or ch.Name:find("Weapon") then
+                    table.insert(roots, ch)
+                end
+            end
+            if #roots == 0 then table.insert(roots, model) end
+            for _, wf in ipairs(roots) do
+                for _, p in ipairs(wf:GetDescendants()) do
                     if p:IsA("BasePart") then
                         local ns = src:FindFirstChild(p.Name)
                         if ns then _applySkinSourceToPart(p, ns) end
@@ -7038,6 +7145,7 @@ connectSignal(RunService.RenderStepped:Connect(function()
     safeUpdate("RCS", updateRCS)
     safeUpdate("Movement", updateMovement)
     safeUpdate("SniperCrosshair", updateSniperCrosshair)
+    safeUpdate("PenetrationCrosshair", updatePenetrationCrosshair)
     safeUpdate("C4Timer", updateC4Timer)
     safeUpdate("ForceScope", _updateForceScope)
     safeUpdate("GrenadePrediction", updateGrenadePrediction)
@@ -7194,6 +7302,12 @@ AimGB:AddToggle("Aimbot_DrawFOV", { Text="DRAW FOV",    Default=true, Callback=f
 
 AimGB:AddToggle("Aimbot_NoSmoke", { Text="DISABLE IN SMOKE", Default=true, Callback=function(v) Config.Aimbot.DisableInSmoke=v end })
 AimGB:AddToggle("Aimbot_NoFlash", { Text="DISABLE IN FLASH", Default=true, Callback=function(v) Config.Aimbot.DisableInFlash=v end })
+AimGB:AddToggle("Pen_CH_Toggle", { Text="PENETRATION CROSSHAIR", Default=false,
+    Callback=function(v) Config.Crosshair.PenetrationEnabled=v; if PenText and not v then PenText.Visible=false end end })
+    :AddColorPicker("Pen_CH_OkCol", { Default=Config.Crosshair.PenetrationOkColor, Title="Wallbang YES color",
+        Callback=function(c) Config.Crosshair.PenetrationOkColor=c end })
+    :AddColorPicker("Pen_CH_NoCol", { Default=Config.Crosshair.PenetrationNoColor, Title="Wallbang NO color",
+        Callback=function(c) Config.Crosshair.PenetrationNoColor=c end })
 
 local TrigGB = Tabs.Aim:AddLeftGroupbox("TRIGGER BOT")
 TrigGB:AddToggle("Trigger_Toggle", { Text="ENABLE TRIGGER", Default=false, Callback=function(v) Config.TriggerBot.Enabled=v end })
@@ -7276,6 +7390,9 @@ ChGB:AddSlider("Sniper_CH_Size",  { Text="SIZE",     Default=10, Min=2,  Max=40,
 ChGB:AddSlider("Sniper_CH_Gap",   { Text="GAP",      Default=4,  Min=0,  Max=30, Rounding=0, Callback=function(v) Config.Crosshair.Gap=v end })
 ChGB:AddSlider("Sniper_CH_Thick", { Text="THICKNESS",Default=1,  Min=1,  Max=5,  Rounding=0, Callback=function(v) Config.Crosshair.Thickness=v end })
 ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=function(v) Config.Crosshair.Dot=v end })
+
+
+
 
 local RcsGB = Tabs.Aim:AddLeftGroupbox("RECOIL CONTROL", "target")
 
@@ -9601,4 +9718,3 @@ task.spawn(function()
         end)
     end
 end)
-
