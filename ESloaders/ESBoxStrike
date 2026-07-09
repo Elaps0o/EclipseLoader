@@ -910,11 +910,12 @@ local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
 _ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
-_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v10" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v11" .. _ECLIPSE_AUTOCONFIG_EXT
 pcall(function()
     if type(delfile) == "function" and type(isfile) == "function" then
-        local old9 = "EclipseHub/autosave_v9.ehcfg"
-        if isfile(old9) then pcall(delfile, old9) end
+        for _, old in ipairs({ "EclipseHub/autosave_v9.ehcfg", "EclipseHub/autosave_v10.ehcfg" }) do
+            if isfile(old) then pcall(delfile, old) end
+        end
     end
 end)
 _EclipseAutoConfig = { loaded=nil, started=false, lastJson="", lastWrite=0 }
@@ -4365,7 +4366,7 @@ end
 
 local WeatherPart, WeatherEmitter
 function UpdateWeather(t)
-    if t ~= "None" and t ~= "Rain" and t ~= "Snow" and t ~= "Aurora" and t ~= "Stardust" then t = "None" end
+    if t ~= "None" and t ~= "Rain" and t ~= "Snow" and t ~= "Aurora" then t = "None" end
     if Config and Config.World then Config.World.Weather = t end
     if WeatherPart then WeatherPart:Destroy(); WeatherPart=nil end
     WeatherEmitter = nil
@@ -4373,72 +4374,111 @@ function UpdateWeather(t)
     WeatherPart = Instance.new("Part")
     WeatherPart.Name="Eclipse_Weather"; WeatherPart.Size=Vector3.new(100,1,100)
     WeatherPart.Transparency=1; WeatherPart.Anchored=true; WeatherPart.CanCollide=false
-
-    
+    local cam = workspace.CurrentCamera
+    if cam then WeatherPart.CFrame = cam.CFrame * CFrame.new(0,30,0) end
     WeatherPart.Parent = Workspace
     WeatherEmitter = Instance.new("ParticleEmitter", WeatherPart)
     WeatherEmitter.EmissionDirection = Enum.NormalId.Bottom
     if t == "Rain" then
-        WeatherEmitter.Texture="rbxassetid://241868005"; WeatherEmitter.Rate=10000
-        WeatherEmitter.Color=ColorSequence.new(Color3.fromRGB(200,200,200))
-        WeatherEmitter.Size=NumberSequence.new(3,6); WeatherEmitter.Lifetime=NumberRange.new(2,2.5)
+        WeatherEmitter.Texture="rbxassetid://241868005"; WeatherEmitter.Rate=9000
+        WeatherEmitter.Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(120,255,255)),
+            ColorSequenceKeypoint.new(0.50, Color3.fromRGB(80,220,255)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(150,240,255)),
+        })
+        WeatherEmitter.LightEmission=1; WeatherEmitter.LightInfluence=0
+        WeatherEmitter.Size=NumberSequence.new(2.2,4.5); WeatherEmitter.Lifetime=NumberRange.new(2,2.5)
         WeatherEmitter.Speed=NumberRange.new(80,100); WeatherEmitter.Acceleration=Vector3.new(0,-50,0)
+        WeatherEmitter.Transparency=NumberSequence.new({
+            NumberSequenceKeypoint.new(0,0.2), NumberSequenceKeypoint.new(1,0.4)
+        })
+        -- Extra glowing droplets
+        local glow = Instance.new("ParticleEmitter", WeatherPart)
+        glow.EmissionDirection = Enum.NormalId.Bottom
+        glow.Texture="rbxassetid://243098098"
+        glow.Rate=250; glow.LightEmission=1; glow.LightInfluence=0
+        glow.Color=ColorSequence.new(Color3.fromRGB(120,255,255), Color3.fromRGB(80,200,255))
+        glow.Size=NumberSequence.new(0.6,1.2)
+        glow.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,0.3),NumberSequenceKeypoint.new(1,0.85)})
+        glow.Lifetime=NumberRange.new(1.2,1.8); glow.Speed=NumberRange.new(70,95); glow.Acceleration=Vector3.new(0,-50,0)
     elseif t == "Snow" then
         WeatherEmitter.Texture="rbxassetid://99851851"; WeatherEmitter.Rate=200
         WeatherEmitter.Color=ColorSequence.new(Color3.fromRGB(255,255,255))
+        WeatherEmitter.LightEmission=1; WeatherEmitter.LightInfluence=0
         WeatherEmitter.Size=NumberSequence.new(0.25,0.35); WeatherEmitter.Speed=NumberRange.new(30,30)
         WeatherEmitter.Lifetime=NumberRange.new(5,10); WeatherEmitter.SpreadAngle=Vector2.new(50,50)
     elseif t == "Aurora" then
-        WeatherEmitter.Texture="rbxassetid://243660364"; WeatherEmitter.Rate=260
+        -- Soft glowing orb particles (aurora borealis palette): green -> cyan -> violet -> magenta
+        WeatherEmitter.Texture="rbxassetid://243098098"
+        WeatherEmitter.Rate=180
         WeatherEmitter.Color=ColorSequence.new({
-            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(90,255,220)),
-            ColorSequenceKeypoint.new(0.35, Color3.fromRGB(140,120,255)),
-            ColorSequenceKeypoint.new(0.70, Color3.fromRGB(255,120,220)),
-            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(120,220,255)),
+            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(80, 255, 170)),
+            ColorSequenceKeypoint.new(0.30, Color3.fromRGB(90, 220, 255)),
+            ColorSequenceKeypoint.new(0.60, Color3.fromRGB(170, 130, 255)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 130, 220)),
         })
         WeatherEmitter.LightEmission=1; WeatherEmitter.LightInfluence=0
         WeatherEmitter.Size=NumberSequence.new({
-            NumberSequenceKeypoint.new(0,0.4), NumberSequenceKeypoint.new(0.4,3.4), NumberSequenceKeypoint.new(1,0.6)
+            NumberSequenceKeypoint.new(0, 0.2),
+            NumberSequenceKeypoint.new(0.5, 2.4),
+            NumberSequenceKeypoint.new(1, 0.3),
         })
         WeatherEmitter.Transparency=NumberSequence.new({
-            NumberSequenceKeypoint.new(0,1), NumberSequenceKeypoint.new(0.25,0.05), NumberSequenceKeypoint.new(1,1)
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.25, 0.35),
+            NumberSequenceKeypoint.new(0.75, 0.4),
+            NumberSequenceKeypoint.new(1, 1),
         })
-        WeatherEmitter.Lifetime=NumberRange.new(5,8); WeatherEmitter.Speed=NumberRange.new(4,9)
-        WeatherEmitter.Rotation=NumberRange.new(-180,180); WeatherEmitter.RotSpeed=NumberRange.new(-60,60)
-        WeatherEmitter.SpreadAngle=Vector2.new(45,45); WeatherEmitter.Acceleration=Vector3.new(0,-1.5,0)
-        local glow = Instance.new("ParticleEmitter", WeatherPart)
-        glow.EmissionDirection = Enum.NormalId.Bottom
-        glow.Texture="rbxassetid://243098098"; glow.Rate=90; glow.LightEmission=1; glow.LightInfluence=0
-        glow.Color=ColorSequence.new(Color3.fromRGB(180,140,255), Color3.fromRGB(120,220,255))
-        glow.Size=NumberSequence.new(6,10)
-        glow.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(0.4,0.55),NumberSequenceKeypoint.new(1,1)})
-        glow.Lifetime=NumberRange.new(6,10); glow.Speed=NumberRange.new(1,3); glow.SpreadAngle=Vector2.new(180,180)
-    elseif t == "Stardust" then
-        WeatherEmitter.Texture="rbxassetid://241594157"; WeatherEmitter.Rate=500
-        WeatherEmitter.Color=ColorSequence.new({
-            ColorSequenceKeypoint.new(0, Color3.fromRGB(255,240,180)),
-            ColorSequenceKeypoint.new(0.4, Color3.fromRGB(255,180,240)),
-            ColorSequenceKeypoint.new(0.75, Color3.fromRGB(180,220,255)),
-            ColorSequenceKeypoint.new(1, Color3.fromRGB(255,255,255)),
-        })
-        WeatherEmitter.LightEmission=1; WeatherEmitter.LightInfluence=0
-        WeatherEmitter.Size=NumberSequence.new({
-            NumberSequenceKeypoint.new(0,0.1), NumberSequenceKeypoint.new(0.3,0.6), NumberSequenceKeypoint.new(1,0.1)
-        })
-        WeatherEmitter.Transparency=NumberSequence.new({
-            NumberSequenceKeypoint.new(0,1), NumberSequenceKeypoint.new(0.2,0), NumberSequenceKeypoint.new(1,1)
-        })
-        WeatherEmitter.Lifetime=NumberRange.new(3,7); WeatherEmitter.Speed=NumberRange.new(3,7)
-        WeatherEmitter.SpreadAngle=Vector2.new(180,180); WeatherEmitter.Acceleration=Vector3.new(0,-0.8,0)
-        WeatherEmitter.RotSpeed=NumberRange.new(-120,120)
+        WeatherEmitter.Lifetime=NumberRange.new(5,9)
+        WeatherEmitter.Speed=NumberRange.new(2,5)
+        WeatherEmitter.SpreadAngle=Vector2.new(180,180)
+        WeatherEmitter.Acceleration=Vector3.new(0,-1,0)
+        WeatherEmitter.RotSpeed=NumberRange.new(-40,40)
+
+        -- Bright shimmering sparkles
         local sparkle = Instance.new("ParticleEmitter", WeatherPart)
         sparkle.EmissionDirection = Enum.NormalId.Bottom
-        sparkle.Texture="rbxassetid://298477068"; sparkle.Rate=140; sparkle.LightEmission=1; sparkle.LightInfluence=0
-        sparkle.Color=ColorSequence.new(Color3.fromRGB(255,220,255), Color3.fromRGB(180,255,255))
-        sparkle.Size=NumberSequence.new({NumberSequenceKeypoint.new(0,0.05),NumberSequenceKeypoint.new(0.5,1.1),NumberSequenceKeypoint.new(1,0.05)})
-        sparkle.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(0.4,0.15),NumberSequenceKeypoint.new(1,1)})
-        sparkle.Lifetime=NumberRange.new(2,4); sparkle.Speed=NumberRange.new(1,3); sparkle.SpreadAngle=Vector2.new(180,180)
-        sparkle.RotSpeed=NumberRange.new(-200,200)
+        sparkle.Texture="rbxassetid://298477068"
+        sparkle.Rate=90; sparkle.LightEmission=1; sparkle.LightInfluence=0
+        sparkle.Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(180,255,220)),
+            ColorSequenceKeypoint.new(0.50, Color3.fromRGB(200,180,255)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255,200,240)),
+        })
+        sparkle.Size=NumberSequence.new({
+            NumberSequenceKeypoint.new(0,0.05),
+            NumberSequenceKeypoint.new(0.5,0.7),
+            NumberSequenceKeypoint.new(1,0.05),
+        })
+        sparkle.Transparency=NumberSequence.new({
+            NumberSequenceKeypoint.new(0,1),
+            NumberSequenceKeypoint.new(0.4,0.2),
+            NumberSequenceKeypoint.new(1,1),
+        })
+        sparkle.Lifetime=NumberRange.new(2,4)
+        sparkle.Speed=NumberRange.new(1,3)
+        sparkle.SpreadAngle=Vector2.new(180,180)
+        sparkle.RotSpeed=NumberRange.new(-180,180)
+
+        -- Slow ambient halo giving the sky a colourful glow
+        local halo = Instance.new("ParticleEmitter", WeatherPart)
+        halo.EmissionDirection = Enum.NormalId.Bottom
+        halo.Texture="rbxassetid://243098098"
+        halo.Rate=30; halo.LightEmission=1; halo.LightInfluence=0
+        halo.Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(120,255,200)),
+            ColorSequenceKeypoint.new(0.50, Color3.fromRGB(160,130,255)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255,140,220)),
+        })
+        halo.Size=NumberSequence.new(8,14)
+        halo.Transparency=NumberSequence.new({
+            NumberSequenceKeypoint.new(0,1),
+            NumberSequenceKeypoint.new(0.5,0.75),
+            NumberSequenceKeypoint.new(1,1),
+        })
+        halo.Lifetime=NumberRange.new(8,12)
+        halo.Speed=NumberRange.new(0.5,1.5)
+        halo.SpreadAngle=Vector2.new(180,180)
     end
 end
 
@@ -7250,10 +7290,12 @@ function CleanupScript()
     pcall(function() if _ESPIconGui then _ESPIconGui:Destroy(); _ESPIconGui = nil end end)
     table.clear(ESPObjects)
 
-    for _, d in ipairs({0.05, 0.2, 0.6, 1.2}) do
+    for _, d in ipairs({0.05, 0.2, 0.6, 1.2, 2.0}) do
         task.delay(d, function()
             pcall(_clearGloveSkinRuntime)
             pcall(_nameOverlayRestoreAll)
+            pcall(_restoreHUDKnife)
+            pcall(_purgeAllHUDOverlays)
         end)
     end
 
@@ -7325,12 +7367,13 @@ function CleanupScript()
     pcall(function()
         local Lighting = game:GetService("Lighting")
         for _, ch in ipairs(Lighting:GetChildren()) do
-            if ch.Name == "EclipseWorldColor" then
+            if ch.Name == "EclipseWorldColor" or ch.Name == "EclipseNightMode" then
                 pcall(function() ch.Enabled = false end)
                 pcall(function() ch:Destroy() end)
             end
         end
         if Config and Config.WorldColor then Config.WorldColor.Enabled = false end
+        if Config and Config.Misc then Config.Misc.NightMode = false end
     end)
     if WeatherPart then pcall(function() WeatherPart:Destroy() end) end
     if presenceSocket then pcall(function() presenceSocket:Close() end) end
@@ -7449,20 +7492,48 @@ connectSignal(RunService.RenderStepped:Connect(function()
                         local moved = (hrp.Position - st.lastPos).Magnitude
                         if now - st.last > 0.35 and moved > 3.5 then
                             st.last = now; st.lastPos = hrp.Position
-                            local origin = hrp.Position - Vector3.new(0, 3, 0)
-                            local ring = Instance.new("Part")
-                            ring.Name = "EclipseFootstep"
-                            ring.Shape = Enum.PartType.Cylinder
-                            ring.Anchored = true; ring.CanCollide = false; ring.CanQuery = false; ring.CanTouch = false
-                            ring.CastShadow = false
-                            ring.Material = Enum.Material.Neon
-                            ring.Color = Config.ESP.FootstepColor
-                            ring.Size = Vector3.new(0.05, 0.5, 0.5)
-                            ring.CFrame = CFrame.new(origin) * CFrame.Angles(0, 0, math.rad(90))
-                            ring.Transparency = 0.2
-                            ring.Parent = Workspace
-                            TweenService:Create(ring, TweenInfo.new(1.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = Vector3.new(0.05, 4, 4), Transparency = 1 }):Play()
-                            Debris:AddItem(ring, 1.5)
+                            local origin = hrp.Position - Vector3.new(0, 2.9, 0)
+                            local col = Config.ESP.FootstepColor
+                            local anchor = Instance.new("Part")
+                            anchor.Name = "EclipseFootstep"
+                            anchor.Anchored = true; anchor.CanCollide = false; anchor.CanQuery = false; anchor.CanTouch = false
+                            anchor.CastShadow = false
+                            anchor.Transparency = 1
+                            anchor.Size = Vector3.new(0.1, 0.1, 0.1)
+                            anchor.CFrame = CFrame.new(origin)
+                            anchor.Parent = Workspace
+                            local bb = Instance.new("BillboardGui")
+                            bb.Name = "Ring"
+                            bb.AlwaysOnTop = true
+                            bb.LightInfluence = 0
+                            bb.Size = UDim2.fromScale(2, 2)
+                            bb.Adornee = anchor
+                            bb.Parent = anchor
+                            local ring = Instance.new("Frame")
+                            ring.BackgroundTransparency = 1
+                            ring.Size = UDim2.fromScale(1, 1)
+                            ring.AnchorPoint = Vector2.new(0.5, 0.5)
+                            ring.Position = UDim2.fromScale(0.5, 0.5)
+                            ring.Parent = bb
+                            local corner = Instance.new("UICorner")
+                            corner.CornerRadius = UDim.new(1, 0)
+                            corner.Parent = ring
+                            local stroke = Instance.new("UIStroke")
+                            stroke.Thickness = 3
+                            stroke.Color = col
+                            stroke.Transparency = 0
+                            stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                            stroke.Parent = ring
+                            local glow = Instance.new("UIStroke")
+                            glow.Thickness = 7
+                            glow.Color = col
+                            glow.Transparency = 0.55
+                            glow.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                            glow.Parent = ring
+                            TweenService:Create(bb, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = UDim2.fromScale(9, 9) }):Play()
+                            TweenService:Create(stroke, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Transparency = 1, Thickness = 1 }):Play()
+                            TweenService:Create(glow, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Transparency = 1, Thickness = 2 }):Play()
+                            Debris:AddItem(anchor, 1.7)
                         end
                     end
                 end
@@ -8413,7 +8484,7 @@ MoveGB:AddToggle("NoFallDmg_Toggle", { Text="NO FALL DAMAGE", Default=false, Cal
 end })
 
 local WorldGB = Tabs.World:AddLeftGroupbox("ENVIRONMENT")
-SafeAddDropdown(WorldGB, "Weather_Select", { Text="WEATHER", Values={"None","Rain","Snow","Aurora","Stardust"},
+SafeAddDropdown(WorldGB, "Weather_Select", { Text="WEATHER", Values={"None","Rain","Snow","Aurora"},
     Default=(Config.World and Config.World.Weather) or "None", Callback=function(v) Config.World.Weather=v; UpdateWeather(v) end })
 
 local WorldColorGB = Tabs.World:AddRightGroupbox("WORLD COLOR", "sun")
@@ -8454,18 +8525,18 @@ end)
 task.spawn(function()
     while scriptRunning do
         pcall(function()
-            local e = _ensureWCEffect()
             if Config.WorldColor.Enabled then
+                local e = _ensureWCEffect()
                 if not e.Enabled then e.Enabled = true end
                 if e.TintColor ~= Config.WorldColor.Color then e.TintColor = Config.WorldColor.Color end
                 if math.abs(e.Saturation - Config.WorldColor.Intensity) > 0.005 then
                     e.Saturation = Config.WorldColor.Intensity
                 end
-            else
-                if e.Enabled then e.Enabled = false end
+            elseif _wcEffect and _wcEffect.Enabled then
+                _wcEffect.Enabled = false
             end
         end)
-        task.wait(0.25)
+        task.wait(2)
     end
 end)
 
@@ -8551,20 +8622,38 @@ do
             _nmEffect.Name = "EclipseNightMode"
             _nmEffect.Parent = Lighting
         end
-        _nmEffect.TintColor = Color3.fromRGB(70, 90, 160)
-        _nmEffect.Brightness = -0.35
-        _nmEffect.Contrast = 0.15
-        _nmEffect.Saturation = -0.25
+        _nmEffect.TintColor = Color3.fromRGB(180, 150, 220)
+        _nmEffect.Brightness = -0.15
+        _nmEffect.Contrast = 0.05
+        _nmEffect.Saturation = -0.05
         return _nmEffect
     end
+    local TweenService = game:GetService("TweenService")
+    local _nmTween
+    local _nmToken = 0
+    local NM_TARGET = { TintColor = Color3.fromRGB(180,150,220), Brightness = -0.15, Contrast = 0.05, Saturation = -0.05 }
+    local NM_OFF    = { TintColor = Color3.fromRGB(255,255,255), Brightness = 0,     Contrast = 0,    Saturation = 0 }
     local function _applyNightMode(on)
         local e = _ensureNMEffect()
-        e.Enabled = on and true or false
+        _nmToken = _nmToken + 1
+        local myToken = _nmToken
+        if _nmTween then pcall(function() _nmTween:Pause() end); _nmTween = nil end
+        e.Enabled = true
+        local target = on and NM_TARGET or NM_OFF
+        local dur = on and 0.9 or 0.7
+        _nmTween = TweenService:Create(e, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), target)
+        _nmTween:Play()
+        if not on then
+            task.delay(dur + 0.05, function()
+                if myToken == _nmToken and _nmEffect then _nmEffect.Enabled = false end
+            end)
+        end
     end
+
     _EclipseApplyNightMode = _applyNightMode
     task.spawn(function()
         while true do
-            task.wait(1)
+            task.wait(3)
             if Config.Misc and Config.Misc.NightMode then
                 local e = _ensureNMEffect()
                 if not e.Enabled then e.Enabled = true end
@@ -9856,33 +9945,101 @@ end)()
 ;(function() 
     
     EX.SoundPresets = {
-        ["Default"]        = "",
-        ["Crystal Chime"]  = "rbxassetid://9046140764",
-        ["Glass Bell"]     = "rbxassetid://5153776300",
-        ["Ethereal Ding"]  = "rbxassetid://6890685824",
-        ["Diamond Ping"]   = "rbxassetid://8362261669",
-        ["Crystal Shard"]  = "rbxassetid://3932565157",
-        ["Metal Pipe"]     = "rbxassetid://5560500289",
+        ["Default"]        = { Id="", Volume=1, Pitch=1 },
+        ["Crystal Chime"]  = { Id="rbxasset://sounds/electronicpingshort.wav", Volume=1.75, Pitch=1.18 },
+        ["Glass Bell"]     = { Id="rbxasset://sounds/button.wav", Volume=1.55, Pitch=1.42 },
+        ["Ethereal Ding"]  = { Id="rbxasset://sounds/snap.wav", Volume=1.45, Pitch=0.82 },
+        ["Diamond Ping"]   = { Id="rbxasset://sounds/electronicpingshort.wav", Volume=1.9, Pitch=1.55 },
+        ["Crystal Shard"]  = { Id="rbxasset://sounds/unsheath.wav", Volume=1.55, Pitch=1.35 },
+        ["Metal Pipe"]     = { Id="rbxasset://sounds/impact_water.mp3", Volume=1.85, Pitch=0.72 },
     }
 
+    local SoundService = game:GetService("SoundService")
+    local function _presetInfo(name)
+        local raw = EX.SoundPresets[name]
+        if type(raw) == "table" then
+            local id = tostring(raw.Id or raw.SoundId or "")
+            if id == "" then return nil end
+            return { Id=id, Volume=tonumber(raw.Volume) or 1.5, Pitch=tonumber(raw.Pitch or raw.PlaybackSpeed) or 1 }
+        elseif type(raw) == "string" and raw ~= "" then
+            return { Id=raw, Volume=1.5, Pitch=1 }
+        end
+        return nil
+    end
+    local _previewSound
+    EX.playPresetPreview = function(name)
+        local inf = _presetInfo(name)
+        if not inf then return end
+        if _previewSound then pcall(function() _previewSound:Stop(); _previewSound:Destroy() end) end
+        _previewSound = Instance.new("Sound")
+        _previewSound.Name = "EclipsePreview"
+        _previewSound.SoundId = inf.Id
+        _previewSound.Volume = inf.Volume
+        _previewSound.PlaybackSpeed = inf.Pitch
+        _previewSound.Parent = SoundService
+        local s = _previewSound
+        pcall(function() ContentProvider:PreloadAsync({ s }) end)
+        local ok = pcall(function() SoundService:PlayLocalSound(s) end)
+        if not ok then pcall(function() s:Play() end) end
+        task.delay(4, function() if s then pcall(function() s:Destroy() end) end end)
+    end
+
+
 
     
     
+    local function _isKnownWeaponName(n)
+        if not n or n == "" then return false end
+        if Config and Config.Sounds and Config.Sounds.PresetOverrides and Config.Sounds.PresetOverrides[n] ~= nil then return true end
+        if CT_ONLY and CT_ONLY[n] then return true end
+        if SHARED and SHARED[n] then return true end
+        if SkinsFolder and SkinsFolder:FindFirstChild(n) then return true end
+        local l = tostring(n):lower()
+        return l:find("ak-47",1,true) or l:find("m4a1",1,true) or l:find("awp",1,true) or l:find("deagle",1,true) or l:find("glock",1,true) or l:find("usp",1,true) or l:find("famas",1,true) or l:find("galil",1,true) or l:find("aug",1,true) or l:find("sg",1,true) or l:find("scar",1,true) or l:find("mp",1,true) or l:find("p90",1,true) or l:find("ump",1,true) or l:find("nova",1,true) or l:find("xm",1,true) or l:find("mag",1,true) or l:find("negev",1,true)
+    end
+    local function _weaponNameForSound(snd, fallback)
+        local p = snd
+        local best = nil
+        while p and p ~= game do
+            local n = tostring(p.Name or "")
+            if _isKnownWeaponName(n) then best = n; break end
+            p = p.Parent
+        end
+        return best or fallback
+    end
+    local function _soundRoots()
+        local roots, seen = {}, {}
+        local function add(x)
+            if x and not seen[x] then seen[x] = true; table.insert(roots, x) end
+        end
+        add(ReplicatedSt:FindFirstChild("Sounds"))
+        add(ReplicatedSt:FindFirstChild("Database"))
+        add(Workspace.CurrentCamera)
+        add(LocalPlayer.Character)
+        add(LocalPlayer:FindFirstChildOfClass("PlayerGui"))
+        return roots
+    end
     local function walkSounds(cb)
-        local root = ReplicatedSt:FindFirstChild("Sounds"); if not root then return end
-        for _, cat in ipairs(root:GetChildren()) do
-            for _, snd in ipairs(cat:GetDescendants()) do
-                if snd:IsA("Sound") then cb(cat.Name, snd) end
+        for _, root in ipairs(_soundRoots()) do
+            for _, snd in ipairs(root:GetDescendants()) do
+                if snd:IsA("Sound") then
+                    local catName = root.Name
+                    pcall(function()
+                        local rel = snd
+                        while rel and rel.Parent and rel.Parent ~= root do rel = rel.Parent end
+                        if rel and rel ~= root then catName = rel.Name end
+                    end)
+                    cb(catName, snd, _weaponNameForSound(snd, catName))
+                end
             end
         end
     end
     EX.walkSounds = walkSounds
 
-    local function resolvePresetId(catName)
-        local per = Config.Sounds.PresetOverrides[catName]
+    local function resolvePresetInfo(catName, weaponName)
+        local per = (weaponName and Config.Sounds.PresetOverrides[weaponName]) or Config.Sounds.PresetOverrides[catName]
         if per and per ~= "Default" then
-            local pid = EX.SoundPresets[per]
-            if pid and pid ~= "" then return pid end
+            return _presetInfo(per)
         end
         return nil
     end
@@ -9909,32 +10066,106 @@ end)()
 
     EX.applySoundOverrides = function()
         if not Config.Sounds.Enabled then
-            for snd, id in pairs(EX.originalSoundIds) do
-                if snd and snd.Parent then pcall(function() snd.SoundId = id end) end
+            for snd, data in pairs(EX.originalSoundIds) do
+                if snd and snd.Parent then pcall(function()
+                    if type(data) == "table" then
+                        snd.SoundId = data.SoundId or snd.SoundId
+                        snd.Volume = data.Volume or snd.Volume
+                        snd.PlaybackSpeed = data.PlaybackSpeed or snd.PlaybackSpeed
+                    else
+                        snd.SoundId = data
+                    end
+                end) end
             end
             return
         end
-        walkSounds(function(catName, snd)
-            if not EX.originalSoundIds[snd] then EX.originalSoundIds[snd] = snd.SoundId end
+        walkSounds(function(catName, snd, weaponName)
+            if not EX.originalSoundIds[snd] then EX.originalSoundIds[snd] = { SoundId=snd.SoundId, Volume=snd.Volume, PlaybackSpeed=snd.PlaybackSpeed } end
             if catName == "Bullet" or not _isFireSound(catName, snd) then
-                pcall(function() snd.SoundId = EX.originalSoundIds[snd] end)
+                local data = EX.originalSoundIds[snd]
+                pcall(function()
+                    if type(data) == "table" then
+                        snd.SoundId = data.SoundId or snd.SoundId
+                        snd.Volume = data.Volume or snd.Volume
+                        snd.PlaybackSpeed = data.PlaybackSpeed or snd.PlaybackSpeed
+                    else
+                        snd.SoundId = data
+                    end
+                end)
                 return
             end
-            local pid = resolvePresetId(catName)
-            if pid then
-                pcall(function() snd.SoundId = pid end)
+            local inf = resolvePresetInfo(catName, weaponName)
+            if inf then
+                pcall(function()
+                    snd.SoundId = inf.Id
+                    snd.Volume = inf.Volume
+                    snd.PlaybackSpeed = inf.Pitch
+                end)
                 _preload(snd)
             else
-                pcall(function() snd.SoundId = EX.originalSoundIds[snd] end)
+                local data = EX.originalSoundIds[snd]
+                pcall(function()
+                    if type(data) == "table" then
+                        snd.SoundId = data.SoundId or snd.SoundId
+                        snd.Volume = data.Volume or snd.Volume
+                        snd.PlaybackSpeed = data.PlaybackSpeed or snd.PlaybackSpeed
+                    else
+                        snd.SoundId = data
+                    end
+                end)
             end
         end)
     end
 
+    EX.patchShootSound = function(snd)
+        if not (snd and snd:IsA("Sound")) then return end
+        if not (Config and Config.Sounds and Config.Sounds.Enabled) then return end
+        local catName = snd.Parent and snd.Parent.Name or ""
+        local weaponName = _weaponNameForSound(snd, catName)
+        if catName == "Bullet" or not _isFireSound(catName, snd) then return end
+        local inf = resolvePresetInfo(catName, weaponName)
+        if not inf then return end
+        if not EX.originalSoundIds[snd] then EX.originalSoundIds[snd] = { SoundId=snd.SoundId, Volume=snd.Volume, PlaybackSpeed=snd.PlaybackSpeed } end
+        pcall(function()
+            snd.SoundId = inf.Id
+            snd.Volume = inf.Volume
+            snd.PlaybackSpeed = inf.Pitch
+        end)
+    end
+
     EX.restoreAllSounds = function()
-        for snd, id in pairs(EX.originalSoundIds) do
-            if snd and snd.Parent then pcall(function() snd.SoundId = id end) end
+        for snd, data in pairs(EX.originalSoundIds) do
+            if snd and snd.Parent then pcall(function()
+                if type(data) == "table" then
+                    snd.SoundId = data.SoundId or snd.SoundId
+                    snd.Volume = data.Volume or snd.Volume
+                    snd.PlaybackSpeed = data.PlaybackSpeed or snd.PlaybackSpeed
+                else
+                    snd.SoundId = data
+                end
+            end) end
         end
     end
+    EX.SoundLoopAlive = true
+    pcall(function()
+        if not EX.SoundHookInstalled and type(hookmetamethod) == "function" and type(newcclosure) == "function" and type(getnamecallmethod) == "function" then
+            EX.SoundHookInstalled = true
+            local oldSoundNamecall
+            oldSoundNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+                local method = getnamecallmethod()
+                if (method == "Play" or method == "play") and typeof(self) == "Instance" and self:IsA("Sound") then
+                    pcall(EX.patchShootSound, self)
+                end
+                return oldSoundNamecall(self, ...)
+            end))
+        end
+    end)
+    task.spawn(function()
+        while EX.SoundLoopAlive do
+            task.wait(0.75)
+            if Config and Config.Sounds and Config.Sounds.Enabled then pcall(EX.applySoundOverrides) end
+        end
+    end)
 end)()
 
 ;(function() 
@@ -10023,8 +10254,10 @@ end)()
         Callback=function(v)
             Config.Sounds.PresetOverrides[currentSoundWeapon] = v
             if Config.Sounds.Enabled then EX.applySoundOverrides() end
+            pcall(EX.playPresetPreview, v)
         end,
     })
+
 
     SoundGB:AddButton({ Text="Apply", Func=function()
         Config.Sounds.Enabled = true; EX.applySoundOverrides()
@@ -10038,11 +10271,10 @@ end)()
     task.delay(2, function() pcall(EX.rebuildKB) end)
 
     Library:OnUnload(function()
+        EX.SoundLoopAlive = false
         pcall(function() EX.KBFrame:Destroy() end)
         pcall(function() EX.ChatFrame:Destroy() end)
-        for snd, id in pairs(EX.originalSoundIds) do
-            if snd and snd.Parent then pcall(function() snd.SoundId = id end) end
-        end
+        pcall(EX.restoreAllSounds)
     end)
 end)() 
 
@@ -10136,6 +10368,7 @@ end)()
 
     local _lastDamagedByLP = setmetatable({}, { __mode="k" })
     local _lastLethalByLP = setmetatable({}, { __mode="k" })
+    local _lastLethalByUid = {}
     local _killEffectDone = setmetatable({}, { __mode="k" })
 
     local function _humanoidOfChar(char)
@@ -10289,7 +10522,7 @@ end)()
         local cam = workspace.CurrentCamera
         if cam then
             local d = (cam.CFrame.Position - hrp.Position).Magnitude
-            if d > 220 then return end
+            if d > 900 then return end
         end
         _EclipseKillFxLast = now
         _EclipseKillFxActive += 1
@@ -10422,6 +10655,50 @@ end)()
         return false
     end
 
+    local function _markLocalLethal(plr)
+        if not plr or plr == LocalPlayer then return end
+        _lastLethalByLP[plr] = tick()
+        pcall(function() _lastLethalByUid[tonumber(plr.UserId)] = tick() end)
+    end
+
+    local function _killFeedPlayerFrom(value)
+        if value == nil then return nil end
+        local _, plr = _charPlayerFromAny(value)
+        if plr then return plr end
+        local n = tonumber(value)
+        if n then return Players:GetPlayerByUserId(n) end
+        local s = tostring(value)
+        if s ~= "" then
+            local byName = Players:FindFirstChild(s)
+            if byName and byName:IsA("Player") then return byName end
+        end
+        return nil
+    end
+
+    local function _killFeedKillerIsLocal(info)
+        if type(info) ~= "table" then return false end
+        for _, key in ipairs({"Killer","killer","KillerId","killerId","KillerUserId","killerUserId","Attacker","attacker","AttackerId","attackerId","Player","player"}) do
+            local v = rawget(info, key)
+            if v ~= nil then
+                local p = _killFeedPlayerFrom(v)
+                if p == LocalPlayer then return true end
+                local n = tonumber(v)
+                if n and n == LocalPlayer.UserId then return true end
+                if tostring(v) == LocalPlayer.Name then return true end
+            end
+        end
+        return _attackerIsLocal(info)
+    end
+
+    local function _killFeedVictim(info)
+        if type(info) ~= "table" then return nil end
+        for _, key in ipairs({"Victim","victim","VictimId","victimId","VictimUserId","victimUserId","Target","target","Dead","dead","Killed","killed","Enemy","enemy"}) do
+            local p = _killFeedPlayerFrom(rawget(info, key))
+            if p and p ~= LocalPlayer then return p end
+        end
+        return nil
+    end
+
     local function _localIsAlive()
         local ch = LocalPlayer and LocalPlayer.Character
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
@@ -10433,8 +10710,12 @@ end)()
         if plr == LocalPlayer then return end
         if plr and IsAlly and IsAlly(plr) then return end
         if not _localIsAlive() then return end
-        local lethalAt = plr and _lastLethalByLP[plr]
-        if not (lethalAt and (tick()-lethalAt) < 4.0) then return end
+        local lethalAt = plr and (_lastLethalByLP[plr] or _lastLethalByUid[tonumber(plr.UserId)])
+        if not (lethalAt and (tick()-lethalAt) < 5.0) then
+            local dmgAt = plr and _lastDamagedByLP[plr]
+            if not (dmgAt and (tick()-dmgAt) < 1.25) then return end
+            _markLocalLethal(plr)
+        end
         _killEffectDone[char] = tick()
         if Config.Logging.Enabled then
             local vname = (plr and plr.Name) or (char and char.Name) or "enemy"
@@ -10450,18 +10731,14 @@ end)()
     end
 
     pcall(function()
-        local Rem = require(ReplicatedStorage.Database.Security.Remotes)
+        local Rem = require(ReplicatedSt.Database.Security.Remotes)
         if Rem and Rem.UI and Rem.UI.UIPlayerKilled and Rem.UI.UIPlayerKilled.Listen then
             local conn = Rem.UI.UIPlayerKilled.Listen(function(info)
-                if type(info) ~= "table" then return end
-                local killerId = tonumber(info.Killer)
-                if not killerId or killerId ~= LocalPlayer.UserId then return end
-                local victimId = tonumber(info.Victim)
-                if not victimId then return end
-                local vplr = Players:GetPlayerByUserId(victimId)
+                if type(info) ~= "table" or not _killFeedKillerIsLocal(info) then return end
+                local vplr = _killFeedVictim(info)
                 if not vplr or vplr == LocalPlayer then return end
                 if IsAlly and IsAlly(vplr) then return end
-                _lastLethalByLP[vplr] = tick()
+                _markLocalLethal(vplr)
                 local vchar = vplr.Character
                 if vchar then task.defer(function() pcall(_triggerLocalKillEffect, vplr, vchar) end) end
             end)
@@ -10489,7 +10766,7 @@ end)()
     end
 
     pcall(function()
-        local Rem = require(ReplicatedStorage.Database.Security.Remotes)
+        local Rem = require(ReplicatedSt.Database.Security.Remotes)
         if Rem and Rem.Character then
             if Rem.Character.CharacterDamaged and Rem.Character.CharacterDamaged.Listen then
                 local conn = Rem.Character.CharacterDamaged.Listen(function(victim, dmg, attacker)
@@ -10508,7 +10785,7 @@ end)()
                         if hum then
                             local hp = tonumber(hum.Health) or 0
                             if hp <= 0 or (damageNumber > 0 and hp - damageNumber <= 0) then
-                                _lastLethalByLP[vplr] = tick()
+                                _markLocalLethal(vplr)
                                 task.defer(function() pcall(_tryKillEffectFromHealth, vplr, vchar) end)
                             end
                         end
@@ -10521,8 +10798,9 @@ end)()
                     local killedByLP = _attackerIsLocal(killer)
                     local vchar, vplr = _charPlayerFromAny(victim)
                     if not killedByLP and vplr and _lastLethalByLP[vplr] and (tick()-_lastLethalByLP[vplr]) < 3.0 then killedByLP = true end
+                    if not killedByLP and vplr and _lastDamagedByLP[vplr] and (tick()-_lastDamagedByLP[vplr]) < 1.25 then killedByLP = true end
                     if killedByLP then
-                        if vplr then _lastLethalByLP[vplr] = tick() end
+                        if vplr then _markLocalLethal(vplr) end
                         _triggerLocalKillEffect(vplr, vchar)
                     end
                 end)
