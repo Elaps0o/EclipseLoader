@@ -25,7 +25,7 @@ local MarketplaceSvc = game:GetService("MarketplaceService")
 
 local LocalPlayer = Players.LocalPlayer
 
-local ECLIPSE_BYPASS_ENABLED = true
+local ECLIPSE_BYPASS_ENABLED = false
 
 local _deviceSpooferInstalled = false
 
@@ -189,45 +189,43 @@ do
 end
 
 do
-    local ok = rawget(getgenv(), "EclipseLoaderLoaded") == true
-    if not ok and writefile and readfile and isfile then
-        local SESSION_FILE = "EclipseHub_session.dat"
-        local SIG_SECRET   = "ES_v1_9f2a4c1e8b6d3a57f2e0c9b1a48d76e2c5f0"
-        local SESSION_TTL  = 30 * 86400
-        local function _sign(data)
-            local payload = data .. "|" .. SIG_SECRET
-            if crypt and type(crypt.hash) == "function" then
-                local o, h = pcall(crypt.hash, payload, "sha256"); if o and h then return h end
-            end
-            if syn and syn.crypto and type(syn.crypto.hash) == "function" then
-                local o, h = pcall(syn.crypto.hash, "sha256", payload); if o and h then return h end
-            end
-            local h1, h2 = 2166136261, 3735928559
-            for i = 1, #payload do
-                local b = string.byte(payload, i)
-                h1 = (bit32.bxor(h1, b) * 16777619) % 0x100000000
-                h2 = (bit32.bxor(h2, b * 131 + i) * 2246822519) % 0x100000000
-            end
-            return string.format("%08x%08x", h1, h2)
+    local ok = false
+    local SIG_SECRET = "ES_v1_9f2a4c1e8b6d3a57f2e0c9b1a48d76e2c5f0"
+    local AUTH_TTL = 120
+    local function _sign(data)
+        local payload = data .. "|" .. SIG_SECRET
+        if crypt and type(crypt.hash) == "function" then
+            local o, h = pcall(crypt.hash, payload, "sha256"); if o and h then return h end
         end
-        local ex = pcall(isfile, SESSION_FILE) and isfile(SESSION_FILE)
-        if ex then
-            local _, body = pcall(readfile, SESSION_FILE)
-            if body and body ~= "" then
-                local payload, sig = body:match("^(.-)%.([^%.]+)$")
-                if payload and sig and _sign(payload) == sig then
-                    local o, tbl = pcall(function() return HttpService:JSONDecode(payload) end)
-                    if o and type(tbl) == "table"
-                        and tbl.userId == LocalPlayer.UserId
-                        and tbl.username == LocalPlayer.Name
-                        and type(tbl.issued) == "number"
-                        and (os.time() - tbl.issued) <= SESSION_TTL then
-                        ok = true
-                    end
-                end
-            end
+        if syn and syn.crypto and type(syn.crypto.hash) == "function" then
+            local o, h = pcall(syn.crypto.hash, "sha256", payload); if o and h then return h end
         end
+        local h1, h2 = 2166136261, 3735928559
+        for i = 1, #payload do
+            local b = string.byte(payload, i)
+            h1 = (bit32.bxor(h1, b) * 16777619) % 0x100000000
+            h2 = (bit32.bxor(h2, b * 131 + i) * 2246822519) % 0x100000000
+        end
+        return string.format("%08x%08x", h1, h2)
     end
+    pcall(function()
+        local ge = getgenv()
+        local auth = rawget(ge, "ECLIPSE_AUTH")
+        if type(auth) ~= "table" then return end
+        local uid = tonumber(auth.userId)
+        local username = tostring(auth.username or "")
+        local issued = tonumber(auth.issued)
+        local token = tostring(auth.token or "")
+        local loader = tostring(auth.loader or "")
+        if auth.consumed == true then return end
+        if uid ~= LocalPlayer.UserId then return end
+        if username ~= LocalPlayer.Name then return end
+        if loader ~= "ESLoader" then return end
+        if type(issued) ~= "number" or math.abs(os.time() - issued) > AUTH_TTL then return end
+        if token ~= _sign(tostring(uid) .. "|" .. username .. "|" .. tostring(issued) .. "|" .. loader) then return end
+        ok = true
+        auth.consumed = true
+    end)
     if not ok then
         pcall(function()
             LocalPlayer:Kick("Eclipse Hub: please use the official loader. Direct execution is blocked.")
@@ -2764,18 +2762,18 @@ function updateChams()
     end
     if not on then return end
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then continue end
+        if plr == LocalPlayer then goto __continue_1 end
 
         if IsAlly(plr) then
             local old = ChamsHL[plr]
             if old then pcall(function() old:Destroy() end); ChamsHL[plr] = nil end
-            continue
+            goto __continue_1
         end
         local char = plr.Character
         if not char then
             local old = ChamsHL[plr]
             if old then pcall(function() old:Destroy() end); ChamsHL[plr] = nil end
-            continue
+            goto __continue_1
         end
         local hl = ChamsHL[plr]
         if not hl or not hl.Parent then
@@ -2792,7 +2790,7 @@ function updateChams()
         hl.OutlineColor        = Color3.fromRGB(255, 255, 255)
         hl.FillTransparency    = 0
         hl.OutlineTransparency = 0
-    end
+    ::__continue_1:: end
 end
 
 function updateESP()
@@ -2816,14 +2814,14 @@ function updateESP()
     local seen = {}
 
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then continue end
+        if plr == LocalPlayer then goto __continue_2 end
         seen[plr] = true
         local info = _espProcessPlayer(plr, myRoot, center)
         if info and info.aimDist < closestDist then
             closestDist = info.aimDist
             closest = info
         end
-    end
+    ::__continue_2:: end
 
     for p, d in pairs(ESPObjects) do
         if not seen[p] then
@@ -3764,10 +3762,10 @@ function updateAimbot()
     end
     local closestPart, closestDist = nil, scopeFOV
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer or not IsEnemy(plr) then continue end
-        local char = GetCharacter(plr); if not char then continue end
+        if plr == LocalPlayer or not IsEnemy(plr) then goto __continue_3 end
+        local char = GetCharacter(plr); if not char then goto __continue_3 end
         local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then continue end
+        if not hum or hum.Health <= 0 then goto __continue_3 end
         local part
         if isAWP or isSniper then
             part = char:FindFirstChild("Head") or GetAimbotTargetPart(char)
@@ -3775,16 +3773,16 @@ function updateAimbot()
             part = GetAimbotTargetPart(char)
         end
 
-        if not part then continue end
+        if not part then goto __continue_3 end
 
-        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
-        if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
+        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then goto __continue_3 end
+        if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then goto __continue_3 end
         local sp, on = Camera:WorldToViewportPoint(part.Position)
         if on and sp.Z > 0 and sp.X == sp.X and sp.Y == sp.Y then
             local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
             if d < closestDist then closestDist = d; closestPart = part end
         end
-    end
+    ::__continue_3:: end
     if closestPart then
         local now = tick()
         if AimState.lastTarget ~= closestPart then
@@ -5560,6 +5558,44 @@ function _purgeAllHUDOverlays()
     for _, slot in ipairs(_hudInventorySlots(inv)) do _purgeHUDOverlays(slot) end
 end
 
+function _hardPurgeHUDOverrideInstances()
+    local roots = {}
+    local inv = _hudInventory and _hudInventory() or nil
+    if inv then roots[#roots + 1] = inv end
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local main = pg and pg:FindFirstChild("MainGui")
+        if main then roots[#roots + 1] = main end
+    end)
+    local seen = {}
+    for _, root in ipairs(roots) do
+        if root and not seen[root] then
+            seen[root] = true
+            pcall(function()
+                for _, d in ipairs(root:GetDescendants()) do
+                    local n = tostring(d.Name or "")
+                    if d:GetAttribute("EclipseHUD") == true or n == "EclipseHUDNameOverlay" or n == "EclipseHUDIcon" or n == "EclipseHUDIconThumbFallback" or n == "EclipseHUDKnifeViewport" or n:find("^EclipseHUD") then
+                        pcall(function() d:Destroy() end)
+                    elseif d:IsA("TextLabel") and n == "WeaponName" then
+                        pcall(function()
+                            d.TextTransparency = 0
+                            d.TextStrokeTransparency = 1
+                            d.Visible = true
+                        end)
+                    elseif (d:IsA("ImageLabel") or d:IsA("ImageButton")) and d:GetAttribute("EclipseHUD") ~= true then
+                        pcall(function()
+                            if tostring(d.Image or "") ~= "" then
+                                d.ImageTransparency = 0
+                                d.Visible = true
+                            end
+                        end)
+                    end
+                end
+            end)
+        end
+    end
+end
+
 function _hudColorLooksPulsed(col)
     return (not col) or (col.R >= 0.92 and col.G >= 0.92 and col.B >= 0.92)
 end
@@ -6287,6 +6323,7 @@ function _restoreHUDName(rec, nameLbl)
         if type(tx) ~= "number" or tx >= 0.95 then tx = 0 end
         local sx = (rec and rec.nameTextStrokeTransparency ~= nil) and rec.nameTextStrokeTransparency or 1
         if type(sx) ~= "number" then sx = 1 end
+        if rec and type(rec.nameText) == "string" and rec.nameText ~= "" then nameLbl.Text = rec.nameText end
         nameLbl.TextTransparency = tx
         nameLbl.TextStrokeTransparency = sx
         nameLbl.Visible = true
@@ -6765,6 +6802,7 @@ function _restoreHUDKnife()
     end
     HUDSkin.slots = setmetatable({}, {__mode="k"})
     pcall(_purgeAllHUDOverlays)
+    pcall(_hardPurgeHUDOverrideInstances)
     
     _restoreHUDLiteIcons()
 end
@@ -6879,6 +6917,7 @@ function _nameOverlayRestoreAll()
         end
     end)
     pcall(_purgeAllHUDOverlays)
+    pcall(_hardPurgeHUDOverrideInstances)
 end
 
 function _hudKnifeHardCycle()
@@ -6900,8 +6939,8 @@ function CleanupScript()
     pcall(removeViewmodel)
     pcall(_clearSkinChangerRuntime)
     pcall(_clearGloveSkinRuntime)
-    pcall(_nameOverlayRestoreAll)
     pcall(_restoreHUDKnife)
+    pcall(_nameOverlayRestoreAll)
     pcall(_restoreKnifeModuleOverride)
 
     pcall(UninstallDeviceSpoofer)
@@ -6925,7 +6964,9 @@ function CleanupScript()
     for _, d in ipairs({0.05, 0.2, 0.6, 1.2}) do
         task.delay(d, function()
             pcall(_clearGloveSkinRuntime)
+            pcall(_restoreHUDKnife)
             pcall(_nameOverlayRestoreAll)
+            pcall(_hardPurgeHUDOverrideInstances)
         end)
     end
 
@@ -7427,10 +7468,19 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
             pcall(_clearSkinChangerRuntime)
             pcall(_restoreHUDKnife)
             pcall(_nameOverlayRestoreAll)
+            pcall(_hardPurgeHUDOverrideInstances)
             pcall(_restoreKnifeModuleOverride)
             Config.Skins.HUDIconOverrideConfirmed = false
             Config.Skins.HUDIconConfirmedKey = nil
             pcall(function() if HUDSkin.viewer and HUDSkin.viewer.gui then HUDSkin.viewer.gui.Enabled = false end end)
+            for _, delayT in ipairs({0.08, 0.25, 0.65}) do
+                task.delay(delayT, function()
+                    pcall(_clearSkinChangerRuntime)
+                    pcall(_restoreHUDKnife)
+                    pcall(_nameOverlayRestoreAll)
+                    pcall(_hardPurgeHUDOverrideInstances)
+                end)
+            end
             
             pcall(function() if Toggles.Knife_Toggle then Toggles.Knife_Toggle:SetValue(false) end end)
         else
