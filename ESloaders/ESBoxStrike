@@ -2762,18 +2762,19 @@ function updateChams()
     end
     if not on then return end
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then goto __continue_1 end
+        repeat
+        if plr == LocalPlayer then break end
 
         if IsAlly(plr) then
             local old = ChamsHL[plr]
             if old then pcall(function() old:Destroy() end); ChamsHL[plr] = nil end
-            goto __continue_1
+            break
         end
         local char = plr.Character
         if not char then
             local old = ChamsHL[plr]
             if old then pcall(function() old:Destroy() end); ChamsHL[plr] = nil end
-            goto __continue_1
+            break
         end
         local hl = ChamsHL[plr]
         if not hl or not hl.Parent then
@@ -2790,7 +2791,8 @@ function updateChams()
         hl.OutlineColor        = Color3.fromRGB(255, 255, 255)
         hl.FillTransparency    = 0
         hl.OutlineTransparency = 0
-    ::__continue_1:: end
+        until true
+    end
 end
 
 function updateESP()
@@ -2814,14 +2816,16 @@ function updateESP()
     local seen = {}
 
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then goto __continue_2 end
+        repeat
+        if plr == LocalPlayer then break end
         seen[plr] = true
         local info = _espProcessPlayer(plr, myRoot, center)
         if info and info.aimDist < closestDist then
             closestDist = info.aimDist
             closest = info
         end
-    ::__continue_2:: end
+        until true
+    end
 
     for p, d in pairs(ESPObjects) do
         if not seen[p] then
@@ -3762,10 +3766,11 @@ function updateAimbot()
     end
     local closestPart, closestDist = nil, scopeFOV
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer or not IsEnemy(plr) then goto __continue_3 end
-        local char = GetCharacter(plr); if not char then goto __continue_3 end
+        repeat
+        if plr == LocalPlayer or not IsEnemy(plr) then break end
+        local char = GetCharacter(plr); if not char then break end
         local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then goto __continue_3 end
+        if not hum or hum.Health <= 0 then break end
         local part
         if isAWP or isSniper then
             part = char:FindFirstChild("Head") or GetAimbotTargetPart(char)
@@ -3773,16 +3778,17 @@ function updateAimbot()
             part = GetAimbotTargetPart(char)
         end
 
-        if not part then goto __continue_3 end
+        if not part then break end
 
-        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then goto __continue_3 end
-        if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then goto __continue_3 end
+        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then break end
+        if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then break end
         local sp, on = Camera:WorldToViewportPoint(part.Position)
         if on and sp.Z > 0 and sp.X == sp.X and sp.Y == sp.Y then
             local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
             if d < closestDist then closestDist = d; closestPart = part end
         end
-    ::__continue_3:: end
+        until true
+    end
     if closestPart then
         local now = tick()
         if AimState.lastTarget ~= closestPart then
