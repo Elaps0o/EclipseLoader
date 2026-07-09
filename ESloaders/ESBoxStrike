@@ -8540,35 +8540,39 @@ MiscGB:AddSlider("StretchedRes_Slider", { Text="STRETCHED RESOLUTION", Default=0
 Config.Misc.NightMode = Config.Misc.NightMode or false
 do
     local Lighting = game:GetService("Lighting")
-    local _nmSaved
-    local function _applyNightMode(on)
-        if on then
-            if not _nmSaved then
-                _nmSaved = {
-                    Ambient = Lighting.Ambient,
-                    OutdoorAmbient = Lighting.OutdoorAmbient,
-                    Brightness = Lighting.Brightness,
-                    ClockTime = Lighting.ClockTime,
-                    FogColor = Lighting.FogColor,
-                    FogEnd = Lighting.FogEnd,
-                    ColorShift_Bottom = Lighting.ColorShift_Bottom,
-                    ColorShift_Top = Lighting.ColorShift_Top,
-                }
-            end
-            Lighting.Ambient = Color3.fromRGB(18, 22, 42)
-            Lighting.OutdoorAmbient = Color3.fromRGB(24, 30, 55)
-            Lighting.Brightness = 0.4
-            Lighting.ClockTime = 0
-            Lighting.FogColor = Color3.fromRGB(20, 24, 45)
-            Lighting.ColorShift_Bottom = Color3.fromRGB(30, 40, 90)
-            Lighting.ColorShift_Top = Color3.fromRGB(80, 90, 160)
-        elseif _nmSaved then
-            for k, v in pairs(_nmSaved) do pcall(function() Lighting[k] = v end) end
-            _nmSaved = nil
+    local _nmEffect
+    local function _ensureNMEffect()
+        if _nmEffect and _nmEffect.Parent then return _nmEffect end
+        for _, ch in ipairs(Lighting:GetChildren()) do
+            if ch.Name == "EclipseNightMode" and ch:IsA("ColorCorrectionEffect") then _nmEffect = ch; break end
         end
+        if not _nmEffect then
+            _nmEffect = Instance.new("ColorCorrectionEffect")
+            _nmEffect.Name = "EclipseNightMode"
+            _nmEffect.Parent = Lighting
+        end
+        _nmEffect.TintColor = Color3.fromRGB(70, 90, 160)
+        _nmEffect.Brightness = -0.35
+        _nmEffect.Contrast = 0.15
+        _nmEffect.Saturation = -0.25
+        return _nmEffect
+    end
+    local function _applyNightMode(on)
+        local e = _ensureNMEffect()
+        e.Enabled = on and true or false
     end
     _EclipseApplyNightMode = _applyNightMode
+    task.spawn(function()
+        while true do
+            task.wait(1)
+            if Config.Misc and Config.Misc.NightMode then
+                local e = _ensureNMEffect()
+                if not e.Enabled then e.Enabled = true end
+            end
+        end
+    end)
 end
+
 MiscGB:AddToggle("NightMode_Toggle", { Text="NIGHT MODE", Default=false, Callback=function(v)
     Config.Misc.NightMode = v; pcall(_EclipseApplyNightMode, v)
 end })
@@ -10429,6 +10433,8 @@ end)()
         if plr == LocalPlayer then return end
         if plr and IsAlly and IsAlly(plr) then return end
         if not _localIsAlive() then return end
+        local lethalAt = plr and _lastLethalByLP[plr]
+        if not (lethalAt and (tick()-lethalAt) < 4.0) then return end
         _killEffectDone[char] = tick()
         if Config.Logging.Enabled then
             local vname = (plr and plr.Name) or (char and char.Name) or "enemy"
@@ -10442,6 +10448,27 @@ end)()
     local function _tryKillEffectFromHealth(plr, char)
         _triggerLocalKillEffect(plr, char)
     end
+
+    pcall(function()
+        local Rem = require(ReplicatedStorage.Database.Security.Remotes)
+        if Rem and Rem.UI and Rem.UI.UIPlayerKilled and Rem.UI.UIPlayerKilled.Listen then
+            local conn = Rem.UI.UIPlayerKilled.Listen(function(info)
+                if type(info) ~= "table" then return end
+                local killerId = tonumber(info.Killer)
+                if not killerId or killerId ~= LocalPlayer.UserId then return end
+                local victimId = tonumber(info.Victim)
+                if not victimId then return end
+                local vplr = Players:GetPlayerByUserId(victimId)
+                if not vplr or vplr == LocalPlayer then return end
+                if IsAlly and IsAlly(vplr) then return end
+                _lastLethalByLP[vplr] = tick()
+                local vchar = vplr.Character
+                if vchar then task.defer(function() pcall(_triggerLocalKillEffect, vplr, vchar) end) end
+            end)
+            if conn and typeof(conn)=="RBXScriptConnection" then table.insert(UnloadConnections, conn) end
+        end
+    end)
+
 
 
     local function _nearestEnemyName()
