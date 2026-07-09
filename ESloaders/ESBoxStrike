@@ -826,7 +826,7 @@ local Config = {
         DrawFOV=true, VisibilityCheck=true, FOVColor=Color3.fromRGB(255,255,255),
         Global=true, Mode="Global", SelectedWeapon="AK-47", SelectedCategory="Rifles",
         PerWeapon={}, PerCategory={},
-        DisableInSmoke=true, DisableInFlash=true,
+        DisableInSmoke=true, DisableInFlash=true, WallBang=false, WallDepth=1.0,
     },
     TriggerBot = { Enabled=false, Delay=0.01, Mode="HitChance", HitChance=100, Spread=0, AutoWall=false },
     ESP      = {
@@ -854,8 +854,8 @@ local Config = {
         ChamsColor     = Color3.fromRGB(255, 60, 60),
         ChamsGlowColor = Color3.fromRGB(255, 180, 180),
         ChamsGlow      = 0.35, 
-        Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
-        IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90), 
+         Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
+         IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90),
         
     },
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true, PenetrationEnabled=false, PenetrationOkColor=Color3.fromRGB(0,255,0), PenetrationNoColor=Color3.fromRGB(255,60,60), Wallbang=false },
@@ -910,10 +910,15 @@ local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
 _ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
-_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v11" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v12" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v12" .. _ECLIPSE_AUTOCONFIG_EXT
 pcall(function()
     if type(delfile) == "function" and type(isfile) == "function" then
-        for _, old in ipairs({ "EclipseHub/autosave_v9.ehcfg", "EclipseHub/autosave_v10.ehcfg" }) do
+        for _, old in ipairs({
+            "EclipseHub/autosave_v9.ehcfg",
+            "EclipseHub/autosave_v10.ehcfg",
+            "EclipseHub/autosave_v11.ehcfg",
+        }) do
             if isfile(old) then pcall(delfile, old) end
         end
     end
@@ -935,11 +940,12 @@ pcall(function()
     if type(delfile) == "function" and type(listfiles) == "function" then
         local ok, files = pcall(listfiles, _ECLIPSE_AUTOCONFIG_DIR)
         if ok and type(files) == "table" then
-            local keep = _ECLIPSE_AUTOCONFIG_PATH:gsub("\\", "/")
+            local keepBase = _ECLIPSE_AUTOCONFIG_BASENAME:lower()
             for _, f in ipairs(files) do
                 local s = tostring(f or "")
-                local sn = s:gsub("\\", "/")
-                if sn:sub(-#keep) ~= keep and sn:sub(-#_ECLIPSE_AUTOCONFIG_EXT):lower() == _ECLIPSE_AUTOCONFIG_EXT then
+                local sn = s:gsub("\\", "/"):lower()
+                local base = sn:match("([^/]+)$") or sn
+                if base ~= keepBase and base:sub(-#_ECLIPSE_AUTOCONFIG_EXT) == _ECLIPSE_AUTOCONFIG_EXT then
                     pcall(delfile, s)
                 end
             end
@@ -1676,7 +1682,7 @@ function updatePenetrationCrosshair()
     local dir = Camera.CFrame.LookVector
     local res = Workspace:Raycast(origin, dir * 4500, params)
     if not res then _pen3dHide(); return end
-    local stats = GetPenetrationStats(origin, dir, 4, { LocalPlayer.Character, Camera, st.part }, nil)
+    local stats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot and Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera, st.part }, nil)
     local col = stats.Success and (Config.Crosshair.PenetrationOkColor or Color3.fromRGB(0,255,0))
                               or (Config.Crosshair.PenetrationNoColor or Color3.fromRGB(255,60,60))
     local pos = res.Position + (res.Normal or Vector3.new(0,1,0)) * 0.05
@@ -2056,6 +2062,21 @@ function IsVisible(part)
     local r = Workspace:Raycast(origin, dir, rp)
     if r then return r.Instance:IsDescendantOf(part.Parent) end
     return true
+end
+local _lastPenLogAt = 0
+function _EclipseHitPossible(part, allowWallbang)
+    if not part or not Camera then return false, nil end
+    if IsVisible(part) then return true, { Direct=true, Success=true, TotalThickness=0 } end
+    if not allowWallbang then return false, nil end
+    local origin = Camera.CFrame.Position
+    local delta = part.Position - origin
+    if delta.Magnitude <= 0 then return false, nil end
+    local depth = tonumber(Config.Aimbot and Config.Aimbot.WallDepth) or 1.0
+    local stats = GetPenetrationStats(origin, delta.Unit, depth, { LocalPlayer.Character, Camera }, part.Parent)
+    if stats and stats.Success then
+        return true, stats
+    end
+    return false, stats
 end
 function GetAimbotTargetPart(character)
     if not character then return nil end
@@ -3030,6 +3051,9 @@ function updateChams()
 
     end
 end
+
+function updateSoulParticles() end
+function _EclipseOnShotChams(_) end
 
 
 function updateESP()
@@ -4014,7 +4038,10 @@ function updateAimbot()
 
         if not part then continue end
 
-        if Config.Aimbot.VisibilityCheck and not IsVisible(part) then continue end
+        if Config.Aimbot.VisibilityCheck then
+            local okHit = _EclipseHitPossible(part, Config.Aimbot.WallBang)
+            if not okHit then continue end
+        end
 
         if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
         local sp, on = Camera:WorldToViewportPoint(part.Position)
@@ -4107,7 +4134,7 @@ function updateTriggerBot()
                     if root then
                         local toRoot = (root.Position - origin)
                         if toRoot.Magnitude > 0 and math.acos(math.clamp(dir:Dot(toRoot.Unit), -1, 1)) < math.rad(2.5) then
-                            local pStats = GetPenetrationStats(origin, dir, 4, { LocalPlayer.Character, Camera }, pl.Character)
+                            local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
                             if pStats and pStats.Success then
                                 if _tryFireOnPlayer(pl) then return end
                             end
@@ -7305,6 +7332,12 @@ function CleanupScript()
             pcall(function() if hl then hl:Destroy() end end)
             ChamsHL[plr] = nil
         end
+        if SoulEmitters then
+            for root, em in pairs(SoulEmitters) do
+                pcall(function() if em then em:Destroy() end end)
+                SoulEmitters[root] = nil
+            end
+        end
     end)
 
     pcall(function()
@@ -7312,7 +7345,11 @@ function CleanupScript()
             local ch = plr.Character
             if ch then
                 for _, d in ipairs(ch:GetDescendants()) do
-                    if d:IsA("Highlight") and d.Name == "EclipseChams" then
+                    if d:IsA("Highlight") and (d.Name == "EclipseChams" or d.Name == "EclipseOnShotChams") then
+                        pcall(function() d:Destroy() end)
+                    elseif d:IsA("ParticleEmitter") and d.Name == "EclipseSoulParticles" then
+                        pcall(function() d:Destroy() end)
+                    elseif d:IsA("PointLight") and d.Name == "EclipseOnShotLight" then
                         pcall(function() d:Destroy() end)
                     end
                 end
@@ -7351,6 +7388,13 @@ function CleanupScript()
         for _, l in ipairs(GPD.LinePool)    do if l then l:Remove() end end
         if GPD.Dot then GPD.Dot:Remove() end
         table.clear(GPD.ActiveLines); table.clear(GPD.LinePool); GPD.Dot = nil
+    end)
+    pcall(function()
+        for _, r in ipairs(_EclipseFootstepRings or {}) do
+            pcall(function() if r.ring then r.ring.Visible=false; r.ring:Remove() end end)
+            pcall(function() if r.glow then r.glow.Visible=false; r.glow:Remove() end end)
+        end
+        if _EclipseFootstepRings then table.clear(_EclipseFootstepRings) end
     end)
     
     pcall(function()
@@ -7414,6 +7458,51 @@ end))
 _frameN = 0
 _lastFrameT = tick()
 _emaDt = 1/60
+_EclipseFootstepRings = _EclipseFootstepRings or {}
+local function _spawnFootstepScreenRing(pos, col)
+    if not (type(Drawing) == "table" or type(Drawing) == "userdata") or type(Drawing.new) ~= "function" then return end
+    local ok1, ring = pcall(function() return Drawing.new("Circle") end)
+    local ok2, glow = pcall(function() return Drawing.new("Circle") end)
+    if not ok1 or not ring then return end
+    if not ok2 then glow = nil end
+    ring.Filled = false; ring.NumSides = 96; ring.Thickness = 3; ring.Transparency = 1; ring.Color = col; ring.Visible = false
+    if glow then glow.Filled = false; glow.NumSides = 96; glow.Thickness = 8; glow.Transparency = 0.45; glow.Color = col; glow.Visible = false end
+    table.insert(_EclipseFootstepRings, { pos=pos, color=col, ring=ring, glow=glow, t=tick(), life=1.7 })
+end
+local function _updateFootstepScreenRings()
+    if not _EclipseFootstepRings then return end
+    local now = tick()
+    for i = #_EclipseFootstepRings, 1, -1 do
+        local r = _EclipseFootstepRings[i]
+        local age = now - (r.t or now)
+        local life = r.life or 1.7
+        if age >= life or not scriptRunning then
+            pcall(function() if r.ring then r.ring.Visible=false; r.ring:Remove() end end)
+            pcall(function() if r.glow then r.glow.Visible=false; r.glow:Remove() end end)
+            table.remove(_EclipseFootstepRings, i)
+        else
+            local sp, on = Camera:WorldToViewportPoint(r.pos)
+            local visible = on and sp.Z > 0
+            local k = math.clamp(age / life, 0, 1)
+            local radius = 8 + (60 * (1 - (1-k)*(1-k)))
+            local alpha = 1 - k
+            if r.ring then
+                r.ring.Position = Vector2.new(sp.X, sp.Y)
+                r.ring.Radius = radius
+                r.ring.Color = r.color
+                r.ring.Transparency = alpha
+                r.ring.Visible = visible
+            end
+            if r.glow then
+                r.glow.Position = Vector2.new(sp.X, sp.Y)
+                r.glow.Radius = radius + 3
+                r.glow.Color = r.color
+                r.glow.Transparency = alpha * 0.45
+                r.glow.Visible = visible
+            end
+        end
+    end
+end
 
 connectSignal(RunService.RenderStepped:Connect(function()
     if not scriptRunning then return end
@@ -7433,6 +7522,7 @@ connectSignal(RunService.RenderStepped:Connect(function()
     safeUpdate("Movement", updateMovement)
     safeUpdate("SniperCrosshair", updateSniperCrosshair)
     safeUpdate("PenetrationCrosshair", updatePenetrationCrosshair)
+    safeUpdate("FootstepScreen", _updateFootstepScreenRings)
     safeUpdate("C4Timer", updateC4Timer)
     safeUpdate("ForceScope", _updateForceScope)
     safeUpdate("GrenadePrediction", updateGrenadePrediction)
@@ -7440,6 +7530,7 @@ connectSignal(RunService.RenderStepped:Connect(function()
     safeUpdate("ESP", updateESP)
     if heavy then
         safeUpdate("Chams", updateChams)
+        
         safeUpdate("WorldESP", updateWorldESP)
         safeUpdate("AntiFlash", updateAntiFlash)
         safeUpdate("AntiSmoke", updateAntiSmoke)
@@ -7492,7 +7583,7 @@ connectSignal(RunService.RenderStepped:Connect(function()
                         local moved = (hrp.Position - st.lastPos).Magnitude
                         if now - st.last > 0.42 and moved > 3.5 then
                             st.last = now; st.lastPos = hrp.Position
-                            local col = Config.ESP.FootstepColor
+                            local col = Config.ESP.FootstepColor or Color3.fromRGB(150,95,255)
                             local rayParams = RaycastParams.new()
                             rayParams.FilterType = Enum.RaycastFilterType.Exclude
                             rayParams.FilterDescendantsInstances = { ch, LocalPlayer.Character }
@@ -7500,6 +7591,9 @@ connectSignal(RunService.RenderStepped:Connect(function()
                             local hit = Workspace:Raycast(hrp.Position, Vector3.new(0, -12, 0), rayParams)
                             local floorPos = hit and hit.Position or (hrp.Position - Vector3.new(0, 3, 0))
                             local floorNormal = hit and hit.Normal or Vector3.new(0, 1, 0)
+                            
+                            local orient = CFrame.lookAt(floorPos + floorNormal * 0.06, floorPos + floorNormal * 0.06 + floorNormal) * CFrame.Angles(0, math.rad(90), 0)
+                            -- inner bright ring (visible)
                             local disc = Instance.new("Part")
                             disc.Name = "EclipseFootstep"
                             disc.Shape = Enum.PartType.Cylinder
@@ -7507,20 +7601,32 @@ connectSignal(RunService.RenderStepped:Connect(function()
                             disc.CastShadow = false
                             disc.Material = Enum.Material.Neon
                             disc.Color = col
-                            disc.Transparency = 1
-                            disc.Size = Vector3.new(0.08, 2.2, 2.2)
-                            disc.CFrame = CFrame.lookAt(floorPos + floorNormal * 0.05, floorPos + floorNormal * 0.05 + floorNormal) * CFrame.Angles(0, math.rad(90), 0)
+                            disc.Transparency = 0.15
+                            disc.Size = Vector3.new(0.06, 2.0, 2.0)
+                            disc.CFrame = orient
                             disc.Parent = Workspace
-                            local hl = Instance.new("Highlight")
-                            hl.Adornee = disc
-                            hl.FillTransparency = 1
-                            hl.OutlineTransparency = 0
-                            hl.OutlineColor = col
-                            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                            hl.Parent = disc
-                            TweenService:Create(disc, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = Vector3.new(0.08, 9, 9) }):Play()
-                            TweenService:Create(hl, TweenInfo.new(1.6, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { OutlineTransparency = 1 }):Play()
-                            Debris:AddItem(disc, 1.7)
+                            -- outer soft halo
+                            local halo = Instance.new("Part")
+                            halo.Name = "EclipseFootstepHalo"
+                            halo.Shape = Enum.PartType.Cylinder
+                            halo.Anchored = true; halo.CanCollide = false; halo.CanQuery = false; halo.CanTouch = false
+                            halo.CastShadow = false
+                            halo.Material = Enum.Material.Neon
+                            halo.Color = col
+                            halo.Transparency = 0.55
+                            halo.Size = Vector3.new(0.04, 2.4, 2.4)
+                            halo.CFrame = orient
+                            halo.Parent = Workspace
+                            -- glow light
+                            local pl = Instance.new("PointLight")
+                            pl.Color = col; pl.Brightness = 4; pl.Range = 10
+                            pl.Parent = disc
+                            local ti = TweenInfo.new(1.7, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+                            TweenService:Create(disc, ti, { Size = Vector3.new(0.06, 10, 10), Transparency = 1 }):Play()
+                            TweenService:Create(halo, ti, { Size = Vector3.new(0.04, 12, 12), Transparency = 1 }):Play()
+                            TweenService:Create(pl,   ti, { Brightness = 0, Range = 2 }):Play()
+                            Debris:AddItem(disc, 1.8)
+                            Debris:AddItem(halo, 1.8)
                         end
                     end
                 end
@@ -7655,6 +7761,8 @@ AimGB:AddToggle("Aimbot_DrawFOV", { Text="DRAW FOV",    Default=true, Callback=f
 
 AimGB:AddToggle("Aimbot_NoSmoke", { Text="DISABLE IN SMOKE", Default=true, Callback=function(v) Config.Aimbot.DisableInSmoke=v end })
 AimGB:AddToggle("Aimbot_NoFlash", { Text="DISABLE IN FLASH", Default=true, Callback=function(v) Config.Aimbot.DisableInFlash=v end })
+AimGB:AddToggle("Aimbot_WallBang", { Text="WALLBANG", Default=false, Callback=function(v) Config.Aimbot.WallBang=v end })
+AimGB:AddSlider("Aimbot_WallDepth", { Text="WALL DEPTH", Default=1.0, Min=0.1, Max=5.0, Rounding=1, Callback=function(v) Config.Aimbot.WallDepth=v end })
 AimGB:AddToggle("Pen_CH_Toggle", { Text="PENETRATION CROSSHAIR", Default=false,
     Callback=function(v) Config.Crosshair.PenetrationEnabled=v; if not v then pcall(_pen3dHide) end end })
 
@@ -8618,7 +8726,7 @@ do
     local TweenService = game:GetService("TweenService")
     local _nmTween
     local _nmToken = 0
-    local NM_TARGET = { TintColor = Color3.fromRGB(205,185,235), Brightness = -0.06, Contrast = 0.04, Saturation = -0.03 }
+    local NM_TARGET = { TintColor = Color3.fromRGB(126,96,176), Brightness = -0.20, Contrast = 0.10, Saturation = -0.10 }
     local NM_OFF    = { TintColor = Color3.fromRGB(255,255,255), Brightness = 0,     Contrast = 0,    Saturation = 0 }
     local function _applyNightMode(on)
         local e = _ensureNMEffect()
@@ -8639,14 +8747,30 @@ do
 
     _EclipseApplyNightMode = _applyNightMode
     task.spawn(function()
-        while true do
-            task.wait(3)
+        while scriptRunning do
+            task.wait(1.25)
             if Config.Misc and Config.Misc.NightMode then
                 local e = _ensureNMEffect()
-                if not e.Enabled then e.Enabled = true end
+                local needs = (not e.Enabled)
+                    or ((e.TintColor.R - NM_TARGET.TintColor.R)^2 + (e.TintColor.G - NM_TARGET.TintColor.G)^2 + (e.TintColor.B - NM_TARGET.TintColor.B)^2 > 0.002)
+                    or math.abs((e.Brightness or 0) - NM_TARGET.Brightness) > 0.03
+                if needs then pcall(_applyNightMode, true) end
             end
         end
     end)
+    connectSignal(LocalPlayer.CharacterAdded:Connect(function()
+        task.delay(0.35, function()
+            if scriptRunning and Config.Misc and Config.Misc.NightMode then pcall(_applyNightMode, true) end
+        end)
+    end))
+    connectSignal(Lighting.ChildRemoved:Connect(function(ch)
+        if ch == _nmEffect or ch.Name == "EclipseNightMode" then
+            _nmEffect = nil
+            task.delay(0.1, function()
+                if scriptRunning and Config.Misc and Config.Misc.NightMode then pcall(_applyNightMode, true) end
+            end)
+        end
+    end))
 end
 
 MiscGB:AddToggle("NightMode_Toggle", { Text="NIGHT MODE", Default=false, Callback=function(v)
@@ -10693,6 +10817,25 @@ end)()
         return hum and hum.Health > 0
     end
 
+    local function _killCharVisible(char)
+        local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("Head"))
+        local cam = Workspace.CurrentCamera
+        if not root or not cam then return false end
+        local dist = (cam.CFrame.Position - root.Position).Magnitude
+        if dist > 500 then return false end
+        local _, onScreen = cam:WorldToViewportPoint(root.Position)
+        if not onScreen then return false end
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        local ex = { char }
+        if LocalPlayer.Character then table.insert(ex, LocalPlayer.Character) end
+        rp.FilterDescendantsInstances = ex
+        rp.IgnoreWater = true
+        local dir = root.Position - cam.CFrame.Position
+        local hit = Workspace:Raycast(cam.CFrame.Position, dir, rp)
+        return not (hit and (hit.Position - cam.CFrame.Position).Magnitude < (dist - 2))
+    end
+
     local function _triggerLocalKillEffect(plr, char)
         if not char or _killEffectDone[char] then return end
         if plr == LocalPlayer then return end
@@ -10715,7 +10858,15 @@ end)()
     end
 
     local function _tryKillEffectFromHealth(plr, char)
-        _triggerLocalKillEffect(plr, char)
+        if not char or _killEffectDone[char] then return end
+        if plr == LocalPlayer then return end
+        if plr and IsAlly and IsAlly(plr) then return end
+        if not _localIsAlive() then return end
+        if not _killCharVisible(char) then return end
+        _killEffectDone[char] = tick()
+        if Config.GlobalEnable and Config.Visuals.KillEffect then
+            task.spawn(function() pcall(_spawnKillEffect, char) end)
+        end
     end
 
     pcall(function()
@@ -10761,6 +10912,9 @@ end)()
                     local didLPDamage = _attackerIsLocal(attacker)
                     local vchar, vplr = _charPlayerFromAny(victim)
                     local damageNumber = tonumber(dmg) or tonumber(type(dmg)=="table" and (dmg.Damage or dmg.damage or dmg.Amount or dmg.amount)) or 0
+                    if didLPDamage then
+                        local _vname = vplr and vplr.Name or (vchar and vchar.Name) or (typeof(victim)=="Instance" and victim.Name) or tostring(victim)
+                    end
                     if Config.Logging.Enabled then
                         if didLPDamage then
                             local vname = vplr and vplr.Name or (vchar and vchar.Name) or (typeof(victim)=="Instance" and victim.Name) or tostring(victim)
@@ -10840,7 +10994,7 @@ end)()
             if _isEnemyPlayer(plr) and plr.Character then
                 local hum = plr.Character:FindFirstChildOfClass("Humanoid")
                 local r = plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Torso") or plr.Character:FindFirstChild("UpperTorso")
-                if hum and r and hum.Health <= 0 and not _killEffectDone[plr.Character] then
+                if hum and r and hum.Health <= 0 and not _killEffectDone[plr.Character] and _killCharVisible(plr.Character) then
                     local d = (r.Position - myRoot.Position).Magnitude
                     if not bd or d < bd then bd = d; best = plr.Character end
                 end
@@ -10888,6 +11042,62 @@ end)()
             table.insert(UnloadConnections, ls.ChildAdded:Connect(function() task.wait(0.1); _bindKillsWatcher() end))
         end
     end
+
+    -- === HvH-style kill detection via Workspace.Debris ChildAdded ===
+    -- Fires for every death (unattributable to killer here), but only for
+    -- corpses currently VISIBLE from the local camera (raycast unobstructed
+    -- or on-screen with short ray) to save FPS/RAM.
+    local function _corpseIsVisible(model)
+        local hrp = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso") or model:FindFirstChild("Head")
+        if not hrp then return false, math.huge end
+        local cam = workspace.CurrentCamera
+        if not cam then return false, math.huge end
+        local dist = (cam.CFrame.Position - hrp.Position).Magnitude
+        if dist > 500 then return false, dist end
+        local _, onScreen = cam:WorldToViewportPoint(hrp.Position)
+        if not onScreen then return false, dist end
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        local ex = { model }
+        if LocalPlayer.Character then table.insert(ex, LocalPlayer.Character) end
+        rp.FilterDescendantsInstances = ex
+        rp.IgnoreWater = true
+        local dir = hrp.Position - cam.CFrame.Position
+        local hit = Workspace:Raycast(cam.CFrame.Position, dir, rp)
+        if hit and (hit.Position - cam.CFrame.Position).Magnitude < (dist - 2) then
+            return false, dist
+        end
+        return true, dist
+    end
+
+    local function _watchDebrisFolder(folder)
+        if not folder or folder:GetAttribute("EclipseKFXHooked") then return end
+        folder:SetAttribute("EclipseKFXHooked", true)
+        local conn = folder.ChildAdded:Connect(function(child)
+            if not (Config.GlobalEnable and Config.Visuals.KillEffect) then return end
+            task.wait(0.05)
+            if not (child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") and (child:FindFirstChild("Head") or child:FindFirstChild("UpperTorso"))) then return end
+            if _killEffectDone[child] then return end
+            if not _localIsAlive() then return end
+            local vis, dist = _corpseIsVisible(child)
+            if not vis then
+                pcall(function() print(string.format("[Eclipse KillFX] Skipped (not visible) victim=%s dist=%.1f", tostring(child.Name), dist or -1)) end)
+                return
+            end
+            _killEffectDone[child] = tick()
+            pcall(function() print(string.format("[Eclipse KillFX] Trigger victim=%s dist=%.1f type=%s", tostring(child.Name), dist or -1, tostring(Config.Visuals.KillEffectType))) end)
+            task.spawn(function() pcall(_spawnKillEffect, child) end)
+        end)
+        table.insert(UnloadConnections, conn)
+    end
+
+    do
+        local db = Workspace:FindFirstChild("Debris")
+        if db then _watchDebrisFolder(db) end
+        table.insert(UnloadConnections, Workspace.ChildAdded:Connect(function(c)
+            if c.Name == "Debris" then task.wait(0.1); _watchDebrisFolder(c) end
+        end))
+    end
 end)()
 
 
@@ -10912,10 +11122,19 @@ end)
 
 pcall(function()
     task.defer(function()
-        task.wait(0.5)
+        local function readyCount()
+            local n = 0
+            for _ in pairs(Library.Toggles or {}) do n = n + 1 end
+            for _ in pairs(Library.Options or {}) do n = n + 1 end
+            return n
+        end
+        local waited = 0
+        while readyCount() < 20 and waited < 8 do
+            task.wait(0.2); waited = waited + 0.2
+        end
         pcall(_ecfgApplyLoadedControls)
         pcall(_ecfgStartAutosave)
-        for _, d in ipairs({0.8, 2.0, 4.0}) do
+        for _, d in ipairs({0.4, 1.0, 2.0, 4.0, 7.0}) do
             task.delay(d, function() pcall(_ecfgApplyLoadedControls) end)
         end
     end)
