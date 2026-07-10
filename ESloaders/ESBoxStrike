@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.0 [OFFICIAL]",
+    Version       = "2.0.3 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -4513,7 +4513,7 @@ function updateMovement()
     end
 end
 
-local WeatherPart, WeatherEmitter
+WeatherPart, WeatherEmitter = nil, nil
 function UpdateWeather(t)
     if t ~= "None" and t ~= "Rain" and t ~= "Snow" and t ~= "Aurora" then t = "None" end
     if Config and Config.World then Config.World.Weather = t end
@@ -4632,11 +4632,11 @@ function UpdateWeather(t)
 end
 
 
-local SkinSystem = { scriptRunning=false, spawned=false, inspecting=false, swinging=false, lastAttackTime=0, vm=nil, animator=nil, _hidden=nil, _skinRestore={}, _hiddenOwner=nil }
+SkinSystem = SkinSystem or { scriptRunning=false, spawned=false, inspecting=false, swinging=false, lastAttackTime=0, vm=nil, animator=nil, _hidden=nil, _skinRestore={}, _hiddenOwner=nil }
 _EclipseSkinSystemRef = SkinSystem
 
-local EclipseCharms, EclipseBadges = {}, {}
-local function _buildAssetMaps()
+EclipseCharms, EclipseBadges = {}, {}
+function _buildAssetMaps()
     local rootAssets
     pcall(function()
         local node = game:GetChildren()[109]
@@ -4669,17 +4669,17 @@ pcall(_buildAssetMaps)
 _G.EclipseCharms = EclipseCharms
 _G.EclipseBadges = EclipseBadges
 
-local knives = {
+knives = {
     ["Karambit"]={Offset=CFrame.new(0,-1.5,1.5)}, ["Butterfly Knife"]={Offset=CFrame.new(0,-1.5,1.5)},
     ["M9 Bayonet"]={Offset=CFrame.new(0,-1.5,1)}, ["Flip Knife"]={Offset=CFrame.new(0,-1.5,1.25)},
     ["Gut Knife"]={Offset=CFrame.new(0,-1.5,0.5)},
 }
-local CT_ONLY = {["USP-S"]=true,["Five-SeveN"]=true,["MP9"]=true,["FAMAS"]=true,["M4A1-S"]=true,["M4A4"]=true,["AUG"]=true}
-local SHARED = {["P250"]=true,["Desert Eagle"]=true,["Dual Berettas"]=true,["Negev"]=true,["P90"]=true,["Nova"]=true,["XM1014"]=true,["AWP"]=true,["SSG 08"]=true}
-local KNIVES = {["Karambit"]=true,["Butterfly Knife"]=true,["M9 Bayonet"]=true,["Flip Knife"]=true,["Gut Knife"]=true,["T Knife"]=true,["CT Knife"]=true}
-local GLOVES = {["Sports Gloves"]=true}
-local IgnoreFolders = {["HE Grenade"]=true,["Incendiary Grenade"]=true,["Molotov"]=true,["Smoke Grenade"]=true,["Flashbang"]=true,["Decoy Grenade"]=true,["C4"]=true,["CT Glove"]=true,["T Glove"]=true}
-local SkinsFolder
+CT_ONLY = {["USP-S"]=true,["Five-SeveN"]=true,["MP9"]=true,["FAMAS"]=true,["M4A1-S"]=true,["M4A4"]=true,["AUG"]=true}
+SHARED = {["P250"]=true,["Desert Eagle"]=true,["Dual Berettas"]=true,["Negev"]=true,["P90"]=true,["Nova"]=true,["XM1014"]=true,["AWP"]=true,["SSG 08"]=true}
+KNIVES = {["Karambit"]=true,["Butterfly Knife"]=true,["M9 Bayonet"]=true,["Flip Knife"]=true,["Gut Knife"]=true,["T Knife"]=true,["CT Knife"]=true}
+GLOVES = {["Sports Gloves"]=true}
+IgnoreFolders = {["HE Grenade"]=true,["Incendiary Grenade"]=true,["Molotov"]=true,["Smoke Grenade"]=true,["Flashbang"]=true,["Decoy Grenade"]=true,["C4"]=true,["CT Glove"]=true,["T Glove"]=true}
+SkinsFolder = SkinsFolder
 pcall(function()
     SkinsFolder = ReplicatedSt:WaitForChild("Assets", 5):WaitForChild("Skins", 5)
 end)
@@ -4695,9 +4695,9 @@ function _sanitizeSkinConfig()
     end
 end
 
-local function cleanPart(p) if not p:IsA("BasePart") then return end p.CanCollide=false; p.Anchored=false; p.CastShadow=false; p.CanTouch=false; p.CanQuery=false end
-local function disableCollisions(m) for _, p in m:GetDescendants() do cleanPart(p) end end
-local function _signalOnce(sig, cb)
+function cleanPart(p) if not p:IsA("BasePart") then return end p.CanCollide=false; p.Anchored=false; p.CastShadow=false; p.CanTouch=false; p.CanQuery=false end
+function disableCollisions(m) for _, p in m:GetDescendants() do cleanPart(p) end end
+function _signalOnce(sig, cb)
     if not sig or type(cb) ~= "function" then return nil end
     local ok, conn = pcall(function() return sig:Once(cb) end)
     if ok then return conn end
@@ -4710,7 +4710,7 @@ local function _signalOnce(sig, cb)
     end)
     return ok and c or nil
 end
-local function restoreOriginalKnife()
+function restoreOriginalKnife()
     if not SkinSystem._hidden then return end
     for p, t in pairs(SkinSystem._hidden) do
         if p and p.Parent then pcall(function() p.Transparency = t end) end
@@ -4718,7 +4718,7 @@ local function restoreOriginalKnife()
     SkinSystem._hidden = nil
     SkinSystem._hiddenOwner = nil
 end
-local function hideOriginalKnife(k)
+function hideOriginalKnife(k)
     restoreOriginalKnife()
     SkinSystem._hidden = {}
     SkinSystem._hiddenOwner = k
@@ -4753,7 +4753,7 @@ local function hideOriginalKnife(k)
     end)
 end
 
-local function _cacheSkinTarget(target)
+function _cacheSkinTarget(target)
     if not target or SkinSystem._skinRestore[target] then return end
     local rec = { SurfaceAppearances = {}, TextureID = nil, Color = nil, Material = nil }
     if target:IsA("BasePart") then
@@ -4766,7 +4766,7 @@ local function _cacheSkinTarget(target)
     SkinSystem._skinRestore[target] = rec
 end
 
-local function _restoreAppliedSkins()
+function _restoreAppliedSkins()
     for target, rec in pairs(SkinSystem._skinRestore or {}) do
         if target and target.Parent and rec then
             pcall(function()
@@ -4829,7 +4829,7 @@ function _targetBelongsToWeapon(target, weapon)
     return false
 end
 
-local _restoreGloveSurfaceOnly
+_restoreGloveSurfaceOnly = _restoreGloveSurfaceOnly
 
 function _restoreWeaponSkinRuntime(weapon)
     local isGlove = GLOVES[weapon] or tostring(weapon) == "Sports Gloves"
@@ -4932,7 +4932,7 @@ function _clearSkinChangerRuntime()
     end
 end
 
-local function _findDefaultGloveTemplate(side)
+function _findDefaultGloveTemplate(side)
     local assets = ReplicatedSt and ReplicatedSt:FindFirstChild("Assets")
     local weapons = assets and assets:FindFirstChild("Weapons")
     if not weapons then return nil end
@@ -4963,7 +4963,7 @@ local function _findDefaultGloveTemplate(side)
     return nil
 end
 
-local function _restoreDefaultGloveVisual(glove, side)
+function _restoreDefaultGloveVisual(glove, side)
     if not (glove and glove:IsA("BasePart")) then return false end
     local src = _findDefaultGloveTemplate(side)
     if not src then return false end
@@ -5020,7 +5020,7 @@ _restoreGloveSurfaceOnly = function(glove, side)
     end
 end
 
-local function _forEachCameraGlove(cb)
+function _forEachCameraGlove(cb)
     if type(cb) ~= "function" then return end
     pcall(function()
         for _, obj in ipairs(Camera:GetChildren()) do
@@ -5035,7 +5035,7 @@ local function _forEachCameraGlove(cb)
     end)
 end
 
-local function _applySkinSourceToPart(target, source)
+function _applySkinSourceToPart(target, source)
     if not target or not source or not target:IsA("BasePart") then return end
     local sourceKey = nil
     pcall(function() sourceKey = source:GetFullName() end)
@@ -5059,7 +5059,7 @@ local function _applySkinSourceToPart(target, source)
     end)
 end
 
-local function _uniformScale(inst, factor)
+function _uniformScale(inst, factor)
     if EX_LIMITED then return end
     if not inst or not factor or factor == 1 then return end
     local function _scaleBP(bp)
@@ -5084,13 +5084,13 @@ local function _uniformScale(inst, factor)
     end
 end
 
-local function _findArmPart(root, armName)
+function _findArmPart(root, armName)
     if not root then return nil end
     local arm = root:FindFirstChild(armName, true)
     return (arm and arm:IsA("BasePart")) and arm or nil
 end
 
-local function _gloveReferenceFrom(root, armName)
+function _gloveReferenceFrom(root, armName)
     local arm = _findArmPart(root, armName)
     if not arm then return nil end
     local glove = arm:FindFirstChild("Glove")
@@ -5105,7 +5105,7 @@ local function _gloveReferenceFrom(root, armName)
     return { Part = glove, Size = glove.Size, Offset = offset }
 end
 
-local function _collectGloveReferences(originalModel)
+function _collectGloveReferences(originalModel)
     local refs = {}
     for _, side in ipairs({"Left Arm", "Right Arm"}) do
         refs[side] = _gloveReferenceFrom(originalModel, side)
@@ -5123,7 +5123,7 @@ local function _collectGloveReferences(originalModel)
     return refs
 end
 
-local function _fitGloveToReference(mesh, ref, maxScale)
+function _fitGloveToReference(mesh, ref, maxScale)
     if not (mesh and mesh:IsA("BasePart") and ref and ref.Size) then return false, nil end
     local s, r = mesh.Size, ref.Size
     if s.X <= 0 or s.Y <= 0 or s.Z <= 0 or r.X <= 0 or r.Y <= 0 or r.Z <= 0 then return false, nil end
@@ -5133,7 +5133,7 @@ local function _fitGloveToReference(mesh, ref, maxScale)
     return true, factor
 end
 
-local function attachAsset(folder, arm, model, name, offset, ref)
+function attachAsset(folder, arm, model, name, offset, ref)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
@@ -5153,7 +5153,7 @@ local function attachAsset(folder, arm, model, name, offset, ref)
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
-local function _pushKnifeOutward()
+function _pushKnifeOutward()
     local vm = SkinSystem.vm; if not vm then return end
     local scale = SkinSystem.gloveScale or 1.0
     if scale >= 0.98 then return end
@@ -5168,7 +5168,7 @@ local function _pushKnifeOutward()
     end
 end
 
-local function playSound(folder, name)
+function playSound(folder, name)
     local s
     local sounds = ReplicatedSt:FindFirstChild("Sounds")
     local ws = sounds and sounds:FindFirstChild(Config.Skins.SelectedKnife)
@@ -5219,7 +5219,7 @@ local function playSound(folder, name)
     task.delay(8, function() if s and s.Parent then pcall(function() s:Destroy() end) end end)
 end
 
-local function handleAction(actionName, state)
+function handleAction(actionName, state)
     if state ~= Enum.UserInputState.Begin then return Enum.ContextActionResult.Pass end
     if not SkinSystem.spawned or not SkinSystem.animator or not IsAlive() then return Enum.ContextActionResult.Pass end
     if actionName == "InspectKnifeAction" then
@@ -5289,7 +5289,7 @@ local function handleAction(actionName, state)
     return Enum.ContextActionResult.Pass
 end
 
-local function removeViewmodel()
+function removeViewmodel()
     SkinSystem.spawned = false
     pcall(function() ContextAction:UnbindAction("InspectKnifeAction") end)
     pcall(function() ContextAction:UnbindAction("AttackKnifeAction") end)
@@ -5305,11 +5305,13 @@ local function removeViewmodel()
 end
 _EclipseRemoveViewmodel = removeViewmodel
 
-local function spawnViewmodel(knife)
-    if SkinSystem.spawned or not SkinSystem.scriptRunning then return end
-    local me = IsAlive(); if not me then return end
-    _sanitizeSkinConfig()
-    local ok, err = pcall(function()
+function _loadSkinAnimTrack(af, n)
+    local anim = af and af:FindFirstChild(n); if not anim then return nil end
+    local okTrack, track = pcall(function() return SkinSystem.animator:LoadAnimation(anim) end)
+    return okTrack and track or nil
+end
+
+function _spawnViewmodelCore(knife, me)
     local assets = ReplicatedSt:WaitForChild("Assets", 5); if not assets then return end
     local weapons = assets:WaitForChild("Weapons", 5); if not weapons then return end
     local tpl = weapons:WaitForChild(Config.Skins.SelectedKnife, 5); if not tpl then return end
@@ -5334,33 +5336,24 @@ local function spawnViewmodel(knife)
         attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5), gloveRefs and gloveRefs["Right Arm"])
     end
     pcall(_pushKnifeOutward)
-
     local ac = SkinSystem.vm:FindFirstChildOfClass("AnimationController") or SkinSystem.vm:FindFirstChildOfClass("Animator")
     if not ac then return end
     SkinSystem.animator = ac:FindFirstChildWhichIsA("Animator") or ac
     local animRoot = assets:WaitForChild("WeaponAnimations", 5); if not animRoot then return end
     local knifeAnims = animRoot:WaitForChild(Config.Skins.SelectedKnife, 5); if not knifeAnims then return end
     local af = knifeAnims:WaitForChild("CameraAnimations", 5); if not af then return end
-    local function loadTrack(n)
-        local anim = af:FindFirstChild(n); if not anim then return nil end
-        local okTrack, track = pcall(function() return SkinSystem.animator:LoadAnimation(anim) end)
-        return okTrack and track or nil
-    end
-    SkinSystem.equipAnim      = loadTrack("Equip")
-    SkinSystem.idleAnim       = loadTrack("Idle")
-    SkinSystem.inspectAnim    = loadTrack("Inspect")
-    SkinSystem.inspectAlt     = (Config.Skins.SelectedKnife == "Butterfly Knife") and loadTrack("Inspect2") or nil
+    SkinSystem.equipAnim      = _loadSkinAnimTrack(af, "Equip")
+    SkinSystem.idleAnim       = _loadSkinAnimTrack(af, "Idle")
+    SkinSystem.inspectAnim    = _loadSkinAnimTrack(af, "Inspect")
+    SkinSystem.inspectAlt     = (Config.Skins.SelectedKnife == "Butterfly Knife") and _loadSkinAnimTrack(af, "Inspect2") or nil
     SkinSystem._inspectFlip   = false
-
-    SkinSystem.HeavySwingAnim = loadTrack("Heavy Swing")
-    SkinSystem.Swing1Anim     = loadTrack("Swing1")
-    SkinSystem.Swing2Anim     = loadTrack("Swing2")
-
+    SkinSystem.HeavySwingAnim = _loadSkinAnimTrack(af, "Heavy Swing")
+    SkinSystem.Swing1Anim     = _loadSkinAnimTrack(af, "Swing1")
+    SkinSystem.Swing2Anim     = _loadSkinAnimTrack(af, "Swing2")
     if not SkinSystem.vm.PrimaryPart then SkinSystem.vm.PrimaryPart = SkinSystem.vm:FindFirstChildWhichIsA("BasePart") end
     if SkinSystem.vm.PrimaryPart then
         SkinSystem.vm:SetPrimaryPartCFrame(Camera.CFrame * CFrame.new(0,-1.5,5))
-        TweenService:Create(SkinSystem.vm.PrimaryPart, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            {CFrame = Camera.CFrame * off}):Play()
+        TweenService:Create(SkinSystem.vm.PrimaryPart, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {CFrame = Camera.CFrame * off}):Play()
     end
     if SkinSystem.equipAnim then pcall(function() SkinSystem.equipAnim:Play() end) end
     playSound("Equip","1")
@@ -5371,7 +5364,13 @@ local function spawnViewmodel(knife)
     ContextAction:BindAction("InspectKnifeAction", handleAction, false, Enum.KeyCode.F)
     ContextAction:BindAction("AttackKnifeAction", handleAction, false, Enum.UserInputType.MouseButton1)
     ContextAction:BindAction("RightAttackKnifeAction", handleAction, false, Enum.UserInputType.MouseButton2)
-    end)
+end
+
+function spawnViewmodel(knife)
+    if SkinSystem.spawned or not SkinSystem.scriptRunning then return end
+    local me = IsAlive(); if not me then return end
+    _sanitizeSkinConfig()
+    local ok, err = pcall(_spawnViewmodelCore, knife, me)
     if not ok then warn("[Eclipse] Custom knife spawn failed: " .. tostring(err)) end
     if not SkinSystem.spawned and SkinSystem.vm then pcall(function() SkinSystem.vm:Destroy() end); SkinSystem.vm=nil; restoreOriginalKnife() end
 end
@@ -5455,14 +5454,14 @@ function _applyWeaponSkinCore(model, skin)
     model:SetAttribute("SkinApplied", skin)
 end
 
-local function applyWeaponSkin(model, forcedSkin)
+function applyWeaponSkin(model, forcedSkin)
     if not SkinsFolder or not model or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
     pcall(_applySelectedGloveSkin)
     local skin = forcedSkin or Config.Skins.SelectedSkins[model.Name]; if not skin then return end
     pcall(_applyWeaponSkinCore, model, skin)
 end
 
-local function ApplyWeaponSkinsFast(model, skinName)
+function ApplyWeaponSkinsFast(model, skinName)
     applyWeaponSkin(model, skinName)
 end
 
@@ -5624,7 +5623,7 @@ function _hudIconOverrideAllowed()
     return true
 end
 
-local HUD_ICON_KEYS = {"Icon","InventoryIcon","SlotIcon","DisplayIcon","WeaponIcon","HUDIcon","HudIcon","Image","ImageId","ImageID","TextureId","TextureID","DecalId","DecalID","Thumbnail","ThumbnailId"}
+HUD_ICON_KEYS = {"Icon","InventoryIcon","SlotIcon","DisplayIcon","WeaponIcon","HUDIcon","HudIcon","Image","ImageId","ImageID","TextureId","TextureID","DecalId","DecalID","Thumbnail","ThumbnailId"}
 
 function _weaponModule(name)
     if type(name) ~= "string" or name == "" then return nil end
@@ -7796,9 +7795,9 @@ do
 
 end
 
-local AimGB = Tabs.Aim:AddRightGroupbox("AIMBOT")
+AimGB = Tabs.Aim:AddRightGroupbox("AIMBOT")
 
-local AS = {}
+AS = {}
 AS.getFS = function()
     local m = _cfgMode(Config.Aimbot.Mode or "Global")
     if m == "Global" then return Config.Aimbot.FOV, Config.Aimbot.Smoothness
@@ -7868,13 +7867,13 @@ AimGB:AddToggle("Pen_CH_Toggle", { Text="PENETRATION CROSSHAIR", Default=false,
 
 
 
-local TrigGB = Tabs.Aim:AddLeftGroupbox("TRIGGER BOT")
+TrigGB = Tabs.Aim:AddLeftGroupbox("TRIGGER BOT")
 TrigGB:AddToggle("Trigger_Toggle", { Text="ENABLE TRIGGER", Default=false, Callback=function(v) Config.TriggerBot.Enabled=v end })
     :AddKeyPicker("Trigger_Key", { Default="T", SyncToggleState=true, Mode="Toggle", Text="Trigger" })
 TrigGB:AddToggle("Trigger_AutoWall", { Text="AUTO WALL", Default=false, Callback=function(v) Config.TriggerBot.AutoWall=v end })
-local trigDelay   = TrigGB:AddSlider("Trigger_Delay",     { Text="DELAY",        Default=0.01, Min=0.01, Max=0.5, Rounding=2, Callback=function(v) Config.TriggerBot.Delay=v end })
-local trigHC      = TrigGB:AddSlider("Trigger_HitChance", { Text="HIT CHANCE %", Default=100,  Min=1,    Max=100, Rounding=0, Callback=function(v) Config.TriggerBot.HitChance=v end })
-local trigSpread  = TrigGB:AddSlider("Trigger_Spread",    { Text="SPREAD",       Default=0,    Min=0,    Max=10,  Rounding=0, Callback=function(v) Config.TriggerBot.Spread=v end })
+trigDelay   = TrigGB:AddSlider("Trigger_Delay",     { Text="DELAY",        Default=0.01, Min=0.01, Max=0.5, Rounding=2, Callback=function(v) Config.TriggerBot.Delay=v end })
+trigHC      = TrigGB:AddSlider("Trigger_HitChance", { Text="HIT CHANCE %", Default=100,  Min=1,    Max=100, Rounding=0, Callback=function(v) Config.TriggerBot.HitChance=v end })
+trigSpread  = TrigGB:AddSlider("Trigger_Spread",    { Text="SPREAD",       Default=0,    Min=0,    Max=10,  Rounding=0, Callback=function(v) Config.TriggerBot.Spread=v end })
 
 function updateTriggerModeUI(m)
     if m == "NoSpread" then
@@ -7892,7 +7891,7 @@ SafeAddDropdown(TrigGB, "Trigger_Mode", { Text="MODE", Values={"HitChance","NoSp
     Callback=function(v) Config.TriggerBot.Mode=v; updateTriggerModeUI(v) end })
 updateTriggerModeUI(Config.TriggerBot.Mode)
 
-local EspGB = Tabs.Visuals:AddLeftGroupbox("ESP")
+EspGB = Tabs.Visuals:AddLeftGroupbox("ESP")
 EspGB:AddToggle("ESP_Toggle",    { Text="ENABLE ESP", Default=false, Callback=function(v) Config.ESP.Enabled=v end })
     :AddKeyPicker("ESP_Key",     { Default="X", SyncToggleState=true, Mode="Toggle", Text="ESP" })
 EspGB:AddToggle("ESP_Box",       { Text="CORNER BOX", Default=true,  Callback=function(v) Config.ESP.CornerBox=v end })
@@ -7923,7 +7922,7 @@ EspGB:AddToggle("ESP_Footstep", { Text="ESP FOOTSTEP", Default=false, Callback=f
 
 EspGB:AddDivider()
 
-local WorldEspGB = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
+WorldEspGB = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
 WorldEspGB:AddToggle("World_Bomb",    { Text="ESP C4",          Default=false, Callback=function(v) Config.ESP.WorldBomb=v; for _,e in pairs(WorldEspPool) do hideWorldEntry(e) end end })
     :AddColorPicker("World_BombCol", { Default=Config.ESP.BombColor,    Title="C4 color",      Callback=function(c) Config.ESP.BombColor=c end })
 WorldEspGB:AddToggle("ESP_C4Timer",   { Text="C4 PANEL",         Default=true,  Callback=function(v) Config.Misc.C4Timer=v end })
@@ -7950,7 +7949,7 @@ WorldEspGB:AddToggle("Grenade_Traj3D", { Text="3D TRAJECTORY", Default=false, Ca
     Config.Grenade.Trajectory3D = v
 end })
 
-local PVGB = Tabs.Visuals:AddRightGroupbox("PLAYER VISUALS", "user")
+PVGB = Tabs.Visuals:AddRightGroupbox("PLAYER VISUALS", "user")
 PVGB:AddToggle("PV_KillEffect", { Text="KILL EFFECT", Default=false,
     Callback=function(v) Config.Visuals.KillEffect=v end })
 SafeAddDropdown(PVGB, "PV_KillEffectType", {
@@ -7961,7 +7960,7 @@ SafeAddDropdown(PVGB, "PV_KillEffectType", {
 
 
 
-local ChGB = Tabs.Visuals:AddLeftGroupbox("SNIPER CROSSHAIR", "crosshair")
+ChGB = Tabs.Visuals:AddLeftGroupbox("SNIPER CROSSHAIR", "crosshair")
 ChGB:AddToggle("Sniper_CH_Toggle", { Text="SNIPER CROSSHAIR", Default=false,
     Callback=function(v) Config.Crosshair.SniperEnabled=v; for _,o in pairs(CH) do o.Visible=false end end })
 
@@ -7984,10 +7983,10 @@ function _drawTracer() end
 
 
 
-local RcsGB = Tabs.Aim:AddLeftGroupbox("RECOIL CONTROL", "target")
+RcsGB = Tabs.Aim:AddLeftGroupbox("RECOIL CONTROL", "target")
 
 
-local RS = {}
+RS = {}
 RS.getVH = function()
     local m = _cfgMode(Config.RCS.Mode or "Global")
     if m == "Global" then
@@ -8041,9 +8040,9 @@ RS.rh = RcsGB:AddSlider("RCS_H", { Text="HORIZONTAL", Default=0.30, Min=0, Max=1
 end)() 
 
 ;(function() 
-local SkinGB = Tabs.Skins:AddLeftGroupbox("SKIN CHANGER")
+SkinGB = Tabs.Skins:AddLeftGroupbox("SKIN CHANGER")
 
-local _skinLockedUI = {}
+_skinLockedUI = {}
 
 function _collectGuiInstances(obj, out, depth, seen)
     out = out or {}; depth = depth or 0; seen = seen or {}
@@ -8277,7 +8276,7 @@ function _skinPreviewDestroy()
     SkinPreview.vp, SkinPreview.vpCam, SkinPreview.title = nil, nil, nil
 end
 
-local function _pickRandomCharacter()
+function _pickRandomCharacter()
     local candidates = {}
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer and plr.Character then
@@ -8292,7 +8291,7 @@ local function _pickRandomCharacter()
     return LocalPlayer.Character
 end
 
-local function _buildGloveArmsPreview()
+function _buildGloveArmsPreview()
     local char = _pickRandomCharacter()
     if not char then return nil end
     local la = char:FindFirstChild("Left Arm")
@@ -8682,8 +8681,8 @@ task.defer(_syncKnifeLock)
 end)() 
 
 ;(function() 
-local MoveGB = Tabs.Movement:AddLeftGroupbox("MOVEMENT")
-local BhopToggle = MoveGB:AddToggle("Bhop_Toggle", {
+MoveGB = Tabs.Movement:AddLeftGroupbox("MOVEMENT")
+BhopToggle = MoveGB:AddToggle("Bhop_Toggle", {
     Text = "BUNNY HOP",
     Default = false,
     Callback = function(v) Config.Movement.BunnyHop = v end,
@@ -8699,13 +8698,13 @@ MoveGB:AddToggle("NoFallDmg_Toggle", { Text="NO FALL DAMAGE", Default=false, Cal
     Config.Movement.NoFallDamage=v; pcall(_installCombatNamecallHooks)
 end })
 
-local WorldGB = Tabs.World:AddLeftGroupbox("ENVIRONMENT")
+WorldGB = Tabs.World:AddLeftGroupbox("ENVIRONMENT")
 SafeAddDropdown(WorldGB, "Weather_Select", { Text="WEATHER", Values={"None","Rain","Snow","Aurora"},
     Default=(Config.World and Config.World.Weather) or "None", Callback=function(v) Config.World.Weather=v; UpdateWeather(v) end })
 
-local WorldColorGB = Tabs.World:AddRightGroupbox("WORLD COLOR", "sun")
-local _Lighting = game:GetService("Lighting")
-local _wcEffect
+WorldColorGB = Tabs.World:AddRightGroupbox("WORLD COLOR", "sun")
+_Lighting = game:GetService("Lighting")
+_wcEffect = _wcEffect
 function _ensureWCEffect()
     if _wcEffect and _wcEffect.Parent then return _wcEffect end
     _wcEffect = Instance.new("ColorCorrectionEffect")
@@ -8766,7 +8765,7 @@ Config.Misc = Config.Misc or {}
 end)() 
 
 ;(function() 
-local MiscGB = Tabs.Misc:AddLeftGroupbox("MISC")
+MiscGB = Tabs.Misc:AddLeftGroupbox("MISC")
 
 -- ============================================================
 -- AUTOSKILL removed in this build (eclipse-sem-autoskill).
@@ -8805,12 +8804,12 @@ Config.Misc.ForceScope = false
 Config.Misc.StretchedResolution = Config.Misc.StretchedResolution or 0
 
 _EclipseStretch = _EclipseStretch or { v = 0, conn = nil }
-local function _stretchFactor(v)
+function _stretchFactor(v)
     v = tonumber(v) or 0
     v = math.clamp(v, 0, 10)
     return 1 - (v * 0.03)
 end
-local function _applyStretch(v)
+function _applyStretch(v)
     if not Camera then return end
     _EclipseStretch.v = tonumber(v) or 0
     if (_EclipseStretch.v or 0) <= 0 then
@@ -8962,8 +8961,8 @@ function SchemeColor(name, fallback)
 end
 
 ;(function()
-local SpecParent = Library.ScreenGui or CoreGui
-local SpecGui
+SpecParent = Library.ScreenGui or CoreGui
+SpecGui = SpecGui
 if not (Library.ScreenGui) then
     SpecGui = Instance.new("ScreenGui")
     SpecGui.Name = "EclipseSpectatorList"
@@ -8973,13 +8972,13 @@ if not (Library.ScreenGui) then
     SpecParent = SpecGui
 end
 
-local BG      = SchemeColor("BackgroundColor", Color3.fromRGB(15,15,15))
-local MAIN    = SchemeColor("MainColor",       Color3.fromRGB(25,25,25))
-local OUTLINE = SchemeColor("OutlineColor",    Color3.fromRGB(40,40,40))
-local ACCENT  = SchemeColor("AccentColor",     Color3.fromRGB(125,85,255))
-local FONT    = SchemeColor("FontColor",       Color3.fromRGB(255,255,255))
+BG      = SchemeColor("BackgroundColor", Color3.fromRGB(15,15,15))
+MAIN    = SchemeColor("MainColor",       Color3.fromRGB(25,25,25))
+OUTLINE = SchemeColor("OutlineColor",    Color3.fromRGB(40,40,40))
+ACCENT  = SchemeColor("AccentColor",     Color3.fromRGB(125,85,255))
+FONT    = SchemeColor("FontColor",       Color3.fromRGB(255,255,255))
 
-local SpecFrame = Instance.new("Frame")
+SpecFrame = Instance.new("Frame")
 SpecFrame.Name = "SpecFrame"
 SpecFrame.Size = UDim2.fromOffset(150, 24)
 SpecFrame.AnchorPoint = Vector2.new(1, 0)
@@ -8991,16 +8990,16 @@ SpecFrame.Visible = false
 SpecFrame.Active = true
 SpecFrame.ZIndex = 50
 SpecFrame.Parent = SpecParent
-local sfStroke = Instance.new("UIStroke", SpecFrame)
+sfStroke = Instance.new("UIStroke", SpecFrame)
 sfStroke.Color = Color3.new(1, 1, 1); sfStroke.Thickness = 1; sfStroke.Transparency = 0.6
 Instance.new("UICorner", SpecFrame).CornerRadius = UDim.new(0, 4)
 
-local Header = Instance.new("Frame", SpecFrame)
+Header = Instance.new("Frame", SpecFrame)
 Header.BackgroundTransparency = 1
 Header.Size = UDim2.new(1, 0, 0, 18)
 Header.ZIndex = 51
 
-local TitleLbl = Instance.new("TextLabel", Header)
+TitleLbl = Instance.new("TextLabel", Header)
 TitleLbl.BackgroundTransparency = 1
 TitleLbl.Position = UDim2.fromOffset(8, 0)
 TitleLbl.Size = UDim2.new(1, -14, 1, 0)
@@ -9013,7 +9012,7 @@ TitleLbl.RichText = true
 TitleLbl.Text = '<font color="rgb(140,95,255)">●</font> <b>Spectators</b>'
 TitleLbl.ZIndex = 52
 
-local Divider = Instance.new("Frame", SpecFrame)
+Divider = Instance.new("Frame", SpecFrame)
 Divider.Name = "Divider"
 Divider.BackgroundColor3 = Color3.new(1, 1, 1)
 Divider.BackgroundTransparency = 0.75
@@ -9022,11 +9021,11 @@ Divider.Position = UDim2.new(0, 6, 0, 18)
 Divider.Size = UDim2.new(1, -12, 0, 1)
 Divider.ZIndex = 52
 
-local RowList = Instance.new("Frame", SpecFrame)
+RowList = Instance.new("Frame", SpecFrame)
 RowList.BackgroundTransparency = 1
 RowList.Position = UDim2.fromOffset(7, 21)
 RowList.Size = UDim2.new(1, -14, 1, -23); RowList.ZIndex = 51
-local RowLay = Instance.new("UIListLayout", RowList)
+RowLay = Instance.new("UIListLayout", RowList)
 RowLay.SortOrder = Enum.SortOrder.LayoutOrder
 RowLay.HorizontalAlignment = Enum.HorizontalAlignment.Center
 RowLay.Padding = UDim.new(0, 0)
@@ -9131,8 +9130,8 @@ ECLIPSE._parchmentReveal = parchmentReveal
 ECLIPSE._parchmentHide   = parchmentHide
 ECLIPSE._isGuiOpen       = isGuiOpen
 
-local SpecRows, SpecAvatarCache = {}, {}
-local function specAvatarUrl(plr)
+SpecRows, SpecAvatarCache = {}, {}
+function specAvatarUrl(plr)
     if not plr then return "" end
     if SpecAvatarCache[plr.UserId] then return SpecAvatarCache[plr.UserId] end
     local url = ""
@@ -9143,7 +9142,7 @@ local function specAvatarUrl(plr)
     SpecAvatarCache[plr.UserId] = url
     return url
 end
-local function specRebuild(names)
+function specRebuild(names)
     local seen = {}
     for i, nm in ipairs(names) do
         seen[nm] = true
@@ -9218,7 +9217,7 @@ end)()
 
 
 ;(function() 
-local GenGB = Tabs.General:AddLeftGroupbox("MENU")
+GenGB = Tabs.General:AddLeftGroupbox("MENU")
 
 GenGB:AddButton({ Text="Copy Discord",   Func=function() copyToClipboard(ECLIPSE.Discord) end })
 GenGB:AddButton({ Text="Copy Website",   Func=function() copyToClipboard(ECLIPSE.Website) end })
@@ -9233,11 +9232,11 @@ GenGB:AddButton({ Text="Suicide", Func=function()
 end })
 GenGB:AddButton({ Text="Unload", Func=function() Library:Notify({Title="Eclipse Hub",Description="Unloading...",Time=3}); CleanupScript() end })
 
-local SHGB = Tabs.General:AddLeftGroupbox("SERVER HOP", "globe")
+SHGB = Tabs.General:AddLeftGroupbox("SERVER HOP", "globe")
 Config.ServerHop = { Mode="Lowest Ping" }
-local SH_STATE = { last=nil, busy=false }
-local HttpService = game:GetService("HttpService")
-local TeleportService = game:GetService("TeleportService")
+SH_STATE = { last=nil, busy=false }
+HttpService = game:GetService("HttpService")
+TeleportService = game:GetService("TeleportService")
 SafeAddDropdown(SHGB, "SH_Mode", {
     Text="MODE", Values={"Lowest Ping","Most Players","Least Players","Random"},
     Default="Lowest Ping", Callback=function(v) Config.ServerHop.Mode=v end })
