@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.3 [OFFICIAL]",
+    Version       = "2.0.4 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -850,7 +850,8 @@ local Config = {
         Chams          = false,
         ChamsColor     = Color3.fromRGB(255, 60, 60),
         ChamsGlowColor = Color3.fromRGB(255, 180, 180),
-        ChamsGlow      = 0.35, 
+        ChamsGlow      = 0.35,
+        ChamsIntensity = 1.0,
          Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
          IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90),
         
@@ -3088,56 +3089,85 @@ function _espProcessPlayer(plr, myRoot, center)
     return { player=plr, head=head, root=root, hum=hum, dist=dist, aimDist=aimDist }
 end
 
-local ChamsHL = setmetatable({}, { __mode = "k" }) 
+local ChamsHL = setmetatable({}, { __mode = "k" })
+local ChamsLT = setmetatable({}, { __mode = "k" })
+local _ChamsHolder = nil
+local function _getChamsHolder()
+    if _ChamsHolder and _ChamsHolder.Parent then return _ChamsHolder end
+    local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+    local parent = (ok and cg) or workspace
+    local f = parent:FindFirstChild("EclipseChamsHolder")
+    if not f then
+        f = Instance.new("Folder")
+        f.Name = "EclipseChamsHolder"
+        f.Parent = parent
+    end
+    _ChamsHolder = f
+    return f
+end
+
+local function _destroyChamsFor(plr)
+    local hl = ChamsHL[plr]; if hl then pcall(function() hl:Destroy() end); ChamsHL[plr] = nil end
+    local lt = ChamsLT[plr]; if lt then pcall(function() lt:Destroy() end); ChamsLT[plr] = nil end
+end
+
 function updateChams()
     local on = Config.GlobalEnable and Config.ESP.Enabled and Config.ESP.Chams and IsAlive()
-    for plr, hl in pairs(ChamsHL) do
-        if not plr.Parent or not on then
-            pcall(function() hl:Destroy() end); ChamsHL[plr] = nil
-            local ch = plr and plr.Character
-            if ch then
-                local root = ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChild("Torso") or ch:FindFirstChild("UpperTorso")
-                if root then local lt = root:FindFirstChild("EclipseChamsLight"); if lt then pcall(function() lt:Destroy() end) end end
-            end
-        end
+    if not on then
+        for plr, _ in pairs(ChamsHL) do _destroyChamsFor(plr) end
+        for plr, _ in pairs(ChamsLT) do _destroyChamsFor(plr) end
+        return
     end
 
-    if not on then return end
+    local holder = _getChamsHolder()
+    local intensity = math.clamp(tonumber(Config.ESP.ChamsIntensity) or 1.0, 0.1, 3.0)
+    local baseFillT = math.clamp(0.55 - (intensity - 1.0) * 0.20, 0.05, 0.85)
+    local baseOutT  = math.clamp(0.00 - (intensity - 1.0) * 0.10, 0.00, 0.50)
+
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then continue end
+        repeat
+            if plr == LocalPlayer then break end
+            if IsAlly(plr) then _destroyChamsFor(plr); break end
+            local char = plr.Character
+            if not char or not char.Parent then _destroyChamsFor(plr); break end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health <= 0 then _destroyChamsFor(plr); break end
 
-        if IsAlly(plr) then
-            local old = ChamsHL[plr]
-            if old then pcall(function() old:Destroy() end); ChamsHL[plr] = nil end
-            continue
-        end
-        local char = plr.Character
-        if not char then
-            local old = ChamsHL[plr]
-            if old then pcall(function() old:Destroy() end); ChamsHL[plr] = nil end
-            continue
-        end
-        local hl = ChamsHL[plr]
-        if not hl or not hl.Parent then
-            hl = Instance.new("Highlight")
-            hl.Name = "EclipseChams"
-            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            hl.Adornee = char; hl.Parent = char
-            ChamsHL[plr] = hl
-        else
+            local hl = ChamsHL[plr]
+            if not hl or not hl.Parent then
+                if hl then pcall(function() hl:Destroy() end) end
+                hl = Instance.new("Highlight")
+                hl.Name = "EclipseChams"
+                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                hl.Parent = holder
+                ChamsHL[plr] = hl
+            end
             if hl.Adornee ~= char then hl.Adornee = char end
-        end
-        hl.FillColor           = Config.ESP.ChamsColor
-        hl.OutlineColor        = Config.ESP.ChamsColor
-        hl.FillTransparency    = 0.55
-        hl.OutlineTransparency = 0
+            hl.FillColor           = Config.ESP.ChamsColor
+            hl.OutlineColor        = Config.ESP.ChamsColor
+            hl.FillTransparency    = baseFillT
+            hl.OutlineTransparency = baseOutT
 
-        local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
-        if root then
-            local lt = root:FindFirstChild("EclipseChamsLight")
-            if lt then pcall(function() lt:Destroy() end) end
-        end
+            local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+            if root then
+                local lt = ChamsLT[plr]
+                if not lt or not lt.Parent or lt.Parent ~= root then
+                    if lt then pcall(function() lt:Destroy() end) end
+                    lt = Instance.new("PointLight")
+                    lt.Name = "EclipseChamsLight"
+                    lt.Parent = root
+                    ChamsLT[plr] = lt
+                end
+                lt.Color      = Config.ESP.ChamsGlowColor or Config.ESP.ChamsColor
+                lt.Brightness = 2.0 + intensity * 4.5
+                lt.Range      = 8.0 + intensity * 10.0
+                lt.Shadows    = false
+            end
+        until true
+    end
 
+    for plr, _ in pairs(ChamsHL) do
+        if not plr.Parent then _destroyChamsFor(plr) end
     end
 end
 
@@ -5445,58 +5475,62 @@ function _hudDbg(...)
     -- Debug prints disabled per user request.
 end
 
-HUD_KNIFE_ASSETS = {
-    ["CT Knife"]         = { Icon="rbxassetid://115204080823353", ReverseIcon="rbxassetid://102135209052420", Team="Counter-Terrorists" },
-    ["T Knife"]          = { Icon="rbxassetid://140484419446969", ReverseIcon="rbxassetid://100704390906232", Team="Terrorists" },
-    ["Butterfly Knife"]  = { Icon="rbxassetid://78088217065173",  ReverseIcon="rbxassetid://119105180712017", Team="Both" },
-    ["Karambit"]         = { Icon="rbxassetid://85121618781867",  ReverseIcon="rbxassetid://125193639488260", Team="Both" },
-    ["Gut Knife"]        = { Icon="rbxassetid://91965772008164",  ReverseIcon="rbxassetid://71818508657433",  Team="Both" },
-    ["M9 Bayonet"]       = { Icon="rbxassetid://92481124554479",  ReverseIcon="rbxassetid://90954924716133",  Team="Both" },
-}
+HUD_KNIFE_ASSETS = (function()
+    local _t = {}
+    _t["CT Knife"]         = { Icon="rbxassetid://115204080823353", ReverseIcon="rbxassetid://102135209052420", Team="Counter-Terrorists" }
+    _t["T Knife"]          = { Icon="rbxassetid://140484419446969", ReverseIcon="rbxassetid://100704390906232", Team="Terrorists" }
+    _t["Butterfly Knife"]  = { Icon="rbxassetid://78088217065173",  ReverseIcon="rbxassetid://119105180712017", Team="Both" }
+    _t["Karambit"]         = { Icon="rbxassetid://85121618781867",  ReverseIcon="rbxassetid://125193639488260", Team="Both" }
+    _t["Gut Knife"]        = { Icon="rbxassetid://91965772008164",  ReverseIcon="rbxassetid://71818508657433",  Team="Both" }
+    _t["M9 Bayonet"]       = { Icon="rbxassetid://92481124554479",  ReverseIcon="rbxassetid://90954924716133",  Team="Both" }
+    return _t
+end)()
 
-HUD_WEAPON_ICON_FALLBACKS = {
-    ["AK-47"]            = { Icon="rbxassetid://83097083839889",  ReverseIcon="rbxassetid://140617178427585", Team="Terrorists" },
-    ["AUG"]              = { Icon="rbxassetid://119885531832389", ReverseIcon="rbxassetid://125463512677698", Team="Counter-Terrorists" },
-    ["AWP"]              = { Icon="rbxassetid://79794264811775",  ReverseIcon="rbxassetid://78589610778527",  Team="Both" },
-    ["Butterfly Knife"]  = { Icon="rbxassetid://78088217065173",  ReverseIcon="rbxassetid://119105180712017", Team="Both" },
-    ["C4"]               = { Icon="rbxassetid://109858795365969", ReverseIcon="rbxassetid://109858795365969", Team="Terrorists" },
-    ["CT Knife"]         = { Icon="rbxassetid://115204080823353", ReverseIcon="rbxassetid://102135209052420", Team="Counter-Terrorists" },
-    ["Decoy Grenade"]    = { Icon="rbxassetid://81385239843859",  ReverseIcon="rbxassetid://81385239843859",  Team="Both" },
-    ["Desert Eagle"]     = { Icon="rbxassetid://122477921917392", ReverseIcon="rbxassetid://101910609893699", Team="Both" },
-    ["Dual Berettas"]    = { Icon="rbxassetid://111854065134079", ReverseIcon="rbxassetid://110860310038065", Team="Both" },
-    ["FAMAS"]            = { Icon="rbxassetid://125469152582044", ReverseIcon="rbxassetid://133348453326383", Team="Counter-Terrorists" },
-    ["Five-SeveN"]       = { Icon="rbxassetid://90570942481875",  ReverseIcon="rbxassetid://137381638975973", Team="Counter-Terrorists" },
-    ["Flashbang"]        = { Icon="rbxassetid://132038996524430", ReverseIcon="rbxassetid://132038996524430", Team="Both" },
-    ["Flip Knife"]       = { Icon="rbxassetid://103569239379116", ReverseIcon="rbxassetid://139380311026447", Team="Both" },
-    ["Galil AR"]         = { Icon="rbxassetid://75166557697975",  ReverseIcon="rbxassetid://134169816848329", Team="Terrorists" },
-    ["Glock-18"]         = { Icon="rbxassetid://101406018897044", ReverseIcon="rbxassetid://103283372012613", Team="Terrorists" },
-    ["Gut Knife"]        = { Icon="rbxassetid://91965772008164",  ReverseIcon="rbxassetid://71818508657433",  Team="Both" },
-    ["HE Grenade"]       = { Icon="rbxassetid://111110976385167", ReverseIcon="rbxassetid://111110976385167", Team="Both" },
-    ["Incendiary Grenade"]={ Icon="rbxassetid://81255981095065",  ReverseIcon="rbxassetid://81255981095065",  Team="Counter-Terrorists" },
-    ["Karambit"]         = { Icon="rbxassetid://85121618781867",  ReverseIcon="rbxassetid://125193639488260", Team="Both" },
-    ["M4A1-S"]           = { Icon="rbxassetid://113144230602399", ReverseIcon="rbxassetid://94835087575570",  Team="Counter-Terrorists" },
-    ["M4A4"]             = { Icon="rbxassetid://93053662997899",  ReverseIcon="rbxassetid://105120092581738", Team="Counter-Terrorists" },
-    ["M9 Bayonet"]       = { Icon="rbxassetid://92481124554479",  ReverseIcon="rbxassetid://90954924716133",  Team="Both" },
-    ["MAC-10"]           = { Icon="rbxassetid://83671879972945",  ReverseIcon="rbxassetid://74151990961277",  Team="Terrorists" },
-    ["MP9"]              = { Icon="rbxassetid://135384625641866", ReverseIcon="rbxassetid://98859371551950",  Team="Counter-Terrorists" },
-    ["Molotov"]          = { Icon="rbxassetid://95390644612614",  ReverseIcon="rbxassetid://95390644612614",  Team="Terrorists" },
-    ["Negev"]            = { Icon="rbxassetid://134163874921903", ReverseIcon="rbxassetid://75806785943496",  Team="Both" },
-    ["Nova"]             = { Icon="rbxassetid://127273982496076", ReverseIcon="rbxassetid://84241192314676",  Team="Both" },
-    ["P250"]             = { Icon="rbxassetid://73666032770570",  ReverseIcon="rbxassetid://116440682239559", Team="Both" },
-    ["P90"]              = { Icon="rbxassetid://82724138944322",  ReverseIcon="rbxassetid://82427629864307",  Team="Both" },
-    ["R8 Revolver"]      = { Icon="rbxassetid://112745953600473", ReverseIcon="rbxassetid://127392244236728", Team="Both" },
-    ["SG 553"]           = { Icon="rbxassetid://133547075528778", ReverseIcon="rbxassetid://89786542114704",  Team="Terrorists" },
-    ["SSG 08"]           = { Icon="rbxassetid://112132914334737", ReverseIcon="rbxassetid://82274511356856",  Team="Both" },
-    ["Sawed-Off"]        = { Icon="rbxassetid://117478678996500", ReverseIcon="rbxassetid://102157038423883", Team="Terrorists" },
-    ["Skeleton Knife"]   = { Icon="rbxassetid://73573766861663",  ReverseIcon="rbxassetid://131474722426757", Team="Both" },
-    ["Smoke Grenade"]    = { Icon="rbxassetid://137305344844339", ReverseIcon="rbxassetid://137305344844339", Team="Terrorists" },
-    ["Stiletto Knife"]   = { Icon="rbxassetid://71208637985987",  ReverseIcon="rbxassetid://99694742066082",  Team="Both" },
-    ["T Knife"]          = { Icon="rbxassetid://140484419446969", ReverseIcon="rbxassetid://100704390906232", Team="Terrorists" },
-    ["Tec-9"]            = { Icon="rbxassetid://119232881698906", ReverseIcon="rbxassetid://89081920349483",  Team="Terrorists" },
-    ["USP-S"]            = { Icon="rbxassetid://131658947857971", ReverseIcon="rbxassetid://93152953016540",  Team="Counter-Terrorists" },
-    ["XM1014"]           = { Icon="rbxassetid://115344320193773", ReverseIcon="rbxassetid://135022102978537", Team="Both" },
-    ["Zeus x27"]         = { Icon="rbxassetid://71464446190434",  ReverseIcon="rbxassetid://131579417467777", Team="Both" },
-}
+HUD_WEAPON_ICON_FALLBACKS = (function()
+    local _t = {}
+    _t["AK-47"]            = { Icon="rbxassetid://83097083839889",  ReverseIcon="rbxassetid://140617178427585", Team="Terrorists" }
+    _t["AUG"]              = { Icon="rbxassetid://119885531832389", ReverseIcon="rbxassetid://125463512677698", Team="Counter-Terrorists" }
+    _t["AWP"]              = { Icon="rbxassetid://79794264811775",  ReverseIcon="rbxassetid://78589610778527",  Team="Both" }
+    _t["Butterfly Knife"]  = { Icon="rbxassetid://78088217065173",  ReverseIcon="rbxassetid://119105180712017", Team="Both" }
+    _t["C4"]               = { Icon="rbxassetid://109858795365969", ReverseIcon="rbxassetid://109858795365969", Team="Terrorists" }
+    _t["CT Knife"]         = { Icon="rbxassetid://115204080823353", ReverseIcon="rbxassetid://102135209052420", Team="Counter-Terrorists" }
+    _t["Decoy Grenade"]    = { Icon="rbxassetid://81385239843859",  ReverseIcon="rbxassetid://81385239843859",  Team="Both" }
+    _t["Desert Eagle"]     = { Icon="rbxassetid://122477921917392", ReverseIcon="rbxassetid://101910609893699", Team="Both" }
+    _t["Dual Berettas"]    = { Icon="rbxassetid://111854065134079", ReverseIcon="rbxassetid://110860310038065", Team="Both" }
+    _t["FAMAS"]            = { Icon="rbxassetid://125469152582044", ReverseIcon="rbxassetid://133348453326383", Team="Counter-Terrorists" }
+    _t["Five-SeveN"]       = { Icon="rbxassetid://90570942481875",  ReverseIcon="rbxassetid://137381638975973", Team="Counter-Terrorists" }
+    _t["Flashbang"]        = { Icon="rbxassetid://132038996524430", ReverseIcon="rbxassetid://132038996524430", Team="Both" }
+    _t["Flip Knife"]       = { Icon="rbxassetid://103569239379116", ReverseIcon="rbxassetid://139380311026447", Team="Both" }
+    _t["Galil AR"]         = { Icon="rbxassetid://75166557697975",  ReverseIcon="rbxassetid://134169816848329", Team="Terrorists" }
+    _t["Glock-18"]         = { Icon="rbxassetid://101406018897044", ReverseIcon="rbxassetid://103283372012613", Team="Terrorists" }
+    _t["Gut Knife"]        = { Icon="rbxassetid://91965772008164",  ReverseIcon="rbxassetid://71818508657433",  Team="Both" }
+    _t["HE Grenade"]       = { Icon="rbxassetid://111110976385167", ReverseIcon="rbxassetid://111110976385167", Team="Both" }
+    _t["Incendiary Grenade"]={ Icon="rbxassetid://81255981095065",  ReverseIcon="rbxassetid://81255981095065",  Team="Counter-Terrorists" }
+    _t["Karambit"]         = { Icon="rbxassetid://85121618781867",  ReverseIcon="rbxassetid://125193639488260", Team="Both" }
+    _t["M4A1-S"]           = { Icon="rbxassetid://113144230602399", ReverseIcon="rbxassetid://94835087575570",  Team="Counter-Terrorists" }
+    _t["M4A4"]             = { Icon="rbxassetid://93053662997899",  ReverseIcon="rbxassetid://105120092581738", Team="Counter-Terrorists" }
+    _t["M9 Bayonet"]       = { Icon="rbxassetid://92481124554479",  ReverseIcon="rbxassetid://90954924716133",  Team="Both" }
+    _t["MAC-10"]           = { Icon="rbxassetid://83671879972945",  ReverseIcon="rbxassetid://74151990961277",  Team="Terrorists" }
+    _t["MP9"]              = { Icon="rbxassetid://135384625641866", ReverseIcon="rbxassetid://98859371551950",  Team="Counter-Terrorists" }
+    _t["Molotov"]          = { Icon="rbxassetid://95390644612614",  ReverseIcon="rbxassetid://95390644612614",  Team="Terrorists" }
+    _t["Negev"]            = { Icon="rbxassetid://134163874921903", ReverseIcon="rbxassetid://75806785943496",  Team="Both" }
+    _t["Nova"]             = { Icon="rbxassetid://127273982496076", ReverseIcon="rbxassetid://84241192314676",  Team="Both" }
+    _t["P250"]             = { Icon="rbxassetid://73666032770570",  ReverseIcon="rbxassetid://116440682239559", Team="Both" }
+    _t["P90"]              = { Icon="rbxassetid://82724138944322",  ReverseIcon="rbxassetid://82427629864307",  Team="Both" }
+    _t["R8 Revolver"]      = { Icon="rbxassetid://112745953600473", ReverseIcon="rbxassetid://127392244236728", Team="Both" }
+    _t["SG 553"]           = { Icon="rbxassetid://133547075528778", ReverseIcon="rbxassetid://89786542114704",  Team="Terrorists" }
+    _t["SSG 08"]           = { Icon="rbxassetid://112132914334737", ReverseIcon="rbxassetid://82274511356856",  Team="Both" }
+    _t["Sawed-Off"]        = { Icon="rbxassetid://117478678996500", ReverseIcon="rbxassetid://102157038423883", Team="Terrorists" }
+    _t["Skeleton Knife"]   = { Icon="rbxassetid://73573766861663",  ReverseIcon="rbxassetid://131474722426757", Team="Both" }
+    _t["Smoke Grenade"]    = { Icon="rbxassetid://137305344844339", ReverseIcon="rbxassetid://137305344844339", Team="Terrorists" }
+    _t["Stiletto Knife"]   = { Icon="rbxassetid://71208637985987",  ReverseIcon="rbxassetid://99694742066082",  Team="Both" }
+    _t["T Knife"]          = { Icon="rbxassetid://140484419446969", ReverseIcon="rbxassetid://100704390906232", Team="Terrorists" }
+    _t["Tec-9"]            = { Icon="rbxassetid://119232881698906", ReverseIcon="rbxassetid://89081920349483",  Team="Terrorists" }
+    _t["USP-S"]            = { Icon="rbxassetid://131658947857971", ReverseIcon="rbxassetid://93152953016540",  Team="Counter-Terrorists" }
+    _t["XM1014"]           = { Icon="rbxassetid://115344320193773", ReverseIcon="rbxassetid://135022102978537", Team="Both" }
+    _t["Zeus x27"]         = { Icon="rbxassetid://71464446190434",  ReverseIcon="rbxassetid://131579417467777", Team="Both" }
+    return _t
+end)()
 
 HUD_KNIFE_ICONS = {}
 for n, data in pairs(HUD_KNIFE_ASSETS) do HUD_KNIFE_ICONS[n] = data.Icon end
@@ -6209,12 +6243,13 @@ function _hudIconTint(rec)
 end
 
 function _hudNameTint(rec)
+    -- Name text follows the weapon icon color so it never clashes with a custom UI accent
+    local c = _hudIconTint(rec)
+    if c then return c end
     local teamKey = _hudActiveTeamKey()
-    local c = rec and rec.nameTextColor3
-    if rec and rec.nameTeamKey and rec.nameTeamKey ~= teamKey then c = nil end
-    if _hudColorLooksPulsed(c) or not _hudTintAllowedForTeam(c, teamKey) then c = _hudSampleStableNameTint(rec and rec.slotFrame, teamKey) end
-    return c or _hudDefaultNameTintForTeam(teamKey)
+    return _hudDefaultNameTintForTeam(teamKey)
 end
+
 
 function _ensureIconImage(rec, anchor)
 
@@ -7864,7 +7899,6 @@ EspGB:AddToggle("ESP_HP",        { Text="HEALTH BAR", Default=true,  Callback=fu
 EspGB:AddToggle("ESP_Target",    { Text="TARGET LINE",Default=true,  Callback=function(v) Config.ESP.TargetLine=v end })
     :AddColorPicker("ESP_LineCol", { Default=Config.ESP.LineColor,     Title="Target line color", Callback=function(c) Config.ESP.LineColor=c end })
 EspGB:AddToggle("ESP_Weapon",    { Text="ESP WEAPON", Default=false, Callback=function(v) Config.ESP.WeaponName=v end })
-    :AddColorPicker("ESP_WepNCol", { Default=Config.ESP.WeaponNameColor, Title="Weapon name color", Callback=function(c) Config.ESP.WeaponNameColor=c end })
 
 Config.ESP.Ammo = false
 
@@ -7873,6 +7907,8 @@ Config.ESP.Skeleton = false
 
 EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=function(v) Config.ESP.Chams=v end })
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
+EspGB:AddSlider("ESP_ChamsIntensity", { Text="CHAMS INTENSITY", Default=1.0, Min=0.2, Max=3.0, Rounding=2, Compact=true,
+    Callback=function(v) Config.ESP.ChamsIntensity = v end })
 
 Config.ESP.Footstep = Config.ESP.Footstep or false
 Config.ESP.FootstepColor = Config.ESP.FootstepColor or Color3.fromRGB(150, 95, 255)
