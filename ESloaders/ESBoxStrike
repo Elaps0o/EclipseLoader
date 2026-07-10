@@ -11087,51 +11087,8 @@ task.spawn(function()
     end
 end)
 
--- ============================================================
--- REMOTE UPDATE CHECKER
--- Polls the GitHub raw source every 2 minutes. When the file
--- changes, notifies the user. Lightweight FNV-1a hash + length
--- comparison, no HTTP retries, wrapped in pcall so it can never
--- lag the game.
--- ============================================================
-task.spawn(function()
-    local URL = "https://raw.githubusercontent.com/Elaps0o/EclipseLoader/refs/heads/main/ESloaders/ESBoxStrike"
-    local function fetch()
-        local ok, body = pcall(function() return game:HttpGetAsync(URL, true) end)
-        if ok and type(body) == "string" and #body > 0 then return body end
-        return nil
-    end
-    local function hash(s)
-        local h = 2166136261
-        for i = 1, #s do
-            h = (bit32.bxor(h, string.byte(s, i)) * 16777619) % 0x100000000
-        end
-        return string.format("%08x_%d", h, #s)
-    end
-    task.wait(8)
-    local baseline = fetch()
-    local baseHash = baseline and hash(baseline) or nil
-    while scriptRunning do
-        task.wait(120)
-        if not scriptRunning then break end
-        local body = fetch()
-        if body then
-            local h = hash(body)
-            if baseHash and h ~= baseHash then
-                pcall(function()
-                    Library:Notify({
-                        Title = "Eclipse Hub",
-                        Description = "<b>New loader version detected.</b> Rejoin to update.",
-                        Time = 8,
-                    })
-                end)
-                baseHash = h
-            elseif not baseHash then
-                baseHash = h
-            end
-        end
-    end
-end)
+-- (Auto-update checker removed per user request)
+
 
 pcall(function()
     task.defer(function()
