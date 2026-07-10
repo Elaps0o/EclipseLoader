@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.0 [OFFICIAL]",
+    Version       = "2.0.1 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -11180,7 +11180,7 @@ end)
 -- AUTO UPDATE NOTIFIER: polls GitHub raw source every 3 min and notifies
 -- the user when a newer Version string is detected. Does NOT re-inject.
 task.spawn(function()
-    local URL = "https://github.com/Elaps0o/EclipseLoader/blob/main/ESloaders/ESBoxStrike"
+    local URL = "https://raw.githubusercontent.com/eboxstrike/EclipseHub/main/eclipse-sem-autoskill.lua"
     local httpGet = (syn and syn.request) or (http and http.request) or (request) or nil
     local function fetch()
         local body
@@ -11238,5 +11238,7 @@ pcall(function()
         end
     end)
 end)
+
+-- AUTOSKILL logic removed in this build (eclipse-sem-autoskill).
 
 
