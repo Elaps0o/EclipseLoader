@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.4 [OFFICIAL]",
+    Version       = "2.0.2 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -5460,7 +5460,7 @@ local function ApplyWeaponSkinsFast(model, skinName)
     applyWeaponSkin(model, skinName)
 end
 
-local HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={}, espIconCache={}, viewer=nil, debugPrints=0, teamIconTints={}, teamNameTints={} }
+HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={}, espIconCache={}, viewer=nil, debugPrints=0, teamIconTints={}, teamNameTints={} }
 
 function _hudOverlayRoot()
     pcall(function()
@@ -8193,9 +8193,9 @@ SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
 
 task.defer(_syncKnifeLock)
 
-local SKIN_PREVIEW_DIST_MULT = 1.045  
-local SKIN_PREVIEW_SPIN_DPS  = 45     
-local SkinPreview = { gui=nil, frame=nil, vp=nil, vpCam=nil, model=nil,
+SKIN_PREVIEW_DIST_MULT = 1.045  
+SKIN_PREVIEW_SPIN_DPS  = 45     
+SkinPreview = { gui=nil, frame=nil, vp=nil, vpCam=nil, model=nil,
     title=nil, focus=Vector3.new(), dist=4,
     rotX = -10,   
     rotY =   0 }  
@@ -8334,7 +8334,7 @@ local function _buildGloveArmsPreview()
     return model
 end
 
-local SKIN_PREVIEW_BLOCKED = {
+SKIN_PREVIEW_BLOCKED = {
     ["Sports Gloves"]=true, ["Specialist Gloves"]=true, ["Driver Gloves"]=true,
     ["Hand Wraps"]=true, ["Moto Gloves"]=true, ["Bloodhound Gloves"]=true,
     ["Broken Fang Gloves"]=true, ["Hydra Gloves"]=true, ["Operator Gloves"]=true,
