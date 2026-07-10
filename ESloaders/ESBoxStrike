@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.1 [OFFICIAL]",
+    Version       = "2.0.3 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -827,7 +827,7 @@ local Config = {
     },
     TriggerBot = { Enabled=false, Delay=0.01, Mode="HitChance", HitChance=100, Spread=0, AutoWall=false },
     ESP      = {
-        Enabled=false, MaxDistance=500,
+        Enabled=false, MaxDistance=600,
         CornerBox=true, Name=true, Distance=true, HealthBar=true, TargetLine=true, Position="Top",
         
         SlotPos = { Name=1, Distance=1, Weapon=1, Health=1 },
@@ -1685,12 +1685,14 @@ function updatePenetrationCrosshair()
                               or (Config.Crosshair.PenetrationNoColor or Color3.fromRGB(255,60,60))
     local pos = res.Position + (res.Normal or Vector3.new(0,1,0)) * 0.05
     local dist = (pos - origin).Magnitude
-    local scale = math.clamp(0.7 + dist * 0.014, 1.0, 9.5)
+    -- Calibrated: tighter base size, gentler distance scaling, softer alpha
+    local scale = math.clamp(0.55 + dist * 0.006, 0.7, 3.2)
     st.part.Color = col
-    st.part.Transparency = 0.5
-    st.part.Size = Vector3.new(1.2 * scale, 1.2 * scale, 0.05)
+    st.part.Transparency = 0.35
+    st.part.Size = Vector3.new(0.55 * scale, 0.55 * scale, 0.04)
     local cf = CFrame.lookAt(pos, pos + (res.Normal or Vector3.new(0,1,0)))
     pcall(function() st.part.CFrame = cf end)
+
 end
 
 
@@ -1761,7 +1763,9 @@ function gpdIdentifyGrenade()
 end
 
 function updateGrenadePrediction()
+    if GPD then GPD.ShowNow = false end
     if not GPD_OK then return end
+
     if not Config.GlobalEnable or not Config.Grenade.Prediction then
         if #GPD.ActiveLines > 0 or (GPD.Dot and GPD.Dot.Visible) then gpdClear() end
         GPD_Hold.wasHolding = false; GPD_Hold.showAfterRelease = false
@@ -1884,7 +1888,9 @@ function updateGrenadePrediction()
             GPD.Dot.Visible = false
         end
     end
+    GPD.ShowNow = true
 end
+
 
 -- ============ 3D GRENADE TRAJECTORY (world-space neon arc) ============
 Config.Grenade.Trajectory3D = false
@@ -1916,13 +1922,17 @@ local function _g3dSegment(i)
     return p
 end
 function _renderGrenade3D()
-    if not (Config and Config.GlobalEnable and Config.Grenade and Config.Grenade.Trajectory3D and Config.Grenade.Prediction) then
+    if not (Config and Config.GlobalEnable and Config.Grenade and Config.Grenade.Trajectory3D) then
         _g3dHide(); return
     end
-    local pts = GPD and GPD.CachedPts
-    if not pts or #pts < 2 then _g3dHide(); return end
+    local hasPred = Config.Grenade.Prediction and GPD and GPD.ShowNow and GPD.CachedPts and #GPD.CachedPts >= 2
+    local warnPts = (Config.Grenade.Warning and ECLIPSE and ECLIPSE._warn3DPts) or nil
+    local hasWarn = warnPts and #warnPts >= 2
+    if not (hasPred or hasWarn) then _g3dHide(); return end
+    local pts = hasPred and GPD.CachedPts or warnPts
+    local col = hasPred and (Config.Grenade.LineColor or Color3.fromRGB(0,200,255))
+                          or (Config.Grenade.WarningColor or Color3.fromRGB(255,120,60))
     _g3dEnsure()
-    local col = Config.Grenade.LineColor or Color3.fromRGB(0,200,255)
     local used = 0
     for i = 1, #pts - 1 do
         local a, b = pts[i], pts[i+1]
@@ -1940,9 +1950,11 @@ function _renderGrenade3D()
     end
     if _g3d.dot then
         _g3d.dot.Position = pts[#pts]
-        _g3d.dot.Color = Config.Grenade.DotColor or Color3.fromRGB(255,60,60)
+        _g3d.dot.Color = hasPred and (Config.Grenade.DotColor or Color3.fromRGB(255,60,60))
+                                  or (Config.Grenade.WarningColor or Color3.fromRGB(255,120,60))
     end
 end
+
 game:GetService("RunService").Heartbeat:Connect(function()
     pcall(_renderGrenade3D)
 end)
@@ -2977,7 +2989,7 @@ function _espProcessPlayer(plr, myRoot, center)
 
     local dist = (myRoot.Position - root.Position).Magnitude
     local maxD = Config.ESP.MaxDistance
-    if Config.Aimbot.Enabled then maxD = math.max(maxD, 500) end
+    if Config.Aimbot.Enabled then maxD = math.max(maxD, 600) end
     if dist > maxD then if data then hideESP(data) end; return nil end
 
     if not data then
@@ -3001,9 +3013,10 @@ function _espProcessPlayer(plr, myRoot, center)
 
     
     local vs = Camera.ViewportSize
-    local margin = 6
+    local scopedNow = (isScopedIn and isScopedIn()) or (Camera.FieldOfView and Camera.FieldOfView < (OriginalCameraFOV or 70) * 0.6)
+    local margin = scopedNow and math.max(vs.X, vs.Y) or 6
     if L < -margin or R > vs.X + margin or T < -margin or B > vs.Y + margin then
-        local anyInside = (cx >= 0 and cx <= vs.X and cy >= 0 and cy <= vs.Y)
+        local anyInside = (cx >= -margin and cx <= vs.X + margin and cy >= -margin and cy <= vs.Y + margin)
         if not anyInside then
             hideESP(data)
             if Config.ESP.Arrows then _espDrawArrow(data, root) end
@@ -3012,6 +3025,7 @@ function _espProcessPlayer(plr, myRoot, center)
         L = math.clamp(L, 0, vs.X); R = math.clamp(R, 0, vs.X)
         T = math.clamp(T, 0, vs.Y); B = math.clamp(B, 0, vs.Y)
     end
+
 
     if Config.ESP.CornerBox then
         _espDrawCornerBox(data, plr, L, R, T, B, width*0.25, height*0.25)
@@ -4331,6 +4345,8 @@ local function _jbebStillEdge(pos)
 end
 
 local lastBhop = 0
+local _ASF_RAY = RaycastParams.new()
+_ASF_RAY.FilterType = Enum.RaycastFilterType.Exclude
 function updateMovement()
     if not Config.GlobalEnable then return end
     local char = LocalPlayer.Character; if not char then return end
@@ -4338,50 +4354,76 @@ function updateMovement()
     local root = char:FindFirstChild("HumanoidRootPart")
     if not hum or not root then return end
 
+    local hstate    = hum:GetState()
+    local floorMat  = hum.FloorMaterial
+    local grounded  = (floorMat ~= nil and floorMat ~= Enum.Material.Air)
+                      and hstate ~= Enum.HumanoidStateType.Jumping
+                      and hstate ~= Enum.HumanoidStateType.Freefall
+    local inAir     = not grounded
+
     if Config.Movement.BunnyHop and UserInput:IsKeyDown(Enum.KeyCode.Space) then
-        local st = hum:GetState()
-        local grounded = (hum.FloorMaterial ~= Enum.Material.Air)
-            and st ~= Enum.HumanoidStateType.Jumping
-            and st ~= Enum.HumanoidStateType.Freefall
         if grounded and tick() - lastBhop > 0.12 then
             hum:ChangeState(Enum.HumanoidStateType.Jumping)
             lastBhop = tick()
         end
     end
 
-    
-    if Config.Movement.AutoStrafe and hum:GetState() == Enum.HumanoidStateType.Freefall then
-        -- Improved: Source-style air-strafe using A/D keys + mouse yaw delta.
-        local UIS = UserInput
-        local aHeld = UIS:IsKeyDown(Enum.KeyCode.A)
-        local dHeld = UIS:IsKeyDown(Enum.KeyCode.D)
-        local mDX   = UIS:GetMouseDelta().X
-        local wish  = 0
-        if dHeld then wish = wish + 1 end
-        if aHeld then wish = wish - 1 end
-        if wish == 0 and math.abs(mDX) > 1 then
-            wish = (mDX > 0) and 1 or -1
+    -- AUTO STRAFER: camera-yaw oriented, smooth, progressive per-jump speed
+    -- boost, purely horizontal (never touches Y), skips when grounded, and
+    -- slides along walls instead of pushing into them.
+    do
+        if not _ASF then _ASF = { chain = 0, wasAir = false, curSpd = 0 } end
+
+        if _ASF.wasAir and not inAir then
+            _ASF.chain  = 0
+            _ASF.curSpd = 16
         end
-        if wish ~= 0 then
+        if not _ASF.wasAir and inAir then
+            local cap = math.floor((Config.Movement.StrafeSpeed or 1.5) * 6)
+            if _ASF.chain < cap then _ASF.chain = _ASF.chain + 1 end
+        end
+        _ASF.wasAir = inAir
+
+        if Config.Movement.AutoStrafe and inAir and Config.Movement.BunnyHop then
             local cam    = Workspace.CurrentCamera
             local look   = cam and cam.CFrame.LookVector or root.CFrame.LookVector
-            local right  = Vector3.new(look.Z, 0, -look.X).Unit
-            local cv     = root.AssemblyLinearVelocity
-            local horizV = Vector3.new(cv.X, 0, cv.Z)
-            local speed  = horizV.Magnitude
-            local MAX    = (Config.Movement.StrafeSpeed or 1.5) * 22
-            local wishDir= (right * wish)
-            local accel  = 5.5
-            local addSpd = math.clamp(MAX - horizV:Dot(wishDir), 0, accel)
-            if speed < 320 then
-                local newV = horizV + (wishDir * addSpd)
-                if newV.Magnitude > MAX and speed < MAX then
-                    newV = newV.Unit * MAX
+            local flat   = Vector3.new(look.X, 0, look.Z)
+            if flat.Magnitude > 0.01 then
+                flat = flat.Unit
+                local mult    = Config.Movement.StrafeSpeed or 1.5
+                local target  = math.min(16 + _ASF.chain * 10, mult * 42)
+                _ASF.curSpd = _ASF.curSpd + (target - _ASF.curSpd) * 0.15
+
+                local cv     = root.AssemblyLinearVelocity
+                local horiz  = Vector3.new(cv.X, 0, cv.Z)
+                local curDir = (horiz.Magnitude > 0.1) and horiz.Unit or flat
+                local newDir = (curDir:Lerp(flat, 0.22))
+                if newDir.Magnitude > 0.01 then newDir = newDir.Unit else newDir = flat end
+
+                _ASF_RAY.FilterDescendantsInstances = { char }
+                local reach = math.max(3, _ASF.curSpd * 0.08)
+                local hit = Workspace:Raycast(root.Position, newDir * reach, _ASF_RAY)
+                if hit then
+                    local n = Vector3.new(hit.Normal.X, 0, hit.Normal.Z)
+                    if n.Magnitude > 0.01 then
+                        n = n.Unit
+                        local proj = newDir - n * newDir:Dot(n)
+                        if proj.Magnitude > 0.05 then
+                            newDir = proj.Unit
+                        else
+                            _ASF.curSpd = math.max(16, _ASF.curSpd * 0.5)
+                            newDir = curDir
+                        end
+                    end
                 end
-                root.AssemblyLinearVelocity = Vector3.new(newV.X, cv.Y, newV.Z)
+
+                local newHoriz = newDir * _ASF.curSpd
+                root.AssemblyLinearVelocity = Vector3.new(newHoriz.X, cv.Y, newHoriz.Z)
             end
         end
     end
+
+
 
 
     
@@ -8098,7 +8140,7 @@ SkinGB:AddToggle("Knife_Toggle", { Text="CUSTOM KNIFE", Default=false,
         if IsAlive() then pcall(_applyHUDKnife, true) end
     end })
 SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
-    Values={"Butterfly Knife","Karambit","M9 Bayonet","Gut Knife"},
+    Values={"Butterfly Knife","Karambit","M9 Bayonet","Flip Knife","Gut Knife"},
     Default=Config.Skins.SelectedKnife,
     Callback=function(v)
         
@@ -8645,12 +8687,14 @@ WorldColorGB:AddToggle("WorldColor_Toggle", { Text="WORLD COLOR", Default=Config
             local e=_ensureWCEffect()
             e.TintColor = c
         end })
-WorldColorGB:AddSlider("WorldColor_Intensity", { Text="INTENSITY", Default=Config.WorldColor.Intensity, Min=0, Max=1, Rounding=2,
-    Callback=function(v) Config.WorldColor.Intensity=v; _ensureWCEffect().Saturation = v end })
+WorldColorGB:AddSlider("WorldColor_Intensity", { Text="INTENSITY", Default=Config.WorldColor.Intensity, Min=0, Max=2.5, Rounding=2,
+    Callback=function(v) Config.WorldColor.Intensity=v; local e=_ensureWCEffect(); e.Saturation=v; e.Contrast=v*0.35; e.Brightness=v*0.05 end })
 pcall(function()
     local e = _ensureWCEffect()
     e.TintColor = Config.WorldColor.Color
     e.Saturation = Config.WorldColor.Intensity
+    e.Contrast = Config.WorldColor.Intensity * 0.35
+    e.Brightness = Config.WorldColor.Intensity * 0.05
     e.Enabled = Config.WorldColor.Enabled and true or false
 end)
 
@@ -8663,6 +8707,8 @@ task.spawn(function()
                 if e.TintColor ~= Config.WorldColor.Color then e.TintColor = Config.WorldColor.Color end
                 if math.abs(e.Saturation - Config.WorldColor.Intensity) > 0.005 then
                     e.Saturation = Config.WorldColor.Intensity
+                    e.Contrast = Config.WorldColor.Intensity * 0.35
+                    e.Brightness = Config.WorldColor.Intensity * 0.05
                 end
             elseif _wcEffect and _wcEffect.Enabled then
                 _wcEffect.Enabled = false
@@ -9919,8 +9965,10 @@ EX.ChatFrame = nil
             local _okLoop, _errLoop = pcall(function()
             if not Config.Grenade.Warning or not GPD_OK then
                 if #activeWarn > 0 then clearWarn() end
+                ECLIPSE._warn3DPts = nil
                 return
             end
+
 
                 
                 
@@ -10036,8 +10084,10 @@ EX.ChatFrame = nil
                     end
                 end
                 clearWarn()
+                ECLIPSE._warn3DPts = (bestPts and #bestPts >= 2) and bestPts or nil
                 if bestPts and Camera then
                     local col = Config.Grenade.WarningColor
+
                     for i = 1, #bestPts - 1 do
                         local s1, v1 = Camera:WorldToViewportPoint(bestPts[i])
                         local s2, v2 = Camera:WorldToViewportPoint(bestPts[i+1])
@@ -10864,23 +10914,42 @@ end)()
     end
 
     local function _killCharVisible(char)
-        local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("Head"))
+        if not char then return false end
         local cam = Workspace.CurrentCamera
-        if not root or not cam then return false end
-        local dist = (cam.CFrame.Position - root.Position).Magnitude
-        if dist > 500 then return false end
-        local _, onScreen = cam:WorldToViewportPoint(root.Position)
-        if not onScreen then return false end
+        if not cam then return false end
+        local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("Head")
+        if not root then return false end
+        local camPos = cam.CFrame.Position
+        if (camPos - root.Position).Magnitude > 500 then return false end
         local rp = RaycastParams.new()
         rp.FilterType = Enum.RaycastFilterType.Exclude
         local ex = { char }
         if LocalPlayer.Character then table.insert(ex, LocalPlayer.Character) end
         rp.FilterDescendantsInstances = ex
         rp.IgnoreWater = true
-        local dir = root.Position - cam.CFrame.Position
-        local hit = Workspace:Raycast(cam.CFrame.Position, dir, rp)
-        return not (hit and (hit.Position - cam.CFrame.Position).Magnitude < (dist - 2))
+        local candidates = {
+            "Head","UpperTorso","LowerTorso","Torso","HumanoidRootPart",
+            "LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm",
+            "LeftHand","RightHand","LeftUpperLeg","RightUpperLeg",
+            "LeftFoot","RightFoot"
+        }
+        for _, name in ipairs(candidates) do
+            local p = char:FindFirstChild(name)
+            if p and p:IsA("BasePart") then
+                local sp, onScreen = cam:WorldToViewportPoint(p.Position)
+                if onScreen and sp.Z > 0 then
+                    local dir = p.Position - camPos
+                    local mag = dir.Magnitude
+                    local hit = Workspace:Raycast(camPos, dir, rp)
+                    if not hit or (hit.Position - camPos).Magnitude >= (mag - 1.5) then
+                        return true
+                    end
+                end
+            end
+        end
+        return false
     end
+
 
     local function _triggerLocalKillEffect(plr, char)
         if not char or _killEffectDone[char] then return end
@@ -11180,7 +11249,7 @@ end)
 -- AUTO UPDATE NOTIFIER: polls GitHub raw source every 3 min and notifies
 -- the user when a newer Version string is detected. Does NOT re-inject.
 task.spawn(function()
-    local URL = "https://raw.githubusercontent.com/eboxstrike/EclipseHub/main/eclipse-sem-autoskill.lua"
+    local URL = "https://raw.githubusercontent.com/Elaps0o/EclipseLoader/main/ESloaders/ESBoxStrike"
     local httpGet = (syn and syn.request) or (http and http.request) or (request) or nil
     local function fetch()
         local body
