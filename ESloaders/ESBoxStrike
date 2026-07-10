@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.2 [OFFICIAL]",
+    Version       = "2.0.0 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -5376,6 +5376,47 @@ local function spawnViewmodel(knife)
     if not SkinSystem.spawned and SkinSystem.vm then pcall(function() SkinSystem.vm:Destroy() end); SkinSystem.vm=nil; restoreOriginalKnife() end
 end
 
+function _applyGloveSideDirect(glove, side, gloveSkin, gsr, directSurfaceApps, sourceKey)
+    if glove:GetAttribute("EclipseSkinSource") == sourceKey and glove:GetAttribute("SkinApplied") == gloveSkin then return end
+    _restoreGloveSurfaceOnly(glove, side)
+    _cacheSkinTarget(glove)
+    for _, old in ipairs(glove:GetChildren()) do
+        if old:IsA("SurfaceAppearance") then old:Destroy() end
+    end
+    if #directSurfaceApps > 0 then
+        for _, sa in ipairs(directSurfaceApps) do
+            local c = sa:Clone()
+            c.Name = "SurfaceAppearance"
+            c:SetAttribute("EclipseSkinSurface", true)
+            c:SetAttribute("EclipseSurfaceSource", sourceKey)
+            c.Parent = glove
+        end
+        glove:SetAttribute("EclipseSkinSource", sourceKey)
+        glove:SetAttribute("SkinApplied", gloveSkin)
+        return
+    end
+    local sideSource = gsr:FindFirstChild(side)
+    if sideSource then
+        _applySkinSourceToPart(glove, sideSource)
+        glove:SetAttribute("SkinApplied", gloveSkin)
+    end
+end
+
+function _applyGloveSkinCore(gloveSkin)
+    local gf = SkinsFolder:FindFirstChild("Sports Gloves"); if not gf then return end
+    local gs = gf:FindFirstChild(gloveSkin)
+    local gsr = gs and gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Factory New")
+    if not gsr then return end
+    local directSurfaceApps = {}
+    for _, sa in ipairs(gsr:GetChildren()) do
+        if sa:IsA("SurfaceAppearance") then table.insert(directSurfaceApps, sa) end
+    end
+    local sourceKey = "Sports Gloves/" .. tostring(gloveSkin)
+    _forEachCameraGlove(function(glove, side)
+        pcall(_applyGloveSideDirect, glove, side, gloveSkin, gsr, directSurfaceApps, sourceKey)
+    end)
+end
+
 function _applySelectedGloveSkin()
     if EX_LIMITED then return end
     if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
@@ -5385,75 +5426,40 @@ function _applySelectedGloveSkin()
         _forEachCameraGlove(function(glove) _restoreGloveSurfaceOnly(glove) end)
         return
     end
+    pcall(_applyGloveSkinCore, gloveSkin)
+end
 
-    pcall(function()
-        local gf = SkinsFolder:FindFirstChild("Sports Gloves"); if not gf then return end
-        local gs = gf:FindFirstChild(gloveSkin)
-        local gsr = gs and gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Factory New")
-        if not gsr then return end
 
-        
-
-        
-        local directSurfaceApps = {}
-        for _, sa in ipairs(gsr:GetChildren()) do
-            if sa:IsA("SurfaceAppearance") then table.insert(directSurfaceApps, sa) end
+function _applyWeaponSkinCore(model, skin)
+    local sf = SkinsFolder:FindFirstChild(model.Name); if not sf then return end
+    local st = sf:FindFirstChild(skin)
+    local src = st and st:FindFirstChild("Camera") and st.Camera:FindFirstChild("Factory New")
+    if not src then return end
+    if not GLOVES[model.Name] then
+        local roots = {}
+        for _, ch in ipairs(model:GetChildren()) do
+            if ch.Name == "Weapon" or ch.Name:find("Weapon") then
+                table.insert(roots, ch)
+            end
         end
-
-        _forEachCameraGlove(function(glove, side)
-            local sourceKey = "Sports Gloves/" .. tostring(gloveSkin)
-            if glove:GetAttribute("EclipseSkinSource") == sourceKey and glove:GetAttribute("SkinApplied") == gloveSkin then return end
-            _restoreGloveSurfaceOnly(glove, side)
-            _cacheSkinTarget(glove)
-            for _, old in ipairs(glove:GetChildren()) do
-                if old:IsA("SurfaceAppearance") then old:Destroy() end
-            end
-            if #directSurfaceApps > 0 then
-                for _, sa in ipairs(directSurfaceApps) do
-                    local c = sa:Clone(); c.Name = "SurfaceAppearance"; pcall(function() c:SetAttribute("EclipseSkinSurface", true); c:SetAttribute("EclipseSurfaceSource", sourceKey) end); c.Parent = glove
+        if #roots == 0 then table.insert(roots, model) end
+        for _, wf in ipairs(roots) do
+            for _, p in ipairs(wf:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    local ns = src:FindFirstChild(p.Name)
+                    if ns then _applySkinSourceToPart(p, ns) end
                 end
-                glove:SetAttribute("EclipseSkinSource", sourceKey)
-                glove:SetAttribute("SkinApplied", gloveSkin)
-                return
             end
-
-            local sideSource = gsr:FindFirstChild(side)
-            if sideSource then
-                _applySkinSourceToPart(glove, sideSource)
-                glove:SetAttribute("SkinApplied", gloveSkin)
-            end
-        end)
-    end)
+        end
+    end
+    model:SetAttribute("SkinApplied", skin)
 end
 
 local function applyWeaponSkin(model, forcedSkin)
     if not SkinsFolder or not model or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
     pcall(_applySelectedGloveSkin)
     local skin = forcedSkin or Config.Skins.SelectedSkins[model.Name]; if not skin then return end
-    pcall(function()
-        local sf = SkinsFolder:FindFirstChild(model.Name); if not sf then return end
-        local st = sf:FindFirstChild(skin)
-        local src = st and st:FindFirstChild("Camera") and st.Camera:FindFirstChild("Factory New")
-        if not src then return end
-        if not GLOVES[model.Name] then
-            local roots = {}
-            for _, ch in ipairs(model:GetChildren()) do
-                if ch.Name == "Weapon" or ch.Name:find("Weapon") then
-                    table.insert(roots, ch)
-                end
-            end
-            if #roots == 0 then table.insert(roots, model) end
-            for _, wf in ipairs(roots) do
-                for _, p in ipairs(wf:GetDescendants()) do
-                    if p:IsA("BasePart") then
-                        local ns = src:FindFirstChild(p.Name)
-                        if ns then _applySkinSourceToPart(p, ns) end
-                    end
-                end
-            end
-        end
-        model:SetAttribute("SkinApplied", skin)
-    end)
+    pcall(_applyWeaponSkinCore, model, skin)
 end
 
 local function ApplyWeaponSkinsFast(model, skinName)
