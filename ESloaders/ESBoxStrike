@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.0 [OFFICIAL]",
+    Version       = "2.0.1 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
