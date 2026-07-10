@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.6 [OFFICIAL]",
+    Version       = "2.1.0 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -7646,18 +7646,15 @@ connectSignal(RunService.RenderStepped:Connect(function()
         safeUpdate("AntiSmoke", updateAntiSmoke)
     end
 
-    if now - _ThrSkin >= 0.033 then
-        _ThrSkin = now
-        safeUpdate("SkinSystem", function()
-            if SkinSystem.scriptRunning and SkinSystem.vm and SkinSystem.vm.PrimaryPart then
-                local k = knives[Config.Skins.SelectedKnife] or knives["Butterfly Knife"]
-                SkinSystem.vm.PrimaryPart.CFrame = Camera.CFrame * k.Offset
-                if not SkinSystem.inspecting and not SkinSystem.swinging then
-                    if SkinSystem.idleAnim and not SkinSystem.idleAnim.IsPlaying then SkinSystem.idleAnim:Play() end
-                end
+    safeUpdate("SkinSystem", function()
+        if SkinSystem.scriptRunning and SkinSystem.vm and SkinSystem.vm.PrimaryPart then
+            local k = knives[Config.Skins.SelectedKnife] or knives["Butterfly Knife"]
+            SkinSystem.vm.PrimaryPart.CFrame = Camera.CFrame * k.Offset
+            if not SkinSystem.inspecting and not SkinSystem.swinging then
+                if SkinSystem.idleAnim and not SkinSystem.idleAnim.IsPlaying then SkinSystem.idleAnim:Play() end
             end
-        end)
-    end
+        end
+    end)
 
     if now - _ThrWeather >= 0.20 then
         _ThrWeather = now
