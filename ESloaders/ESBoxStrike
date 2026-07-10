@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.4 [OFFICIAL]",
+    Version       = "2.0.5 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -1653,7 +1653,7 @@ local function _pen3dEnsure()
     return _EclipsePen3D
 end
 function _pen3dHide()
-    if _EclipsePen3D.part then pcall(function() _EclipsePen3D.part.Transparency = 1; _EclipsePen3D.part.CFrame = CFrame.new(0, -5000, 0) end) end
+    if _EclipsePen3D.part then pcall(function() _EclipsePen3D.part:Destroy() end); _EclipsePen3D.part = nil end
     if _EclipsePen3D.ring then pcall(function() _EclipsePen3D.ring:Destroy() end); _EclipsePen3D.ring = nil end
 end
 function _pen3dDestroy()
@@ -2817,28 +2817,37 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     local y  = math.floor((B or (T + 120)) + 12)
     local trBase = 1 * math.min(1, s)  
 
-    
-    data.TagBg.Size = Vector2.new(width, height)
-    data.TagBg.Position = Vector2.new(x, y)
-    data.TagBg.Filled = true; data.TagBg.Color = Color3.fromRGB(10,10,14)
-    data.TagBg.Transparency = 0.55 * math.min(1, s); data.TagBg.Visible = true
-    local tl, tr, bl, br = Vector2.new(x,y), Vector2.new(x+width,y), Vector2.new(x,y+height), Vector2.new(x+width,y+height)
-    data.TagBorder[1].From, data.TagBorder[1].To = tl, tr
-    data.TagBorder[2].From, data.TagBorder[2].To = tr, br
-    data.TagBorder[3].From, data.TagBorder[3].To = br, bl
-    data.TagBorder[4].From, data.TagBorder[4].To = bl, tl
-    for _, l in ipairs(data.TagBorder) do l.Thickness = 1; l.Transparency = 0.65 * math.min(1,s); l.Color = Color3.fromRGB(140,140,160); l.Visible = true end
-    
-    local segs = ESP_TAG_GRAD_SEGS
-    local segW = width / segs
-    local a, b = ESP_TAG_GRAD_A, ESP_TAG_GRAD_B
-    for i = 1, segs do
-        local t = (i - 0.5) / segs
-        local ln = data.TagGrad[i]
-        ln.From = Vector2.new(x + (i-1)*segW, y + 1)
-        ln.To   = Vector2.new(x + i*segW,      y + 1)
-        ln.Color = Color3.new(a.R + (b.R-a.R)*t, a.G + (b.G-a.G)*t, a.B + (b.B-a.B)*t)
-        ln.Thickness = 2; ln.Transparency = trBase; ln.Visible = true
+    -- Container (background + borders + gradient) só aparece se NAMES ou DISTANCE
+    -- estiverem ativos. Weapon icon, money e outros elementos continuam sendo
+    -- desenhados independentemente, sem exigir o container.
+    local showBox = (Config.ESP.Name or Config.ESP.Distance) and true or false
+    if showBox then
+        data.TagBg.Size = Vector2.new(width, height)
+        data.TagBg.Position = Vector2.new(x, y)
+        data.TagBg.Filled = true; data.TagBg.Color = Color3.fromRGB(10,10,14)
+        data.TagBg.Transparency = 0.55 * math.min(1, s); data.TagBg.Visible = true
+        local tl, tr, bl, br = Vector2.new(x,y), Vector2.new(x+width,y), Vector2.new(x,y+height), Vector2.new(x+width,y+height)
+        data.TagBorder[1].From, data.TagBorder[1].To = tl, tr
+        data.TagBorder[2].From, data.TagBorder[2].To = tr, br
+        data.TagBorder[3].From, data.TagBorder[3].To = br, bl
+        data.TagBorder[4].From, data.TagBorder[4].To = bl, tl
+        for _, l in ipairs(data.TagBorder) do l.Thickness = 1; l.Transparency = 0.65 * math.min(1,s); l.Color = Color3.fromRGB(140,140,160); l.Visible = true end
+
+        local segs = ESP_TAG_GRAD_SEGS
+        local segW = width / segs
+        local a, b = ESP_TAG_GRAD_A, ESP_TAG_GRAD_B
+        for i = 1, segs do
+            local t = (i - 0.5) / segs
+            local ln = data.TagGrad[i]
+            ln.From = Vector2.new(x + (i-1)*segW, y + 1)
+            ln.To   = Vector2.new(x + i*segW,      y + 1)
+            ln.Color = Color3.new(a.R + (b.R-a.R)*t, a.G + (b.G-a.G)*t, a.B + (b.B-a.B)*t)
+            ln.Thickness = 2; ln.Transparency = trBase; ln.Visible = true
+        end
+    else
+        data.TagBg.Visible = false
+        for _, l in ipairs(data.TagBorder) do l.Visible = false end
+        for _, l in ipairs(data.TagGrad)   do l.Visible = false end
     end
     local nameParts = {}
     if Config.ESP.Name then table.insert(nameParts, plr.Name) end
@@ -11281,44 +11290,73 @@ task.spawn(function()
     end
 end)
 
--- AUTO UPDATE NOTIFIER: polls GitHub raw source every 3 min and notifies
--- the user when a newer Version string is detected. Does NOT re-inject.
+-- AUTO UPDATE NOTIFIER: polls GitHub raw source and notifies once when a
+-- newer Version string is detected. Does NOT re-inject. Cache-busted URL.
 task.spawn(function()
-    local URL = "https://raw.githubusercontent.com/Elaps0o/EclipseLoader/main/ESloaders/ESBoxStrike"
-    local httpGet = (syn and syn.request) or (http and http.request) or (request) or nil
+    local BASE = "https://raw.githubusercontent.com/Elaps0o/EclipseLoader/main/ESloaders/ESBoxStrike"
+    local httpGet = (syn and syn.request) or (http and http.request) or rawget(getfenv(0), "request") or nil
+
     local function fetch()
+        local url = BASE .. "?t=" .. tostring(os.time())
         local body
-        pcall(function()
-            if httpGet then
-                local r = httpGet({ Url = URL, Method = "GET" })
-                body = r and (r.Body or r.body)
-            else
-                body = game:HttpGetAsync(URL)
-            end
-        end)
+        if httpGet then
+            pcall(function()
+                local r = httpGet({ Url = url, Method = "GET", Headers = { ["Cache-Control"] = "no-cache" } })
+                if r then body = r.Body or r.body end
+            end)
+        end
+        if not body or #tostring(body) < 32 then
+            pcall(function() body = game:HttpGet(url, true) end)
+        end
+        if not body or #tostring(body) < 32 then
+            pcall(function() body = game:HttpGetAsync(url) end)
+        end
         return body
     end
+
     local function parseVersion(src)
         if type(src) ~= "string" then return nil end
-        local v = src:match('Version%s*=%s*"([^"]+)"')
-        return v
+        return src:match('Version%s*=%s*"([^"]+)"')
     end
-    task.wait(15)
-    local notified = {}
-    while true do
-        pcall(function()
+
+    local function verGT(remote, local_)
+        local function nums(s)
+            local t = {}
+            for n in tostring(s):gmatch("(%d+)") do t[#t+1] = tonumber(n) or 0 end
+            return t
+        end
+        local a, b = nums(remote), nums(local_)
+        for i = 1, math.max(#a, #b) do
+            local x, y = a[i] or 0, b[i] or 0
+            if x ~= y then return x > y end
+        end
+        return false
+    end
+
+    local notifiedFor = nil
+    local function tick()
+        local ok, err = pcall(function()
             local src = fetch()
             local remote = parseVersion(src)
-            if remote and remote ~= ECLIPSE.Version and not notified[remote] then
-                notified[remote] = true
-                Library:Notify({
-                    Title = "Eclipse Hub — Update Available",
-                    Description = "New version <b>"..remote.."</b> detected. Rejoin to apply.",
-                    Time = 8,
-                })
+            if remote and remote ~= ECLIPSE.Version and remote ~= notifiedFor and verGT(remote, ECLIPSE.Version) then
+                notifiedFor = remote
+                pcall(function()
+                    Library:Notify({
+                        Title = "Eclipse Hub — Update Available",
+                        Description = "New version <b>"..remote.."</b> detected (current "..ECLIPSE.Version.."). Rejoin to apply.",
+                        Time = 10,
+                    })
+                end)
             end
         end)
-        task.wait(180) -- 3 minutes
+        if not ok then warn("[Eclipse] update check error: " .. tostring(err)) end
+    end
+
+    task.wait(10)
+    tick()
+    while true do
+        task.wait(180)
+        tick()
     end
 end)
 
