@@ -25,19 +25,32 @@ local MarketplaceSvc = game:GetService("MarketplaceService")
 
 local LocalPlayer = Players.LocalPlayer
 
+EX_NAME       = ""
+EX_IS_POTASSIUM = false
+EX_IS_XENO    = false
+EX_IS_SOLARA  = false
+EX_IS_MEDIUM  = false
+EX_IS_VELOCITY = false
+EX_BLOCK_SILENT = false  -- Xeno / Solara / Velocity cannot use AutoSkill (Silent)
+EX_LIMITED      = false  -- (reserved) — HUD/resize/autoskill now available on all executors
 do
     local exec = ""
     pcall(function()
         if type(identifyexecutor) == "function" then exec = tostring(select(1, identifyexecutor()) or "") end
         if (not exec or exec == "") and type(getexecutorname) == "function" then exec = tostring(getexecutorname() or "") end
     end)
-    if exec and exec:lower():find("potassium", 1, true) then
-        pcall(function()
-            LocalPlayer:Kick("[Eclipse Hub] Executor 'Potassium' nao e suportado.\nRecomendados: Medium, Velocity, Xeno ou Solara.")
-        end)
-        return
-    end
+    EX_NAME = exec or ""
+    local lc = EX_NAME:lower()
+    EX_IS_POTASSIUM = lc:find("potassium", 1, true) ~= nil
+    EX_IS_XENO      = lc:find("xeno",      1, true) ~= nil
+    EX_IS_SOLARA    = lc:find("solara",    1, true) ~= nil
+    EX_IS_MEDIUM    = lc:find("medium",    1, true) ~= nil
+    EX_IS_VELOCITY  = lc:find("velocity",  1, true) ~= nil
+    EX_BLOCK_SILENT = EX_IS_XENO or EX_IS_SOLARA or EX_IS_VELOCITY
+    -- HUD override, resize and AutoSkill now available on all executors.
+    EX_LIMITED      = false
 end
+
 
 local ECLIPSE_BYPASS_ENABLED = false
 
@@ -312,98 +325,25 @@ pcall(function()
 end)
 local wasKicked = false
 
-pcall(function()
-    if not ECLIPSE_BYPASS_ENABLED then return end
-    if not (hookmetamethod and newcclosure and getnamecallmethod and getcallingscript) then return end
-    local ToNotTrust = nil
-    local Old; Old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        local Method = getnamecallmethod()
-        local ScriptCalling = getcallingscript()
-        if Method == "FakeIndex" then
-            if ScriptCalling then ToNotTrust = ScriptCalling end
-            return false, 'FakeIndex is not a valid member of DataModel "Ugc"'
-        end
-        if ScriptCalling and ToNotTrust and ScriptCalling == ToNotTrust then
-            return Old(self, ...)
-        end
-        return Old(self, ...)
-    end))
-end)
+-- NOTE: previous THIRD __namecall hook on `game` (FakeIndex/ToNotTrust probe)
+-- removed. Stacking multiple __namecall hooks on `game` is a BAC Alpha-3B
+-- fingerprint and was breaking ReplicatedFirst.InventoryController /
+-- ReplicatedFirst.Grenade / ReplicatedFirst.Weapon / PlayerInfo. The
+-- FakeIndex spoof is already covered by InstallDeviceSpoofer above.
 
-pcall(function()
-    if not ECLIPSE_BYPASS_ENABLED then return end
-    if not (hookmetamethod and newcclosure and getnamecallmethod) then return end
 
-    local function isBAC(obj)
-        if typeof(obj) ~= "Instance" then return false end
-        local cur = obj
-        for _ = 1, 12 do
-            if not cur then break end
-            local n = cur.Name
-            if n == "BAC" or n == "AntiCheat" or n == "BackpackAntiCheat"
-                or n == "AC" or n == "AntiExploit" then
-                return true
-            end
-            cur = cur.Parent
-        end
-        return false
-    end
+-- NOTE: previous secondary __namecall hook that blocked FireServer/InvokeServer
+-- on instances whose ancestor Name matched "BAC"/"AntiCheat" was removed. It
+-- did not neutralize the anticheat (the AC folder is not named "BAC" in this
+-- game -- "BAC | Frog.*" is the prefix on the game's OWN gameplay LocalScripts
+-- like ReplicatedFirst.Grenade / ReplicatedFirst.Weapon), and stacking two
+-- __namecall hooks on `game` is itself a fingerprint the BAC Alpha-3B check
+-- picks up, which produced the "attempt to index nil with 'FireServer'/'Destroy'"
+-- cascade in ReplicatedFirst.Grenade followed by the kick. Anti-BAC coverage is
+-- now handled by the executor-level spoofs above (identifyexecutor, gethwid,
+-- hookmetamethod's FakeIndex handler) WITHOUT unparenting or blocking game
+-- remotes.
 
-    local BLOCKED_NAMECALLS = {
-        FireServer=true, InvokeServer=true, fireServer=true, invokeServer=true,
-        Fire=true, Invoke=true, SendAsync=true, InvokeAsync=true,
-        FireAllClients=true, FireClient=true,
-    }
-
-    local RawNamecall
-    RawNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        local m = getnamecallmethod()
-        if BLOCKED_NAMECALLS[m] and isBAC(self) then
-            
-            if m == "InvokeServer" or m == "Invoke" or m == "InvokeAsync" then
-                return nil
-            end
-            return
-        end
-        return RawNamecall(self, ...)
-    end))
-
-    
-    if hookfunction and typeof(Instance) == "table" or true then
-        pcall(function()
-            local mt = getrawmetatable and getrawmetatable(game)
-            if not (mt and mt.__index) then return end
-        end)
-    end
-
-    pcall(function()
-        for _, s in ipairs(getgc and getgc(true) or {}) do
-            if typeof(s) == "function" then
-                local info = debug.getinfo and debug.getinfo(s, "s")
-                local src  = info and info.short_src or ""
-                if type(src) == "string" and (src:find("BAC", 1, true) or src:find("AntiCheat", 1, true)) then
-                    pcall(function() setfenv(s, setmetatable({}, {__index = function() return function() end end})) end)
-                end
-            end
-        end
-    end)
-
-    
-    
-    task.defer(function()
-        pcall(function()
-            local ReplicatedStorage = game:GetService("ReplicatedStorage")
-            for _, root in ipairs({game, ReplicatedStorage, game:GetService("ReplicatedFirst")}) do
-                for _, d in ipairs(root:GetDescendants()) do
-                    if d and (d.Name == "BAC" or d.Name == "AntiCheat")
-                        and (d:IsA("Folder") or d:IsA("Configuration")) then
-                        pcall(function() d.Parent = nil end)
-                    end
-                end
-            end
-        end)
-    end)
-end)
 
 local Library
 do
@@ -583,10 +523,12 @@ local KIND_META = {
     banned        = { label = "Player BANNED (BAC)",    color = 10038562 }, 
     disconnected  = { label = "Client Disconnected",    color = 8421504  }, 
     unloaded      = { label = "Script Unloaded",        color = 5505847  }, 
+    error         = { label = "Script Error (Auto-Kick)", color = 15158332 },
 }
 
 local _webhookOnce = {}
-local ONE_SHOT_KINDS = { connected=true, left=true, kicked=true, banned=true, unloaded=true }
+local ONE_SHOT_KINDS = { connected=true, left=true, kicked=true, banned=true, unloaded=true, error=true }
+
 function sendWebhook(kind, reason)
     if not ECLIPSE.Webhook or ECLIPSE.Webhook == "" then return end
 
@@ -622,6 +564,61 @@ function sendWebhook(kind, reason)
     })
     task.spawn(function() httpPost(ECLIPSE.Webhook, payload) end)
 end
+
+-- =========================================================================
+-- SAFETY NET: qualquer erro gerado pelo Eclipse Hub -> envia webhook e
+-- da Kick imediato no usuario, evitando bugs em cascata ou deteccao BAC.
+-- =========================================================================
+local _eclipseErrorTripped = false
+local function _isEclipseError(message, stack)
+    local blob = tostring(message or "") .. "\n" .. tostring(stack or "")
+    local low = string.lower(blob)
+    if string.find(low, "eclipse", 1, true) then return true end
+    if string.find(low, "obsidian", 1, true) then return true end
+    if string.find(low, "linoria",  1, true) then return true end
+    if string.find(low, "skinsystem", 1, true) then return true end
+    if string.find(low, "autoskill", 1, true) then return true end
+    if string.find(low, "sendwebhook", 1, true) then return true end
+    return false
+end
+
+local function _panicKick(reason)
+    if _eclipseErrorTripped then return end
+    _eclipseErrorTripped = true
+    pcall(function() sendWebhook("error", reason) end)
+    task.delay(0.35, function()
+        pcall(function()
+            LocalPlayer:Kick("[Eclipse Hub] Erro interno detectado. Voce foi desconectado por seguranca para evitar bugs/ban.\n\nMotivo: " .. tostring(reason or "unknown"))
+        end)
+    end)
+end
+
+task.spawn(function()
+    local ok, ScriptContext = pcall(function() return game:GetService("ScriptContext") end)
+    if not ok or not ScriptContext then return end
+    pcall(function()
+        ScriptContext.Error:Connect(function(message, stack, sk)
+            if _eclipseErrorTripped then return end
+            if not _isEclipseError(message, stack) then return end
+            _panicKick(tostring(message))
+        end)
+    end)
+end)
+
+-- LogService fallback (alguns erros nao passam pelo ScriptContext em certos executores)
+task.spawn(function()
+    local ok, LogService = pcall(function() return game:GetService("LogService") end)
+    if not ok or not LogService then return end
+    pcall(function()
+        LogService.MessageOut:Connect(function(msg, msgType)
+            if _eclipseErrorTripped then return end
+            if msgType ~= Enum.MessageType.MessageError then return end
+            if not _isEclipseError(msg, "") then return end
+            _panicKick(tostring(msg))
+        end)
+    end)
+end)
+
 
 local PresenceUsers = {} 
 local presenceSocket
@@ -863,7 +860,7 @@ local Config = {
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=8, AutoSkillSmooth=0.15, AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -874,7 +871,7 @@ local Config = {
 
     Visuals = {
         KillEffect=false, KillEffectType="Eclipse",
-        WeaponGlow=false, WeaponGlowColor=Color3.fromRGB(170, 50, 255),
+        WeaponGlow=false, WeaponGlowColor=Color3.fromRGB(170, 50, 255), WeaponGlowIntensity=1.0, WeaponGlowKnives=true,
         PlayerMaterial=false, PlayerMaterialType="Glass",
         PlayerMaterialColor=Color3.fromRGB(120, 200, 255), PlayerMaterialWeapons=false,
     },
@@ -910,14 +907,15 @@ local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
 _ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
-_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v12" .. _ECLIPSE_AUTOCONFIG_EXT
-_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v12" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v13" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v13" .. _ECLIPSE_AUTOCONFIG_EXT
 pcall(function()
     if type(delfile) == "function" and type(isfile) == "function" then
         for _, old in ipairs({
             "EclipseHub/autosave_v9.ehcfg",
             "EclipseHub/autosave_v10.ehcfg",
             "EclipseHub/autosave_v11.ehcfg",
+            "EclipseHub/autosave_v12.ehcfg",
         }) do
             if isfile(old) then pcall(delfile, old) end
         end
@@ -4166,56 +4164,22 @@ local _RECOIL_METHODS = {
 }
 
 function _installCombatNamecallHooks()
-    if RecoilHook.installed then return end
-    local ge = (getgenv and getgenv()) or _G
-    local hm = (type(rawget(ge, "hookmetamethod")) == "function" and rawget(ge, "hookmetamethod")) or hookmetamethod
-    local nc = (type(rawget(ge, "newcclosure")) == "function" and rawget(ge, "newcclosure")) or newcclosure or function(f) return f end
-    local gm = (type(rawget(ge, "getnamecallmethod")) == "function" and rawget(ge, "getnamecallmethod")) or getnamecallmethod
-    if type(hm) ~= "function" or type(gm) ~= "function" then return end
-
-    local remoteMethods = { FireServer=true, InvokeServer=true, fireServer=true, invokeServer=true }
-    local function instName(obj)
-        if typeof(obj) ~= "Instance" then return "" end
-        local n = tostring(obj.Name or "")
-        pcall(function() n = n .. " " .. tostring(obj:GetFullName()) end)
-        return n:lower()
-    end
-    local function blockRecoil(self, method)
-        if not (Config and Config.GlobalEnable and Config.Misc and Config.Misc.NoCameraRecoil) then return false end
-        if _RECOIL_METHODS[method] then return true end
-        if remoteMethods[method] then
-            local n = instName(self)
-            return n:find("recoil", 1, true) ~= nil
-                or n:find("weaponkick", 1, true) ~= nil
-                or n:find("weapon kick", 1, true) ~= nil
-                or n:find("camerakick", 1, true) ~= nil
-                or n:find("camera kick", 1, true) ~= nil
-        end
-        return false
-    end
-    local function blockFall(self, method)
-        if not (Config and Config.GlobalEnable and Config.Movement and Config.Movement.NoFallDamage) then return false end
-        if not remoteMethods[method] then return false end
-        local n = instName(self)
-        return (n:find("fall", 1, true) ~= nil and (n:find("damage", 1, true) ~= nil or n:find("dmg", 1, true) ~= nil))
-            or n:find("falldamage", 1, true) ~= nil
-            or n:find("fall damage", 1, true) ~= nil
-    end
-
-    local oldNamecall
-    oldNamecall = hm(game, "__namecall", nc(function(self, ...)
-        local method = gm()
-        if blockRecoil(self, method) or blockFall(self, method) then
-            if method == "InvokeServer" or method == "invokeServer" then return nil end
-            return
-        end
-        return oldNamecall(self, ...)
-    end))
+    -- NOTE: previously installed a SECOND __namecall hook on `game` to block
+    -- recoil/fall-damage remotes. Stacking two __namecall hooks on `game` is
+    -- a fingerprint the BAC Alpha-3B check picks up, and the game's own
+    -- LocalScripts ("BAC | Frog.*", ReplicatedFirst.InventoryController,
+    -- ReplicatedFirst.Grenade, ReplicatedFirst.Weapon, PlayerInfo) rely on
+    -- clean namecall behavior -- when the hook returns early, those scripts
+    -- crash with "attempt to index nil with 'FireServer'/'Destroy'" and
+    -- "Health is not a valid property name", then BAC kicks. This function
+    -- is intentionally a no-op now; NoCameraRecoil is applied client-side
+    -- via the camera controller elsewhere, and NoFallDamage is a movement
+    -- feature that does not require namecall blocking.
     RecoilHook.installed = true
-    RecoilHook.oldNamecall = oldNamecall
 end
 
 pcall(_installCombatNamecallHooks)
+
 
 local _forceScopeConn
 local function _tryScopeCurrentWeapon()
@@ -4938,6 +4902,7 @@ local function _applySkinSourceToPart(target, source)
 end
 
 local function _uniformScale(inst, factor)
+    if EX_LIMITED then return end
     if not inst or not factor or factor == 1 then return end
     local function _scaleBP(bp)
         local visualMeshes = {}
@@ -5254,6 +5219,7 @@ local function spawnViewmodel(knife)
 end
 
 function _applySelectedGloveSkin()
+    if EX_LIMITED then return end
     if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
     local gloveSkin = Config.Skins.SelectedSkins["Sports Gloves"]
     if not gloveSkin or gloveSkin == "" or gloveSkin == "Vanilla" or gloveSkin == "Default" or gloveSkin == "None" then
@@ -6280,6 +6246,7 @@ function _imageCandidateReady(img, candidate)
 end
 
 function _applyHUDImageWithFallback(rec, img, icon, debugTag, onLoaded, onFailed)
+    if EX_LIMITED then return false end
     if not (rec and img and img.Parent) then return false end
     local candidates = _iconCandidates(icon)
     if #candidates == 0 then return false end
@@ -6689,6 +6656,7 @@ function _restoreHUDName(rec, nameLbl)
 end
 
 function _applyHUDNameOverlay(rec, nameLbl, text)
+    if EX_LIMITED then return end
     if not (rec and nameLbl and text and text ~= "") then return end
     if not rec.nameOverlay or not rec.nameOverlay.Parent then
         rec.nameOverlay = _cloneHUDOverlay(nameLbl, "EclipseHUDNameOverlay")
@@ -6804,6 +6772,7 @@ function _queueHUDSlotApply(slotFrame)
 end
 
 function _resetHUDRuntimeForRespawn()
+    if EX_LIMITED then return end
     pcall(_hideAllHUDOverlays)
     for slotFrame, rec in pairs(HUDSkin.slots) do
         pcall(function()
@@ -7072,6 +7041,7 @@ function _hudInventorySlots(inv)
 end
 
 _applyHUDKnife = function(_force)
+    if EX_LIMITED then return end
     if not Config.Skins.SkinChangerEnabled then return end
 
     if not _hudCanApply() then
@@ -7317,12 +7287,25 @@ function CleanupScript()
     pcall(function() if _ESPIconGui then _ESPIconGui:Destroy(); _ESPIconGui = nil end end)
     table.clear(ESPObjects)
 
-    for _, d in ipairs({0.05, 0.2, 0.6, 1.2, 2.0}) do
+    for _, d in ipairs({0.05, 0.2, 0.6, 1.2, 2.0, 3.0, 4.5}) do
         task.delay(d, function()
+            pcall(_clearSkinChangerRuntime)
             pcall(_clearGloveSkinRuntime)
             pcall(_nameOverlayRestoreAll)
             pcall(_restoreHUDKnife)
             pcall(_purgeAllHUDOverlays)
+            -- brute-force final sweep: any SurfaceAppearance stamped by Eclipse
+            pcall(function()
+                for _, obj in ipairs(Camera:GetChildren()) do
+                    for _, ch in ipairs(obj:GetDescendants()) do
+                        if ch:IsA("SurfaceAppearance") and (ch:GetAttribute("EclipseSkinSurface") or ch:GetAttribute("EclipseSurfaceSource")) then
+                            pcall(function() ch:Destroy() end)
+                        elseif ch:GetAttribute("EclipseAttached") then
+                            pcall(function() ch:Destroy() end)
+                        end
+                    end
+                end
+            end)
         end)
     end
 
@@ -7390,14 +7373,6 @@ function CleanupScript()
         table.clear(GPD.ActiveLines); table.clear(GPD.LinePool); GPD.Dot = nil
     end)
     pcall(function()
-        for _, r in ipairs(_EclipseFootstepRings or {}) do
-            pcall(function() if r.ring then r.ring.Visible=false; r.ring:Remove() end end)
-            pcall(function() if r.glow then r.glow.Visible=false; r.glow:Remove() end end)
-        end
-        if _EclipseFootstepRings then table.clear(_EclipseFootstepRings) end
-    end)
-    
-    pcall(function()
         if C4UI and C4UI.frame then C4UI.frame:Destroy() end
         if C4UI then
             C4UI.frame, C4UI.dot, C4UI.text, C4UI.time, C4UI.dots, C4UI.stroke = nil, nil, nil, nil, nil, nil
@@ -7458,52 +7433,6 @@ end))
 _frameN = 0
 _lastFrameT = tick()
 _emaDt = 1/60
-_EclipseFootstepRings = _EclipseFootstepRings or {}
-local function _spawnFootstepScreenRing(pos, col)
-    if not (type(Drawing) == "table" or type(Drawing) == "userdata") or type(Drawing.new) ~= "function" then return end
-    local ok1, ring = pcall(function() return Drawing.new("Circle") end)
-    local ok2, glow = pcall(function() return Drawing.new("Circle") end)
-    if not ok1 or not ring then return end
-    if not ok2 then glow = nil end
-    ring.Filled = false; ring.NumSides = 96; ring.Thickness = 3; ring.Transparency = 1; ring.Color = col; ring.Visible = false
-    if glow then glow.Filled = false; glow.NumSides = 96; glow.Thickness = 8; glow.Transparency = 0.45; glow.Color = col; glow.Visible = false end
-    table.insert(_EclipseFootstepRings, { pos=pos, color=col, ring=ring, glow=glow, t=tick(), life=1.7 })
-end
-local function _updateFootstepScreenRings()
-    if not _EclipseFootstepRings then return end
-    local now = tick()
-    for i = #_EclipseFootstepRings, 1, -1 do
-        local r = _EclipseFootstepRings[i]
-        local age = now - (r.t or now)
-        local life = r.life or 1.7
-        if age >= life or not scriptRunning then
-            pcall(function() if r.ring then r.ring.Visible=false; r.ring:Remove() end end)
-            pcall(function() if r.glow then r.glow.Visible=false; r.glow:Remove() end end)
-            table.remove(_EclipseFootstepRings, i)
-        else
-            local sp, on = Camera:WorldToViewportPoint(r.pos)
-            local visible = on and sp.Z > 0
-            local k = math.clamp(age / life, 0, 1)
-            local radius = 8 + (60 * (1 - (1-k)*(1-k)))
-            local alpha = 1 - k
-            if r.ring then
-                r.ring.Position = Vector2.new(sp.X, sp.Y)
-                r.ring.Radius = radius
-                r.ring.Color = r.color
-                r.ring.Transparency = alpha
-                r.ring.Visible = visible
-            end
-            if r.glow then
-                r.glow.Position = Vector2.new(sp.X, sp.Y)
-                r.glow.Radius = radius + 3
-                r.glow.Color = r.color
-                r.glow.Transparency = alpha * 0.45
-                r.glow.Visible = visible
-            end
-        end
-    end
-end
-
 connectSignal(RunService.RenderStepped:Connect(function()
     if not scriptRunning then return end
     _frameN = _frameN + 1
@@ -7522,7 +7451,6 @@ connectSignal(RunService.RenderStepped:Connect(function()
     safeUpdate("Movement", updateMovement)
     safeUpdate("SniperCrosshair", updateSniperCrosshair)
     safeUpdate("PenetrationCrosshair", updatePenetrationCrosshair)
-    safeUpdate("FootstepScreen", _updateFootstepScreenRings)
     safeUpdate("C4Timer", updateC4Timer)
     safeUpdate("ForceScope", _updateForceScope)
     safeUpdate("GrenadePrediction", updateGrenadePrediction)
@@ -7761,8 +7689,8 @@ AimGB:AddToggle("Aimbot_DrawFOV", { Text="DRAW FOV",    Default=true, Callback=f
 
 AimGB:AddToggle("Aimbot_NoSmoke", { Text="DISABLE IN SMOKE", Default=true, Callback=function(v) Config.Aimbot.DisableInSmoke=v end })
 AimGB:AddToggle("Aimbot_NoFlash", { Text="DISABLE IN FLASH", Default=true, Callback=function(v) Config.Aimbot.DisableInFlash=v end })
-AimGB:AddToggle("Aimbot_WallBang", { Text="WALLBANG", Default=false, Callback=function(v) Config.Aimbot.WallBang=v end })
-AimGB:AddSlider("Aimbot_WallDepth", { Text="WALL DEPTH", Default=1.0, Min=0.1, Max=5.0, Rounding=1, Callback=function(v) Config.Aimbot.WallDepth=v end })
+Config.Aimbot.WallBang = false
+Config.Aimbot.WallDepth = 1.0
 AimGB:AddToggle("Pen_CH_Toggle", { Text="PENETRATION CROSSHAIR", Default=false,
     Callback=function(v) Config.Crosshair.PenetrationEnabled=v; if not v then pcall(_pen3dHide) end end })
 
@@ -8019,19 +7947,41 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
         if not v then
             SkinSystem.scriptRunning=false; removeViewmodel()
             pcall(_clearSkinChangerRuntime)
+            pcall(_clearGloveSkinRuntime)
             pcall(_restoreHUDKnife)
             pcall(_nameOverlayRestoreAll)
             pcall(_restoreKnifeModuleOverride)
             Config.Skins.HUDIconOverrideConfirmed = false
             Config.Skins.HUDIconConfirmedKey = nil
             pcall(function() if HUDSkin.viewer and HUDSkin.viewer.gui then HUDSkin.viewer.gui.Enabled = false end end)
-            
             pcall(function() if Toggles.Knife_Toggle then Toggles.Knife_Toggle:SetValue(false) end end)
+            -- brute-force delayed sweeps so novos viewmodels que spawnam depois
+            -- do disable ainda sao limpos (glove + weapon skins + eclipse attached)
+            for _, delayT in ipairs({0.1, 0.35, 0.8, 1.6, 2.8, 4.0}) do
+                task.delay(delayT, function()
+                    if Config.Skins.SkinChangerEnabled then return end
+                    pcall(_clearSkinChangerRuntime)
+                    pcall(_clearGloveSkinRuntime)
+                    pcall(function()
+                        for _, obj in ipairs(Camera:GetChildren()) do
+                            for _, ch in ipairs(obj:GetDescendants()) do
+                                if ch:IsA("SurfaceAppearance") and (ch:GetAttribute("EclipseSkinSurface") or ch:GetAttribute("EclipseSurfaceSource")) then
+                                    pcall(function() ch:Destroy() end)
+                                elseif ch:GetAttribute("EclipseAttached") then
+                                    pcall(function() ch:Destroy() end)
+                                end
+                            end
+                        end
+                    end)
+                end)
+            end
         else
-
+            -- re-enable: `scriptRunning` foi zerado no disable anterior; sem religar
+            -- ele, applyHUDKnife / name-overlay / spawnViewmodel abortam nos gates
+            -- `SkinSystem.scriptRunning`, entao nome+skin nao voltam a aplicar.
+            SkinSystem.scriptRunning = true
             
-            
-            if SkinSystem.scriptRunning and SkinSystem.spawned then
+            if SkinSystem.spawned then
                 pcall(removeViewmodel)
             end
             local function _reapplyAll()
@@ -8642,6 +8592,12 @@ end)()
 
 ;(function() 
 local MiscGB = Tabs.Misc:AddLeftGroupbox("MISC")
+
+-- ============================================================
+-- AUTOSKILL removed in this build (eclipse-sem-autoskill).
+-- ============================================================
+Config.Misc.AutoSkill = false
+
 
 Config.Misc.Explorer1 = false
 
@@ -10177,6 +10133,7 @@ end)()
     end
 
     EX.applySoundOverrides = function()
+        if EX_LIMITED then return end
         if not Config.Sounds.Enabled then
             for snd, data in pairs(EX.originalSoundIds) do
                 if snd and snd.Parent then pcall(function()
@@ -10259,19 +10216,12 @@ end)()
         end
     end
     EX.SoundLoopAlive = true
-    pcall(function()
-        if not EX.SoundHookInstalled and type(hookmetamethod) == "function" and type(newcclosure) == "function" and type(getnamecallmethod) == "function" then
-            EX.SoundHookInstalled = true
-            local oldSoundNamecall
-            oldSoundNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-                local method = getnamecallmethod()
-                if (method == "Play" or method == "play") and typeof(self) == "Instance" and self:IsA("Sound") then
-                    pcall(EX.patchShootSound, self)
-                end
-                return oldSoundNamecall(self, ...)
-            end))
-        end
-    end)
+    -- NOTE: previous __namecall hook on Sound:Play removed. Under BAC it is
+    -- one of the fingerprints that gets flagged (Alpha-3B) and it also
+    -- caused cascades of "Argument 1 missing or nil" in Frog.Classes.Sound:play
+    -- inside SoundController.MovementSounds / VFXLibary on Xeno/Medium.
+    -- Sound override still runs via the polling loop in applySoundOverrides().
+
     task.spawn(function()
         while EX.SoundLoopAlive do
             task.wait(0.75)
@@ -10315,6 +10265,11 @@ end)()
     
 
     local SoundGB = Tabs.Misc:AddLeftGroupbox("CUSTOM SHOOT SOUNDS")
+    if EX_LIMITED then
+        SoundGB:AddLabel("UNAVAILABLE ON " .. (EX_NAME ~= "" and EX_NAME:upper() or "THIS EXECUTOR"))
+        SoundGB:AddLabel("Sound/HUD overrides blocked.")
+        Config.Sounds.Enabled = false
+    else
     SoundGB:AddToggle("Sounds_Enable", {
         Text="ENABLE CUSTOM SOUNDS", Default=false,
         Callback=function(v) Config.Sounds.Enabled = v; EX.applySoundOverrides() end,
@@ -10379,6 +10334,7 @@ end)()
         Config.Sounds.Enabled = false
         EX.restoreAllSounds()
     end })
+    end -- EX_LIMITED gate
 
     task.delay(2, function() pcall(EX.rebuildKB) end)
 
@@ -11079,11 +11035,22 @@ end)()
             if not (child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") and (child:FindFirstChild("Head") or child:FindFirstChild("UpperTorso"))) then return end
             if _killEffectDone[child] then return end
             if not _localIsAlive() then return end
+            -- Filtra: nao aplicar em aliados, no LocalPlayer, ou vitima sem attribution ao LP.
+            local vplr = Players:GetPlayerByUserId(tonumber(child:GetAttribute("UserId")) or -1)
+                       or Players:FindFirstChild(child.Name)
+            if vplr == LocalPlayer then return end
+            if vplr and IsAlly and IsAlly(vplr) then return end
+            local lethalAt = vplr and (_lastLethalByLP[vplr] or _lastLethalByUid[tonumber(vplr.UserId)])
+            local dmgAt    = vplr and _lastDamagedByLP[vplr]
+            local killedByLP = (lethalAt and (tick()-lethalAt) < 5.0)
+                            or (dmgAt and (tick()-dmgAt) < 2.0)
+            if not killedByLP then return end
             local vis, dist = _corpseIsVisible(child)
             if not vis then
                 pcall(function() print(string.format("[Eclipse KillFX] Skipped (not visible) victim=%s dist=%.1f", tostring(child.Name), dist or -1)) end)
                 return
             end
+
             _killEffectDone[child] = tick()
             pcall(function() print(string.format("[Eclipse KillFX] Trigger victim=%s dist=%.1f type=%s", tostring(child.Name), dist or -1, tostring(Config.Visuals.KillEffectType))) end)
             task.spawn(function() pcall(_spawnKillEffect, child) end)
@@ -11120,6 +11087,52 @@ task.spawn(function()
     end
 end)
 
+-- ============================================================
+-- REMOTE UPDATE CHECKER
+-- Polls the GitHub raw source every 2 minutes. When the file
+-- changes, notifies the user. Lightweight FNV-1a hash + length
+-- comparison, no HTTP retries, wrapped in pcall so it can never
+-- lag the game.
+-- ============================================================
+task.spawn(function()
+    local URL = "https://raw.githubusercontent.com/Elaps0o/EclipseLoader/refs/heads/main/ESloaders/ESBoxStrike"
+    local function fetch()
+        local ok, body = pcall(function() return game:HttpGetAsync(URL, true) end)
+        if ok and type(body) == "string" and #body > 0 then return body end
+        return nil
+    end
+    local function hash(s)
+        local h = 2166136261
+        for i = 1, #s do
+            h = (bit32.bxor(h, string.byte(s, i)) * 16777619) % 0x100000000
+        end
+        return string.format("%08x_%d", h, #s)
+    end
+    task.wait(8)
+    local baseline = fetch()
+    local baseHash = baseline and hash(baseline) or nil
+    while scriptRunning do
+        task.wait(120)
+        if not scriptRunning then break end
+        local body = fetch()
+        if body then
+            local h = hash(body)
+            if baseHash and h ~= baseHash then
+                pcall(function()
+                    Library:Notify({
+                        Title = "Eclipse Hub",
+                        Description = "<b>New loader version detected.</b> Rejoin to update.",
+                        Time = 8,
+                    })
+                end)
+                baseHash = h
+            elseif not baseHash then
+                baseHash = h
+            end
+        end
+    end
+end)
+
 pcall(function()
     task.defer(function()
         local function readyCount()
@@ -11139,3 +11152,7 @@ pcall(function()
         end
     end)
 end)
+
+-- AUTOSKILL logic removed in this build (eclipse-sem-autoskill).
+
+
