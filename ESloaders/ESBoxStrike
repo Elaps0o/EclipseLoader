@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.1 [OFFICIAL]",
+    Version       = "2.0.0 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -5403,7 +5403,7 @@ function _hudDbg(...)
     -- Debug prints disabled per user request.
 end
 
-local HUD_KNIFE_ASSETS = {
+HUD_KNIFE_ASSETS = {
     ["CT Knife"]         = { Icon="rbxassetid://115204080823353", ReverseIcon="rbxassetid://102135209052420", Team="Counter-Terrorists" },
     ["T Knife"]          = { Icon="rbxassetid://140484419446969", ReverseIcon="rbxassetid://100704390906232", Team="Terrorists" },
     ["Butterfly Knife"]  = { Icon="rbxassetid://78088217065173",  ReverseIcon="rbxassetid://119105180712017", Team="Both" },
@@ -5412,7 +5412,7 @@ local HUD_KNIFE_ASSETS = {
     ["M9 Bayonet"]       = { Icon="rbxassetid://92481124554479",  ReverseIcon="rbxassetid://90954924716133",  Team="Both" },
 }
 
-local HUD_WEAPON_ICON_FALLBACKS = {
+HUD_WEAPON_ICON_FALLBACKS = {
     ["AK-47"]            = { Icon="rbxassetid://83097083839889",  ReverseIcon="rbxassetid://140617178427585", Team="Terrorists" },
     ["AUG"]              = { Icon="rbxassetid://119885531832389", ReverseIcon="rbxassetid://125463512677698", Team="Counter-Terrorists" },
     ["AWP"]              = { Icon="rbxassetid://79794264811775",  ReverseIcon="rbxassetid://78589610778527",  Team="Both" },
@@ -5456,10 +5456,10 @@ local HUD_WEAPON_ICON_FALLBACKS = {
     ["Zeus x27"]         = { Icon="rbxassetid://71464446190434",  ReverseIcon="rbxassetid://131579417467777", Team="Both" },
 }
 
-local HUD_KNIFE_ICONS = {}
+HUD_KNIFE_ICONS = {}
 for n, data in pairs(HUD_KNIFE_ASSETS) do HUD_KNIFE_ICONS[n] = data.Icon end
 
-local HUD_KNIFE_TEAMS = {
+HUD_KNIFE_TEAMS = {
     ["CT Knife"] = "Counter-Terrorists",
     ["T Knife"]  = "Terrorists",
 }
@@ -8838,53 +8838,6 @@ MiscGB:AddToggle("IdentifyMoney_Toggle", { Text="IDENTIFY MONEY", Default=false,
     end
 end })
 
--- AUTO SCOPE: while a sniper is equipped, hold right-click to keep it scoped.
-Config.Misc.AutoScope = false
-local _autoScopeHolding = false
-local function _isSniperEquipped()
-    local ok, res = pcall(function()
-        local char = LocalPlayer and LocalPlayer.Character
-        if not char then return false end
-        for _, t in ipairs(char:GetChildren()) do
-            if t:IsA("Tool") then
-                local n = tostring(t.Name):lower()
-                if n:find("awp") or n:find("scout") or n:find("ssg") or n:find("scar%-20") or n:find("g3sg") or n:find("sniper") then
-                    return true
-                end
-            end
-        end
-        return false
-    end)
-    return ok and res or false
-end
-task.spawn(function()
-    local VIM = game:GetService("VirtualInputManager")
-    while true do
-        task.wait(0.15)
-        pcall(function()
-            if Config.Misc.AutoScope and _isSniperEquipped() then
-                if not _autoScopeHolding then
-                    VIM:SendMouseButtonEvent(0, 0, 1, true, game, 0)
-                    _autoScopeHolding = true
-                end
-            else
-                if _autoScopeHolding then
-                    VIM:SendMouseButtonEvent(0, 0, 1, false, game, 0)
-                    _autoScopeHolding = false
-                end
-            end
-        end)
-    end
-end)
-MiscGB:AddToggle("AutoScope_Toggle", { Text="AUTO SCOPE", Default=false, Callback=function(v)
-    Config.Misc.AutoScope = v
-    if not v then
-        pcall(function()
-            game:GetService("VirtualInputManager"):SendMouseButtonEvent(0, 0, 1, false, game, 0)
-        end)
-        _autoScopeHolding = false
-    end
-end })
 
 MiscGB:AddToggle("AntiFlash_Toggle",   { Text="ANTI FLASH",    Default=false, Callback=function(v)
     Config.Misc.AntiFlash=v
