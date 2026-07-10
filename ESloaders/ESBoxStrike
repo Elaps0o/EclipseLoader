@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.0.3 [OFFICIAL]",
+    Version       = "2.0.4 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -908,8 +908,8 @@ local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
 _ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
-_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v13" .. _ECLIPSE_AUTOCONFIG_EXT
-_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v13" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v14" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v14" .. _ECLIPSE_AUTOCONFIG_EXT
 pcall(function()
     if type(delfile) == "function" and type(isfile) == "function" then
         for _, old in ipairs({
@@ -917,6 +917,7 @@ pcall(function()
             "EclipseHub/autosave_v10.ehcfg",
             "EclipseHub/autosave_v11.ehcfg",
             "EclipseHub/autosave_v12.ehcfg",
+            "EclipseHub/autosave_v13.ehcfg",
         }) do
             if isfile(old) then pcall(delfile, old) end
         end
@@ -1257,12 +1258,7 @@ function _ecfgApplyLoadedControls()
         task.delay(delayT, function()
             pcall(function() if UpdateWeather then UpdateWeather(Config.World.Weather or "None") end end)
             pcall(function()
-                if _ensureWCEffect and Config.WorldColor then
-                    local e = _ensureWCEffect()
-                    e.TintColor = Config.WorldColor.Color
-                    e.Saturation = Config.WorldColor.Intensity
-                    e.Enabled = Config.WorldColor.Enabled and true or false
-                end
+                if _applyWorldColorState then _applyWorldColorState() end
             end)
         end)
     end
@@ -1923,7 +1919,7 @@ local function _g3dSegment(i)
     return p
 end
 function _renderGrenade3D()
-    if not (Config and Config.GlobalEnable and Config.Grenade and Config.Grenade.Trajectory3D) then
+    if not (Config and Config.GlobalEnable and Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning)) then
         _g3dHide(); return
     end
     local hasPred = Config.Grenade.Prediction and GPD and GPD.ShowNow and GPD.CachedPts and #GPD.CachedPts >= 2
@@ -3112,7 +3108,8 @@ local function _destroyChamsFor(plr)
 end
 
 function updateChams()
-    local on = Config.GlobalEnable and Config.ESP.Enabled and Config.ESP.Chams and IsAlive()
+    -- Chams é o único ESP que permanece ativo em inimigos mesmo com o LocalPlayer morto/spectating.
+    local on = Config.GlobalEnable and Config.ESP.Enabled and Config.ESP.Chams
     if not on then
         for plr, _ in pairs(ChamsHL) do _destroyChamsFor(plr) end
         for plr, _ in pairs(ChamsLT) do _destroyChamsFor(plr) end
@@ -3148,21 +3145,9 @@ function updateChams()
             hl.FillTransparency    = baseFillT
             hl.OutlineTransparency = baseOutT
 
-            local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
-            if root then
-                local lt = ChamsLT[plr]
-                if not lt or not lt.Parent or lt.Parent ~= root then
-                    if lt then pcall(function() lt:Destroy() end) end
-                    lt = Instance.new("PointLight")
-                    lt.Name = "EclipseChamsLight"
-                    lt.Parent = root
-                    ChamsLT[plr] = lt
-                end
-                lt.Color      = Config.ESP.ChamsGlowColor or Config.ESP.ChamsColor
-                lt.Brightness = 2.0 + intensity * 4.5
-                lt.Range      = 8.0 + intensity * 10.0
-                lt.Shadows    = false
-            end
+            -- Chams glow light removed by request; keep any leftover instance destroyed.
+            local prevLt = ChamsLT[plr]
+            if prevLt then pcall(function() prevLt:Destroy() end); ChamsLT[plr] = nil end
         until true
     end
 
@@ -5143,7 +5128,7 @@ function attachAsset(folder, arm, model, name, offset, ref)
 
     
     
-    if name == "Glove" and target:IsA("BasePart") and Config.Skins.SelectedKnife ~= "Gut Knife" then
+    if name == "Glove" and target:IsA("BasePart") and Config.Skins.SelectedKnife ~= "Gut Knife" and Config.Skins.SelectedKnife ~= "Flip Knife" then
         local factor = 0.86
         _uniformScale(mesh, factor)
         local prev = SkinSystem.gloveScale or 1.0
@@ -6988,7 +6973,9 @@ function _hideAllHUDOverlays()
             if rec.iconLabelRef and rec.iconLabelRef.Parent then
                 rec.iconLabelRef.Visible = true
                 rec.iconLabelRef.ImageTransparency = rec.iconImageTransparency or 0
-                rec.iconLabelRef.ImageColor3 = _hudIconTint(rec)
+                -- Do NOT override ImageColor3 here: while spectating another player the game paints the
+                -- native icon with the spectated player's team color. Forcing our local tint would leak
+                -- LocalPlayer's UI color onto other players' HUD.
             end
             if rec.iconViewportRef and rec.iconViewportRef.Parent then
                 rec.iconViewportRef.Visible = true
@@ -7912,7 +7899,7 @@ Config.ESP.Skeleton = false
 
 EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=function(v) Config.ESP.Chams=v end })
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
-EspGB:AddSlider("ESP_ChamsIntensity", { Text="CHAMS INTENSITY", Default=1.0, Min=0.2, Max=3.0, Rounding=2, Compact=true,
+EspGB:AddSlider("ESP_ChamsIntensity", { Text="INTENSITY", Default=1.0, Min=0.2, Max=3.0, Rounding=2, Compact=true,
     Callback=function(v) Config.ESP.ChamsIntensity = v end })
 
 Config.ESP.Footstep = Config.ESP.Footstep or false
@@ -7945,9 +7932,8 @@ WorldEspGB:AddToggle("Grenade_Pred", { Text="GRENADE PREDICTION", Default=false,
     end
 end })
     :AddColorPicker("Grenade_LineCol", { Default=Config.Grenade.LineColor, Title="Trajectory color", Callback=function(c) Config.Grenade.LineColor=c end })
-WorldEspGB:AddToggle("Grenade_Traj3D", { Text="3D TRAJECTORY", Default=false, Callback=function(v)
-    Config.Grenade.Trajectory3D = v
-end })
+-- 3D Trajectory is now always embedded into Prediction/Warning; toggle removed.
+Config.Grenade.Trajectory3D = true
 
 PVGB = Tabs.Visuals:AddRightGroupbox("PLAYER VISUALS", "user")
 PVGB:AddToggle("PV_KillEffect", { Text="KILL EFFECT", Default=false,
@@ -8709,7 +8695,10 @@ function _ensureWCEffect()
     if _wcEffect and _wcEffect.Parent then return _wcEffect end
     _wcEffect = Instance.new("ColorCorrectionEffect")
     _wcEffect.Name = "EclipseWorldColor"
+    _wcEffect.TintColor = Color3.fromRGB(255,255,255)
     _wcEffect.Saturation = 0
+    _wcEffect.Contrast = 0
+    _wcEffect.Brightness = 0
     _wcEffect.Enabled = false
     _wcEffect.Parent = _Lighting
     return _wcEffect
@@ -8720,37 +8709,40 @@ Config.WorldColor = Config.WorldColor or { Enabled=false, Color=Color3.fromRGB(1
 if Config.WorldColor.Enabled == nil then Config.WorldColor.Enabled = false end
 if not Config.WorldColor.Color then Config.WorldColor.Color = Color3.fromRGB(120,180,255) end
 if type(Config.WorldColor.Intensity) ~= "number" then Config.WorldColor.Intensity = 0.4 end
-WorldColorGB:AddToggle("WorldColor_Toggle", { Text="WORLD COLOR", Default=Config.WorldColor.Enabled,
-    Callback=function(v) Config.WorldColor.Enabled=v; _ensureWCEffect().Enabled=v end })
-    :AddColorPicker("WorldColor_Col", { Default=Config.WorldColor.Color, Title="Map light color",
-        Callback=function(c)
-            Config.WorldColor.Color=c
-            local e=_ensureWCEffect()
-            e.TintColor = c
-        end })
-WorldColorGB:AddSlider("WorldColor_Intensity", { Text="INTENSITY", Default=Config.WorldColor.Intensity, Min=0, Max=2.5, Rounding=2,
-    Callback=function(v) Config.WorldColor.Intensity=v; local e=_ensureWCEffect(); e.Saturation=v; e.Contrast=v*0.35; e.Brightness=v*0.05 end })
-pcall(function()
+
+-- Intensity is a linear multiplier: 0 = original scene (no tint, no changes),
+-- higher = progressively stronger tint + contrast + saturation punch. Tint is
+-- blended from white -> user color by min(intensity,1), so intensity=0 leaves
+-- the map exactly like vanilla.
+function _applyWorldColorState()
     local e = _ensureWCEffect()
-    e.TintColor = Config.WorldColor.Color
-    e.Saturation = Config.WorldColor.Intensity
-    e.Contrast = Config.WorldColor.Intensity * 0.35
-    e.Brightness = Config.WorldColor.Intensity * 0.05
-    e.Enabled = Config.WorldColor.Enabled and true or false
-end)
+    local i = tonumber(Config.WorldColor.Intensity) or 0
+    if i < 0 then i = 0 end
+    local blend = math.min(i, 1)
+    local c = Config.WorldColor.Color or Color3.fromRGB(255,255,255)
+    local r = 1 + (c.R - 1) * blend
+    local g = 1 + (c.G - 1) * blend
+    local b = 1 + (c.B - 1) * blend
+    e.TintColor   = Color3.new(r, g, b)
+    e.Saturation  = i * 0.35
+    e.Contrast    = i * 0.35
+    e.Brightness  = i * 0.03
+    e.Enabled     = (Config.WorldColor.Enabled and i > 0.001) and true or false
+end
+
+WorldColorGB:AddToggle("WorldColor_Toggle", { Text="WORLD COLOR", Default=Config.WorldColor.Enabled,
+    Callback=function(v) Config.WorldColor.Enabled=v; _applyWorldColorState() end })
+    :AddColorPicker("WorldColor_Col", { Default=Config.WorldColor.Color, Title="Map light color",
+        Callback=function(c) Config.WorldColor.Color=c; _applyWorldColorState() end })
+WorldColorGB:AddSlider("WorldColor_Intensity", { Text="INTENSITY", Default=Config.WorldColor.Intensity, Min=0, Max=2.5, Rounding=2,
+    Callback=function(v) Config.WorldColor.Intensity=v; _applyWorldColorState() end })
+pcall(_applyWorldColorState)
 
 task.spawn(function()
     while scriptRunning do
         pcall(function()
-            if Config.WorldColor.Enabled then
-                local e = _ensureWCEffect()
-                if not e.Enabled then e.Enabled = true end
-                if e.TintColor ~= Config.WorldColor.Color then e.TintColor = Config.WorldColor.Color end
-                if math.abs(e.Saturation - Config.WorldColor.Intensity) > 0.005 then
-                    e.Saturation = Config.WorldColor.Intensity
-                    e.Contrast = Config.WorldColor.Intensity * 0.35
-                    e.Brightness = Config.WorldColor.Intensity * 0.05
-                end
+            if Config.WorldColor.Enabled and (tonumber(Config.WorldColor.Intensity) or 0) > 0.001 then
+                _applyWorldColorState()
             elseif _wcEffect and _wcEffect.Enabled then
                 _wcEffect.Enabled = false
             end
@@ -10799,7 +10791,7 @@ end)()
         light.Range = 22
         light.Parent = core
         _fxTween(light, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Brightness = 9 })
-        task.delay(0.22, function() pcall(function() _fxTween(light, TweenInfo.new(0.75, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Brightness = 0, Range = 4 }) end) end)
+        task.delay(0.22, function() pcall(function() _fxTween(light, TweenInfo.new(1.8, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), { Brightness = 0, Range = 2 }) end) end)
         _emitPremiumBurst(core, colorA, colorB, 110)
         _fxTween(core, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = Vector3.new(7,7,7), Transparency = 1 })
         if ghost then
@@ -10824,6 +10816,7 @@ end)()
             l2.Color = colorA
             l2.Brightness = 10
             l2.Range = 22
+            _fxTween(l2, TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), { Brightness = 0, Range = 2 })
             _fxTween(orb, TweenInfo.new(0.75, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Size = Vector3.new(4.6,4.6,4.6), Transparency = 0.35 })
             task.delay(0.75, function() pcall(function() _fxTween(orb, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Size = Vector3.new(0.1,0.1,0.1), Transparency = 1 }) end) end)
             for i = 1, 14 do
@@ -10844,6 +10837,7 @@ end)()
             fl.Color = colorB
             fl.Brightness = 14
             fl.Range = 28
+            _fxTween(fl, TweenInfo.new(1.4, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), { Brightness = 0, Range = 3 })
             _emitPremiumBurst(flash, colorB, colorA, 90)
             _fxTween(flash, TweenInfo.new(0.45, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Size = Vector3.new(9,9,9), Transparency = 1 })
         elseif etype == "Nova" then
