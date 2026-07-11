@@ -885,6 +885,7 @@ local Config = {
         WeaponGlow=false, WeaponGlowColor=Color3.fromRGB(170, 50, 255), WeaponGlowIntensity=1.0, WeaponGlowKnives=true,
         PlayerMaterial=false, PlayerMaterialType="Glass",
         PlayerMaterialColor=Color3.fromRGB(120, 200, 255), PlayerMaterialWeapons=false,
+        KillNameAnim=false, KillNameText="ECLIPSE",
     },
     UI = { PanelPositions = {} },
 }
@@ -4807,6 +4808,8 @@ function _TW_InitSkinChangerHooks()
         local Vm = _TW_SafeRequire(VM)
         if type(Sk) ~= "table" then return end
         _TW_HooksInstalled = true
+        _TW_Sk = Sk
+        _TW_Vm = Vm
         local function _TW_LPActive()
             -- Only override skins when LP is alive and NOT spectating.
             local lp = LocalPlayer or (Players and Players.LocalPlayer)
@@ -5408,7 +5411,7 @@ function playSound(folder, name)
     
     local variants = { folder }
     if folder == "Inspect" then variants = { "Inspect", "Inspect1", "FirstInspect", "Inspect_1" }
-    elseif folder == "SecondInspect" then variants = { "SecondInspect", "Inspect2", "SecondInspect_1" }
+    elseif folder == "SecondInspect" then variants = { "SecondInspect", "Inspect2", "SecondInspect_1", "Inspect_2", "InspectAlt", "SecondaryInspect", "Inspect", "Inspect1", "FirstInspect", "Inspect_1" }
     elseif folder == "HitOne" then variants = { "HitOne", "Hit1", "Hit_1" }
     elseif folder == "HitTwo" then variants = { "HitTwo", "Hit2", "Hit_2" }
     elseif folder == "HitThree" then variants = { "HitThree", "Hit3", "Hit_3" }
@@ -5566,12 +5569,28 @@ end
 function _spawnViewmodelCore(knife, me)
     local assets = ReplicatedSt:WaitForChild("Assets", 5); if not assets then return end
     local weapons = assets:WaitForChild("Weapons", 5); if not weapons then return end
-    local tpl = weapons:WaitForChild(Config.Skins.SelectedKnife, 5); if not tpl then return end
-    local off = (knives[Config.Skins.SelectedKnife] or knives["Butterfly Knife"]).Offset
-    local camTpl = tpl:WaitForChild("Camera", 5); if not camTpl then return end
+    local selKnife = Config.Skins.SelectedKnife
+    local tpl = weapons:FindFirstChild(selKnife)
+    local camTpl = tpl and tpl:FindFirstChild("Camera")
+    -- If the game does not ship a static Assets.Weapons.<Knife>.Camera
+    -- template for the selected knife (e.g. Karambit, M9, Flip, Gut,
+    -- Skeleton, Stiletto), build it live via the Skins library used by
+    -- the game itself. This is what Bankroll/Tripleware do.
+    if not camTpl and _TW_Sk and type(_TW_Sk.GetCameraModel) == "function" then
+        local sk = (Config.Skins.SelectedSkins and Config.Skins.SelectedSkins[selKnife]) or "Vanilla"
+        local ok, mdl = pcall(_TW_Sk.GetCameraModel, selKnife, sk)
+        if ok and mdl then camTpl = mdl end
+    end
+    -- Last-resort fallback so the loop stops thrashing.
+    if not camTpl then
+        tpl = weapons:WaitForChild("Butterfly Knife", 5)
+        camTpl = tpl and tpl:WaitForChild("Camera", 5)
+    end
+    if not camTpl then return end
+    local off = (knives[selKnife] or knives["Butterfly Knife"]).Offset
     pcall(_refreshCanonicalWeaponGloves)
     SkinSystem.vm = camTpl:Clone()
-    SkinSystem.vm.Name = Config.Skins.SelectedKnife; SkinSystem.vm.Parent = Camera
+    SkinSystem.vm.Name = selKnife; SkinSystem.vm.Parent = Camera
     disableCollisions(SkinSystem.vm); hideOriginalKnife(knife)
     SkinSystem.gloveScale = 1.0
     local gloveRefs = _collectGloveReferences(knife)
@@ -5590,18 +5609,32 @@ function _spawnViewmodelCore(knife, me)
     end
     pcall(_applyKnifeTune)
     local ac = SkinSystem.vm:FindFirstChildOfClass("AnimationController") or SkinSystem.vm:FindFirstChildOfClass("Animator")
-    if not ac then return end
+    if not ac then SkinSystem.spawned = true; return end
     SkinSystem.animator = ac:FindFirstChildWhichIsA("Animator") or ac
-    local animRoot = assets:WaitForChild("WeaponAnimations", 5); if not animRoot then return end
-    local knifeAnims = animRoot:WaitForChild(Config.Skins.SelectedKnife, 5); if not knifeAnims then return end
-    local af = knifeAnims:WaitForChild("CameraAnimations", 5); if not af then return end
+    local animRoot = assets:FindFirstChild("WeaponAnimations")
+    local knifeAnims = animRoot and (animRoot:FindFirstChild(selKnife) or animRoot:FindFirstChild("Butterfly Knife"))
+    local af = knifeAnims and knifeAnims:FindFirstChild("CameraAnimations")
+    if not af then
+        -- No anims available for this knife; still mark spawned so the
+        -- knife appears in-hand instead of forever retrying.
+        if not SkinSystem.vm.PrimaryPart then SkinSystem.vm.PrimaryPart = SkinSystem.vm:FindFirstChildWhichIsA("BasePart") end
+        SkinSystem.spawned = true
+        return
+    end
     SkinSystem.equipAnim      = _loadSkinAnimTrack(af, "Equip")
     SkinSystem.idleAnim       = _loadSkinAnimTrack(af, "Idle")
     SkinSystem.inspectAnim    = _loadSkinAnimTrack(af, "Inspect")
     do
         local _sel = Config.Skins.SelectedKnife
         local _hasAlt = (_sel == "Butterfly Knife") or (_sel == "Skeleton Knife") or (_sel == "Stiletto Knife")
-        SkinSystem.inspectAlt = _hasAlt and _loadSkinAnimTrack(af, "Inspect2") or nil
+        local _alt = nil
+        if _hasAlt then
+            for _, n in ipairs({ "Inspect2", "SecondInspect", "Inspect_2", "InspectAlt", "SecondaryInspect" }) do
+                _alt = _loadSkinAnimTrack(af, n)
+                if _alt then break end
+            end
+        end
+        SkinSystem.inspectAlt = _alt
     end
     SkinSystem._inspectFlip   = false
     SkinSystem.HeavySwingAnim = _loadSkinAnimTrack(af, "Heavy Swing")
@@ -5835,11 +5868,15 @@ function ApplyWeaponSkinsFast(model, skinName)
 end
 
 _TW_ApplyDebounce = false
+_TW_ApplyPending  = false
 function _TW_ApplyAllCameraSkins()
-    if _TW_ApplyDebounce then return end
+    if _TW_ApplyDebounce then
+        _TW_ApplyPending = true
+        return
+    end
     _TW_ApplyDebounce = true
     task.spawn(function()
-        task.wait(0.15)
+        task.wait(0.2)
         pcall(function()
             if Config.Skins.SkinChangerEnabled and IsAlive() then
                 pcall(_applySelectedGloveSkin)
@@ -5854,9 +5891,16 @@ function _TW_ApplyAllCameraSkins()
                         end
                     end
                 end
+                -- second pass to catch late-attached Glove parts on knife swap
+                task.wait(0.15)
+                pcall(_applySelectedGloveSkin)
             end
         end)
         _TW_ApplyDebounce = false
+        if _TW_ApplyPending then
+            _TW_ApplyPending = false
+            task.defer(_TW_ApplyAllCameraSkins)
+        end
     end)
 end
 
@@ -8398,6 +8442,12 @@ SafeAddDropdown(PVGB, "PV_KillEffectType", {
     Default=Config.Visuals.KillEffectType,
     Callback=function(v) Config.Visuals.KillEffectType=v end,
 })
+PVGB:AddToggle("PV_KillNameAnim", { Text="KILL NAME ANIM", Default=false,
+    Callback=function(v) Config.Visuals.KillNameAnim=v end })
+pcall(function()
+    PVGB:AddInput("PV_KillNameText", { Text="ANIM TEXT", Default=Config.Visuals.KillNameText, Placeholder="ECLIPSE",
+        Callback=function(v) if type(v)=="string" and v~="" then Config.Visuals.KillNameText=v end end })
+end)
 
 -- (WEAPON CHAMS moved into ESP groupbox above; no separate WEAPON groupbox.)
 
@@ -9341,6 +9391,7 @@ do
     end
 
     local function _tpDisable()
+        Config.Misc.ThirdPerson = false
         if _tpConn then pcall(function() _tpConn:Disconnect() end); _tpConn = nil end
         pcall(function()
             LocalPlayer.CameraMaxZoomDistance = _tpOldMax  or 0.5
@@ -9348,9 +9399,11 @@ do
             LocalPlayer.CameraMode            = _tpOldMode or Enum.CameraMode.Classic
         end)
         _tpOldMax, _tpOldMin, _tpOldMode = nil, nil, nil
+        pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
         pcall(_restoreVM)
-        task.delay(0.1, function() pcall(_restoreVM) end)
-        task.delay(0.4, function() pcall(_restoreVM) end)
+        pcall(_showLocalChar)
+        task.delay(0.1, function() pcall(_restoreVM); pcall(_showLocalChar) end)
+        task.delay(0.4, function() pcall(_restoreVM); pcall(_showLocalChar) end)
     end
 
 
@@ -11788,6 +11841,63 @@ end)()
         end
     end
 
+    local _killNameAnimBusy = false
+    local function _animateLocalKillName()
+        if _killNameAnimBusy then return end
+        if not Config.GlobalEnable or not Config.Visuals.KillNameAnim then return end
+        _killNameAnimBusy = true
+        task.spawn(function()
+            local finishAt = tick() + 2.5
+            local lpName = LocalPlayer and LocalPlayer.Name or ""
+            local seen = {}
+            local originals = {}
+            local function scanAndPatch()
+                local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+                if not pg then return end
+                for _, d in ipairs(pg:GetDescendants()) do
+                    if (d:IsA("TextLabel") or d:IsA("TextButton")) and not seen[d] then
+                        local txt = d.Text
+                        if type(txt) == "string" and lpName ~= "" and txt:find(lpName, 1, true) then
+                            seen[d] = true
+                            originals[d] = { Text=txt, RichText=d.RichText, Color=d.TextColor3 }
+                            pcall(function() d.RichText = true end)
+                            table.insert(originals, d)
+                        end
+                    end
+                end
+            end
+            scanAndPatch()
+            local target = tostring(Config.Visuals.KillNameText or "ECLIPSE")
+            local frame = 0
+            while tick() < finishAt do
+                scanAndPatch()
+                frame = frame + 1
+                local t = tick()
+                local hue = (t * 0.6) % 1
+                local col = Color3.fromHSV(hue, 1, 1)
+                local hex = string.format("#%02X%02X%02X", math.floor(col.R*255), math.floor(col.G*255), math.floor(col.B*255))
+                local revealChars = math.min(#target, math.floor((finishAt - tick() > 1.5) and ((tick() - (finishAt-2.5)) * (#target/1.0)) or #target))
+                if revealChars < 1 then revealChars = 1 end
+                local shown = target:sub(1, revealChars)
+                local pad = target:sub(revealChars+1):gsub(".", "_")
+                local rich = string.format('<b><font color="%s">%s</font></b><font color="#333333">%s</font>', hex, shown, pad)
+                for d, orig in pairs(originals) do
+                    if type(d) == "userdata" and d.Parent and orig then
+                        local newText = orig.Text:gsub(lpName, rich)
+                        pcall(function() d.Text = newText end)
+                    end
+                end
+                task.wait(0.05)
+            end
+            for d, orig in pairs(originals) do
+                if type(d) == "userdata" and d.Parent and orig then
+                    pcall(function() d.Text = orig.Text; d.RichText = orig.RichText end)
+                end
+            end
+            _killNameAnimBusy = false
+        end)
+    end
+
     pcall(function()
         local Rem = require(ReplicatedSt.Database.Security.Remotes)
         if Rem and Rem.UI and Rem.UI.UIPlayerKilled and Rem.UI.UIPlayerKilled.Listen then
@@ -11799,7 +11909,7 @@ end)()
                 _markLocalLethal(vplr)
                 local vchar = vplr.Character
                 if vchar then task.defer(function() pcall(_triggerLocalKillEffect, vplr, vchar) end) end
-
+                task.defer(_animateLocalKillName)
             end)
             if conn and typeof(conn)=="RBXScriptConnection" then table.insert(UnloadConnections, conn) end
         end
