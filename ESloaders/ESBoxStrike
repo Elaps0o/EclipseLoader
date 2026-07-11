@@ -908,8 +908,8 @@ local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
 _ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
-_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v14" .. _ECLIPSE_AUTOCONFIG_EXT
-_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v14" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v16" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v16" .. _ECLIPSE_AUTOCONFIG_EXT
 pcall(function()
     if type(delfile) == "function" and type(isfile) == "function" then
         for _, old in ipairs({
@@ -918,6 +918,8 @@ pcall(function()
             "EclipseHub/autosave_v11.ehcfg",
             "EclipseHub/autosave_v12.ehcfg",
             "EclipseHub/autosave_v13.ehcfg",
+            "EclipseHub/autosave_v14.ehcfg",
+            "EclipseHub/autosave_v15.ehcfg",
         }) do
             if isfile(old) then pcall(delfile, old) end
         end
@@ -955,10 +957,7 @@ end)
 if not _ECLIPSE_AUTOCONFIG_PATH then _ECLIPSE_AUTOCONFIG_PATH = "EclipseHub/eclipse.ehcfg" end
 
 
-local _ECLIPSE_TOGGLE_NORESTORE = {
-    Skin_Toggle = true,
-    Knife_Toggle = true,
-}
+local _ECLIPSE_TOGGLE_NORESTORE = {}
 
 function _ecfgForceSkinChangerInactive(clearRuntime)
     Config.Skins = Config.Skins or {}
@@ -1001,7 +1000,6 @@ end
 function _ecfgSanitizeEncodedPayload(encodedConfig, encodedControls)
     if type(encodedConfig) == "table" then
         encodedConfig.Skins = encodedConfig.Skins or {}
-        encodedConfig.Skins.SkinChangerEnabled = false
         encodedConfig.Skins.ViewModelEnabled = false
         encodedConfig.Skins.HUDIconOverrideConfirmed = false
         encodedConfig.Skins.HUDIconConfirmedKey = nil
@@ -1093,18 +1091,7 @@ function _ecfgLoadIntoConfig()
     local data = _ecfgReadRaw()
     if type(data) ~= "table" then return end
     _EclipseAutoConfig.loaded = data
-    _ecfgForceSkinChangerInactive(false)
 end
-
-
-task.defer(function()
-    pcall(function()
-        task.wait(0.25)
-        _ecfgForceSkinChangerInactive(true)
-        task.wait(0.75)
-        _ecfgForceSkinChangerInactive(true)
-    end)
-end)
 
 local function _ecfgIsKeyPicker(opt)
     if not opt then return false end
@@ -1204,7 +1191,6 @@ function _ecfgApplyLoadedControls()
     local cfg = _ecfgDecode(data.Config)
     if type(cfg) == "table" then
         _ecfgMerge(Config, cfg)
-        _ecfgForceSkinChangerInactive(false)
     end
     local controls = _ecfgDecode(data.Controls)
     _EclipseConfigLoading = true
@@ -1250,7 +1236,6 @@ function _ecfgApplyLoadedControls()
     end
 
     _EclipseConfigLoading = false
-    _ecfgForceSkinChangerInactive(true)
     pcall(function() if _syncKnifeLock then _syncKnifeLock() end end)
     pcall(function() if _postSkinConfigLoadApply then _postSkinConfigLoadApply() end end)
     pcall(function() if UpdateWeather then UpdateWeather(Config.World.Weather) end end)
@@ -1264,13 +1249,6 @@ function _ecfgApplyLoadedControls()
     end
     pcall(function() if _updateNoRecoil then _updateNoRecoil() end end)
     pcall(function() if EX and type(EX.rebuildKB) == "function" then EX.rebuildKB() end end)
-    for _, delayT in ipairs({0.2, 0.8, 1.8, 3.0}) do
-        task.delay(delayT, function()
-            if not (Config.Skins and Config.Skins.SkinChangerEnabled) then
-                pcall(_ecfgForceSkinChangerInactive, true)
-            end
-        end)
-    end
 end
 
 function _ecfgSnapshotJson()
@@ -4208,29 +4186,41 @@ end
 local lastTrigger = 0
 function updateTriggerBot()
     if not Config.GlobalEnable or not Config.TriggerBot.Enabled or not IsAlive() then return end
-    if tick() - lastTrigger < Config.TriggerBot.Delay then return end
+    local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
+    local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
+    if not isNoSpread and (tick() - lastTrigger) < delay then return end
     local fire = false
-    if Config.TriggerBot.Mode == "HitChance" then
+    if isNoSpread then
+        fire = true
+    elseif Config.TriggerBot.Mode == "HitChance" then
         if math.random(1,100) <= Config.TriggerBot.HitChance then fire = true end
-    elseif Config.TriggerBot.Mode == "NoSpread" then fire = true end
+    end
     if not fire then return end
 
     local vp = Camera.ViewportSize
-    local ap = Vector2.new(vp.X/2, vp.Y/2) + Vector2.new(
-        math.random(-Config.TriggerBot.Spread, Config.TriggerBot.Spread),
-        math.random(-Config.TriggerBot.Spread, Config.TriggerBot.Spread))
+    local sp = isNoSpread and 0 or (tonumber(Config.TriggerBot.Spread) or 0)
+    local ap = Vector2.new(vp.X/2, vp.Y/2)
+    if sp > 0 then ap = ap + Vector2.new(math.random(-sp, sp), math.random(-sp, sp)) end
     local ray = Camera:ViewportPointToRay(ap.X, ap.Y)
     local rp = RaycastParams.new(); rp.FilterType = Enum.RaycastFilterType.Exclude
     local ig = { Camera }; if LocalPlayer.Character then table.insert(ig, LocalPlayer.Character) end
     rp.FilterDescendantsInstances = ig
     local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
+    local function _doClick()
+        if isNoSpread then
+            if mouse1press then pcall(mouse1press) end
+            task.delay(0.02, function() if mouse1release then pcall(mouse1release) end end)
+        else
+            if mouse1click then pcall(mouse1click) end
+        end
+    end
     local function _tryFireOnPlayer(pl)
         if not pl then return false end
         if pl and not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl) then return false end
         local ch = pl.Character; if not ch then return false end
         local h = ch:FindFirstChildOfClass("Humanoid"); if not h or h.Health <= 0 then return false end
         lastTrigger = tick()
-        if mouse1click then mouse1click() end
+        _doClick()
         return true
     end
     if r and r.Instance then
@@ -4680,12 +4670,102 @@ knives = {
 CT_ONLY = {["USP-S"]=true,["Five-SeveN"]=true,["MP9"]=true,["FAMAS"]=true,["M4A1-S"]=true,["M4A4"]=true,["AUG"]=true}
 SHARED = {["P250"]=true,["Desert Eagle"]=true,["Dual Berettas"]=true,["Negev"]=true,["P90"]=true,["Nova"]=true,["XM1014"]=true,["AWP"]=true,["SSG 08"]=true}
 KNIVES = {["Karambit"]=true,["Butterfly Knife"]=true,["M9 Bayonet"]=true,["Flip Knife"]=true,["Gut Knife"]=true,["Stiletto Knife"]=true,["Skeleton Knife"]=true,["T Knife"]=true,["CT Knife"]=true}
-GLOVES = {["Sports Gloves"]=true}
+GLOVES = {
+    ["Sports Gloves"]=true, ["Driver Gloves"]=true, ["Hand Wraps"]=true,
+    ["Operator Gloves"]=true, ["Specialist Gloves"]=true, ["Moto Gloves"]=true,
+    ["Bloodhound Gloves"]=true, ["Broken Fang Gloves"]=true, ["Hydra Gloves"]=true,
+}
 IgnoreFolders = {["HE Grenade"]=true,["Incendiary Grenade"]=true,["Molotov"]=true,["Smoke Grenade"]=true,["Flashbang"]=true,["Decoy Grenade"]=true,["C4"]=true,["CT Glove"]=true,["T Glove"]=true}
 SkinsFolder = SkinsFolder
 pcall(function()
     SkinsFolder = ReplicatedSt:WaitForChild("Assets", 5):WaitForChild("Skins", 5)
 end)
+
+function _TW_CheckBaseKnife(w)
+    return w == "CT Knife" or w == "T Knife" or w == "Knife"
+end
+
+function _TW_SelectedGlove()
+    for gt in pairs(GLOVES) do
+        local s = Config.Skins.SelectedSkins[gt]
+        if s and s ~= "" and s ~= "Vanilla" and s ~= "Default" and s ~= "None" then
+            return gt, s
+        end
+    end
+    return nil, nil
+end
+
+function _TW_SafeRequire(m)
+    if not m then return nil end
+    local ok, res = pcall(require, m)
+    return ok and res or nil
+end
+
+function _TW_InitSkinChangerHooks()
+    if _TW_HooksInstalled then return end
+    pcall(function()
+        local SM = ReplicatedSt:FindFirstChild("Database") and ReplicatedSt.Database:FindFirstChild("Components") and ReplicatedSt.Database.Components:FindFirstChild("Libraries") and ReplicatedSt.Database.Components.Libraries:FindFirstChild("Skins")
+        local VM = ReplicatedSt:FindFirstChild("Classes") and ReplicatedSt.Classes:FindFirstChild("WeaponComponent") and ReplicatedSt.Classes.WeaponComponent:FindFirstChild("Classes") and ReplicatedSt.Classes.WeaponComponent.Classes:FindFirstChild("Viewmodel")
+        local Sk = _TW_SafeRequire(SM)
+        local Vm = _TW_SafeRequire(VM)
+        if type(Sk) ~= "table" then return end
+        _TW_HooksInstalled = true
+        if type(Sk.GetCameraModel) == "function" then
+            local oGCM = Sk.GetCameraModel
+            Sk.GetCameraModel = function(w, sk, ...)
+                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning and _TW_CheckBaseKnife(w) then
+                    local nk = Config.Skins.SelectedKnife
+                    local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
+                    local ok, result = pcall(oGCM, nk, ns, ...)
+                    if ok and result then return result end
+                end
+                local ok, result = pcall(oGCM, w, sk, ...)
+                if ok then return result end
+                return nil
+            end
+        end
+        local function _TW_IsLocal(...)
+            local lp = LocalPlayer or (Players and Players.LocalPlayer)
+            if not lp then return false end
+            local lpChar = lp.Character
+            for i = 1, select("#", ...) do
+                local a = select(i, ...)
+                if a == lp then return true end
+                if typeof(a) == "Instance" then
+                    if a == lpChar then return true end
+                    if lpChar and a:IsDescendantOf(lpChar) then return true end
+                    local ok, plr = pcall(function() return Players:GetPlayerFromCharacter(a) end)
+                    if ok and plr == lp then return true end
+                    if a.Parent == workspace.CurrentCamera then return true end
+                end
+            end
+            return false
+        end
+        -- NOTE: Sk.GetCharacterModel e Sk.GetGloves sao chamados pelo jogo
+        -- para renderizar o personagem/luva de TODOS os players no mundo.
+        -- Sem forma 100% confiavel de identificar o LocalPlayer via varargs,
+        -- hookar esses caminhos vaza a skin para todos. O viewmodel do
+        -- LocalPlayer ja e coberto por Sk.GetCameraModel + Vm.new
+        -- (naturalmente locais), entao esses dois hooks ficam desativados.
+        local _ = _TW_IsLocal -- reservado para uso futuro
+
+        if type(Vm) == "table" and type(Vm.new) == "function" then
+            local oVN = Vm.new
+            Vm.new = function(vc, w, sk, ...)
+                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning and _TW_CheckBaseKnife(w) then
+                    local nk = Config.Skins.SelectedKnife
+                    local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
+                    local ok, result = pcall(oVN, vc, nk, ns, ...)
+                    if ok and result then return result end
+                end
+                local ok, result = pcall(oVN, vc, w, sk, ...)
+                if ok then return result end
+                return nil
+            end
+        end
+    end)
+end
+pcall(_TW_InitSkinChangerHooks)
 
 function _sanitizeSkinConfig()
     if not knives[Config.Skins.SelectedKnife] or Config.Skins.SelectedKnife == "T Knife" or Config.Skins.SelectedKnife == "CT Knife" then
@@ -4757,60 +4837,52 @@ function hideOriginalKnife(k)
 end
 
 function _cacheSkinTarget(target)
-    if not target or SkinSystem._skinRestore[target] then return end
-    local rec = { SurfaceAppearances = {}, TextureID = nil, Color = nil, Material = nil }
-    if target:IsA("BasePart") then
-        rec.Color = target.Color; rec.Material = target.Material
-    end
-    if target:IsA("MeshPart") then rec.TextureID = target.TextureID end
-    for _, ch in ipairs(target:GetChildren()) do
-        if ch:IsA("SurfaceAppearance") then table.insert(rec.SurfaceAppearances, ch:Clone()) end
-    end
-    SkinSystem._skinRestore[target] = rec
+    -- Tripleware backend does not keep an Eclipse restore cache.
 end
 
 function _restoreAppliedSkins()
-    for target, rec in pairs(SkinSystem._skinRestore or {}) do
-        if target and target.Parent and rec then
-            pcall(function()
-                for _, ch in ipairs(target:GetChildren()) do
-                    if ch:IsA("SurfaceAppearance") then ch:Destroy() end
-                end
-                for _, old in ipairs(rec.SurfaceAppearances or {}) do
-                    local restored = old:Clone(); restored.Parent = target
-                end
-                if target:IsA("MeshPart") and rec.TextureID ~= nil then target.TextureID = rec.TextureID end
-                if target:IsA("BasePart") then
-                    if rec.Color then target.Color = rec.Color end
-                    if rec.Material then target.Material = rec.Material end
-                end
-                target:SetAttribute("EclipseSkinSource", nil)
-                target:SetAttribute("SkinApplied", nil)
-            end)
-        end
-    end
     SkinSystem._skinRestore = {}
 end
 
 function _restoreSkinTarget(target)
-    local rec = target and SkinSystem._skinRestore and SkinSystem._skinRestore[target]
-    if not (target and target.Parent and rec) then return end
+    if not (target and target.Parent) then return end
     pcall(function()
         for _, ch in ipairs(target:GetChildren()) do
-            if ch:IsA("SurfaceAppearance") then ch:Destroy() end
-        end
-        for _, old in ipairs(rec.SurfaceAppearances or {}) do
-            local restored = old:Clone(); restored.Parent = target
-        end
-        if target:IsA("MeshPart") and rec.TextureID ~= nil then target.TextureID = rec.TextureID end
-        if target:IsA("BasePart") then
-            if rec.Color then target.Color = rec.Color end
-            if rec.Material then target.Material = rec.Material end
+            if ch:IsA("SurfaceAppearance") and (ch:GetAttribute("EclipseSkinSurface") or ch:GetAttribute("EclipseSurfaceSource") or ch:GetAttribute("TriplewareSkinSurface")) then
+                ch:Destroy()
+            end
         end
         target:SetAttribute("EclipseSkinSource", nil)
         target:SetAttribute("SkinApplied", nil)
+        target:SetAttribute("TriplewareSkin", nil)
     end)
-    SkinSystem._skinRestore[target] = nil
+end
+
+function _purgeEclipseSkinMarks(root)
+    root = root or Camera or (workspace and workspace.CurrentCamera)
+    if not root then return end
+    pcall(function()
+        for _, obj in ipairs(root:GetChildren()) do
+            if obj.SetAttribute then
+                obj:SetAttribute("SkinApplied", nil)
+                obj:SetAttribute("EclipseSkinSource", nil)
+                obj:SetAttribute("TriplewareSkin", nil)
+            end
+            for _, d in ipairs(obj:GetDescendants()) do
+                pcall(function()
+                    if d:IsA("SurfaceAppearance") and (d:GetAttribute("EclipseSkinSurface") or d:GetAttribute("EclipseSurfaceSource") or d:GetAttribute("TriplewareSkinSurface")) then
+                        d:Destroy()
+                    elseif d:GetAttribute("EclipseAttached") then
+                        d:Destroy()
+                    else
+                        d:SetAttribute("SkinApplied", nil)
+                        d:SetAttribute("EclipseSkinSource", nil)
+                        d:SetAttribute("TriplewareSkin", nil)
+                    end
+                end)
+            end
+        end
+    end)
 end
 
 function _targetBelongsToWeapon(target, weapon)
@@ -4880,34 +4952,14 @@ function _clearSkinChangerRuntime()
     local function _sweep()
         pcall(_restoreAppliedSkins)
         pcall(_clearGloveSkinRuntime)
+        pcall(_purgeEclipseSkinMarks)
 
         
         
         SkinSystem.gloveScale = 1.0
 
         
-        pcall(function()
-            for _, obj in ipairs(Camera:GetChildren()) do
-                obj:SetAttribute("SkinApplied", nil)
-                obj:SetAttribute("EclipseSkinSource", nil)
-                for _, d in ipairs(obj:GetDescendants()) do
-                    local hadSkinSource = d:GetAttribute("EclipseSkinSource") ~= nil
-                    d:SetAttribute("SkinApplied", nil)
-                    if d:IsA("BasePart") and hadSkinSource then
-                        if d.Name == "Glove" then
-                            _restoreGloveSurfaceOnly(d)
-                        elseif SkinSystem._skinRestore and SkinSystem._skinRestore[d] then
-                            _restoreSkinTarget(d)
-                        else
-                            for _, ch in ipairs(d:GetChildren()) do
-                                if ch:IsA("SurfaceAppearance") and (ch:GetAttribute("EclipseSkinSurface") or ch:GetAttribute("EclipseSurfaceSource")) then pcall(function() ch:Destroy() end) end
-                            end
-                            d:SetAttribute("EclipseSkinSource", nil)
-                        end
-                    end
-                end
-            end
-        end)
+        pcall(_purgeEclipseSkinMarks)
 
         
 
@@ -5043,14 +5095,13 @@ function _applySkinSourceToPart(target, source)
     local sourceKey = nil
     pcall(function() sourceKey = source:GetFullName() end)
     if sourceKey and target:GetAttribute("EclipseSkinSource") == sourceKey then return end
-    _cacheSkinTarget(target)
     pcall(function()
         for _, ch in ipairs(target:GetChildren()) do
             if ch:IsA("SurfaceAppearance") then ch:Destroy() end
         end
         local sa = source:IsA("SurfaceAppearance") and source or source:FindFirstChildOfClass("SurfaceAppearance")
         if sa then
-            local c = sa:Clone(); c.Name = "SurfaceAppearance"; pcall(function() c:SetAttribute("EclipseSkinSurface", true); if sourceKey then c:SetAttribute("EclipseSurfaceSource", sourceKey) end end); c.Parent = target
+            local c = sa:Clone(); c.Name = "SurfaceAppearance"; pcall(function() c:SetAttribute("EclipseSkinSurface", true); c:SetAttribute("TriplewareSkinSurface", true); if sourceKey then c:SetAttribute("EclipseSurfaceSource", sourceKey) end end); c.Parent = target
         elseif source:IsA("BasePart") then
             target.Color = source.Color
             target.Material = source.Material
@@ -5062,30 +5113,8 @@ function _applySkinSourceToPart(target, source)
     end)
 end
 
-function _uniformScale(inst, factor)
-    if EX_LIMITED then return end
-    if not inst or not factor or factor == 1 then return end
-    local function _scaleBP(bp)
-        local visualMeshes = {}
-        for _, ch in ipairs(bp:GetChildren()) do
-            if ch:IsA("SpecialMesh") or ch:IsA("BlockMesh") or ch:IsA("CylinderMesh") then
-                table.insert(visualMeshes, ch)
-            end
-        end
-        if #visualMeshes > 0 then
-            for _, ch in ipairs(visualMeshes) do pcall(function() ch.Scale = ch.Scale * factor end) end
-        else
-            pcall(function() bp.Size = bp.Size * factor end)
-        end
-    end
-    if inst:IsA("BasePart") then
-        _scaleBP(inst)
-    elseif inst:IsA("Model") or inst:IsA("Folder") then
-        for _, d in ipairs(inst:GetDescendants()) do
-            if d:IsA("BasePart") then _scaleBP(d) end
-        end
-    end
-end
+-- Resize system removed (tripleware style: native sizes for weapons and knives).
+function _uniformScale() end
 
 function _findArmPart(root, armName)
     if not root then return nil end
@@ -5182,66 +5211,14 @@ function _canonicalGloveReference(side, ref)
     return nil -- no knife-specific fallback: knives must reuse the last gun glove exactly
 end
 
-function _fitGloveToReference(mesh, ref, maxScale)
-    if not (mesh and mesh:IsA("BasePart") and ref and ref.Size) then return false, nil end
-    local s, r = mesh.Size, ref.Size
-    if s.X <= 0 or s.Y <= 0 or s.Z <= 0 or r.X <= 0 or r.Y <= 0 or r.Z <= 0 then return false, nil end
-
-    local factor = math.min((r.X * 0.96) / s.X, (r.Y * 0.96) / s.Y, (r.Z * 0.96) / s.Z, maxScale or 0.96)
-    if factor > 0 and factor < 1 then _uniformScale(mesh, factor) end
-    return true, factor
-end
-
-GLOVE_KNIFE_MAX_SCALE = GLOVE_KNIFE_MAX_SCALE or 0.72
-GLOVE_KNIFE_FALLBACK_SCALE = GLOVE_KNIFE_FALLBACK_SCALE or 0.62
-
-function _isUsableGloveReference(ref, mesh)
-    if not (ref and ref.Size) then return false end
-    if ref.Part and mesh and ref.Part == mesh then return false end
-    local r = ref.Size
-    return r.X > 0 and r.Y > 0 and r.Z > 0
-end
-
-function _findExternalGloveReference(armName, mesh)
-    local found = nil
-    pcall(function()
-        for _, obj in ipairs(Camera:GetChildren()) do
-            if obj ~= SkinSystem.vm then
-                local ref = _gloveReferenceFrom(obj, armName)
-                if _isUsableGloveReference(ref, mesh) then
-                    found = ref
-                    break
-                end
-            end
-        end
-    end)
-    return found
-end
-
-function _computeKnifeGloveFactor(mesh, target, armName, ref)
-    if not (mesh and mesh:IsA("BasePart") and target and target:IsA("BasePart")) then return GLOVE_KNIFE_FALLBACK_SCALE end
-    if not _isUsableGloveReference(ref, mesh) then ref = _findExternalGloveReference(armName, mesh) end
-    local s = mesh.Size
-    local factor = nil
-    if _isUsableGloveReference(ref, mesh) and s.X > 0 and s.Y > 0 and s.Z > 0 then
-        local r = ref.Size
-        factor = math.min(
-            (r.X * 0.92) / s.X,
-            (r.Y * 0.92) / s.Y,
-            (r.Z * 0.92) / s.Z,
-            GLOVE_KNIFE_MAX_SCALE
-        )
-    end
-    if not factor or factor <= 0 then
-        local a = target.Size
-        if s.X > 0 and s.Z > 0 and a.X > 0 and a.Z > 0 then
-            factor = math.min((a.X * 1.18) / s.X, (a.Z * 1.18) / s.Z, GLOVE_KNIFE_FALLBACK_SCALE)
-        end
-    end
-    if not factor or factor < 0.45 or factor > GLOVE_KNIFE_MAX_SCALE then factor = GLOVE_KNIFE_FALLBACK_SCALE end
-    return factor
-end
-
+-- Resize / fit / knife-tune system fully removed (tripleware behaviour).
+-- All helpers below are inert stubs kept only to satisfy legacy call sites.
+function _fitGloveToReference() return true, 1.0 end
+GLOVE_KNIFE_MAX_SCALE = 1.0
+GLOVE_KNIFE_FALLBACK_SCALE = 1.0
+function _isUsableGloveReference() return false end
+function _findExternalGloveReference() return nil end
+function _computeKnifeGloveFactor() return 1.0 end
 function _copyGloveVisualFrom(src, dest)
     if not (src and dest) then return end
     pcall(function()
@@ -5263,26 +5240,13 @@ function _copyGloveVisualFrom(src, dest)
     end)
 end
 
+-- Tripleware behaviour: straight clone of the T/CT Glove (or Sleeve) template.
+-- NO resize, NO fit-to-reference, NO knife boost. Glove keeps its native size.
 function attachAsset(folder, arm, model, name, offset, ref)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
-
-    local base = src
-    local motorOffset = offset
-    local canonical = nil
-    if name == "Glove" then
-        canonical = _canonicalGloveReference(arm, ref)
-        if canonical and canonical.Part then
-            base = canonical.Part
-            motorOffset = canonical.Offset or offset
-        end
-    end
-
-    local mesh = base:Clone()
-    if name == "Glove" and canonical and canonical.Part then
-        pcall(function() _copyGloveVisualFrom(src, mesh) end)
-    end
+    local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
     pcall(function()
         mesh:SetAttribute("EclipseAttached", true)
@@ -5290,50 +5254,13 @@ function attachAsset(folder, arm, model, name, offset, ref)
         mesh:SetAttribute("SkinApplied", nil)
     end)
     if name == "Glove" then SkinSystem.gloveScale = 1.0 end
-
-    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=motorOffset; motor.Parent=target
+    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
-KNIFE_TUNE = KNIFE_TUNE or {
-    ["Butterfly Knife"] = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
-    ["Karambit"]        = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
-    ["Bayonet"]         = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
-    ["M9 Bayonet"]      = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
-    ["Huntsman Knife"]  = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
-    ["Flip Knife"]      = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
-    ["Gut Knife"]       = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
-    ["Skeleton Knife"]  = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
-    ["Stiletto Knife"]  = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
-}
-
-function _applyKnifeTune()
-    local vm = SkinSystem.vm; if not vm then return end
-    local sel = Config.Skins.SelectedKnife
-    local tune = KNIFE_TUNE[sel]; if not tune then return end
-    local scale = tune.Scale or 1.0
-    local offset = tune.Offset
-    if scale and scale > 0 and math.abs(scale - 1.0) > 0.001 then
-        for _, d in ipairs(vm:GetDescendants()) do
-            if d:IsA("BasePart") then
-                local n = d.Name
-                if n ~= "Glove" and n ~= "Sleeve" and n ~= "Left Arm" and n ~= "Right Arm" and d ~= vm.PrimaryPart then
-                    pcall(function() _uniformScale(d, scale) end)
-                end
-            end
-        end
-    end
-    if offset and offset ~= CFrame.new() then
-        for _, d in ipairs(vm:GetDescendants()) do
-            if d:IsA("Motor6D") and d.Part0 and (d.Part0.Name == "Right Arm" or d.Part0.Name == "Left Arm") then
-                local n = d.Part1 and d.Part1.Name or ""
-                if n ~= "Glove" and n ~= "Sleeve" then
-                    pcall(function() d.C0 = d.C0 * offset end)
-                end
-            end
-        end
-    end
-end
-
+KNIFE_TUNE = {}
+KNIFE_GLOVE_BOOST = {}
+function _applyKnifeGloveBoost() end
+function _applyKnifeTune() end
 function _pushKnifeOutward() end
 
 function playSound(folder, name)
@@ -5635,54 +5562,126 @@ function _applyGloveSideDirect(glove, side, gloveSkin, gsr, directSurfaceApps, s
     end
 end
 
-function _applyGloveSkinCore(gloveSkin)
-    local gf = SkinsFolder:FindFirstChild("Sports Gloves"); if not gf then return end
+-- Tripleware-style glove skin application.
+function _applyGloveSkinCore(gloveType, gloveSkin)
+    if not (Config.Skins and Config.Skins.SkinChangerEnabled) then return end
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local gf = SkinsFolder and SkinsFolder:FindFirstChild(gloveType)
+    if not gf then return end
     local gs = gf:FindFirstChild(gloveSkin)
-    local gsr = gs and gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Factory New")
-    if not gsr then return end
-    local sourceKey = "Sports Gloves/" .. tostring(gloveSkin)
-    _forEachCameraGlove(function(glove, side)
-        pcall(_applyGloveSideDirect, glove, side, gloveSkin, gsr, nil, sourceKey)
-    end)
-end
+    if not gs then return end
+    local cameraFolder = gs:FindFirstChild("Camera")
+    if not cameraFolder then return end
+    local factoryNew = cameraFolder:FindFirstChild("Factory New")
+    if not factoryNew then return end
 
-function _applySelectedGloveSkin()
-    if EX_LIMITED then return end
-    if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-    pcall(_refreshCanonicalWeaponGloves)
-    local gloveSkin = Config.Skins.SelectedSkins["Sports Gloves"]
-    if not gloveSkin or gloveSkin == "" or gloveSkin == "Vanilla" or gloveSkin == "Default" or gloveSkin == "None" then
-        pcall(_clearGloveSkinRuntime)
-        _forEachCameraGlove(function(glove) _restoreGloveSurfaceOnly(glove) end)
-        return
-    end
-    pcall(_applyGloveSkinCore, gloveSkin)
-end
-
-
-function _applyWeaponSkinCore(model, skin)
-    local sf = SkinsFolder:FindFirstChild(model.Name); if not sf then return end
-    local st = sf:FindFirstChild(skin)
-    local src = st and st:FindFirstChild("Camera") and st.Camera:FindFirstChild("Factory New")
-    if not src then return end
-    if not GLOVES[model.Name] then
-        local roots = {}
-        for _, ch in ipairs(model:GetChildren()) do
-            if ch.Name == "Weapon" or ch.Name:find("Weapon") then
-                table.insert(roots, ch)
-            end
-        end
-        if #roots == 0 then table.insert(roots, model) end
-        for _, wf in ipairs(roots) do
-            for _, p in ipairs(wf:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    local ns = src:FindFirstChild(p.Name)
-                    if ns then _applySkinSourceToPart(p, ns) end
+    local sourceKey = tostring(gloveType) .. "/" .. tostring(gloveSkin)
+    local applied = false
+    for _, am in ipairs(cam:GetChildren()) do
+        if am:IsA("Model") and (am.Name:match("Arms") or am:FindFirstChild("Right Arm") or am:FindFirstChild("Left Arm")) and not GLOVES[am.Name] then
+            local la = am:FindFirstChild("Left Arm")
+            local ra = am:FindFirstChild("Right Arm")
+            if la and ra then
+                local lg = la:FindFirstChild("Glove")
+                local rg = ra:FindFirstChild("Glove")
+                if lg and rg then
+                    if lg:GetAttribute("EclipseSkinSource") == sourceKey and rg:GetAttribute("EclipseSkinSource") == sourceKey then
+                        applied = true
+                    else
+                        for _, old in pairs(lg:GetChildren()) do if old:IsA("SurfaceAppearance") then old:Destroy() end end
+                        for _, old in pairs(rg:GetChildren()) do if old:IsA("SurfaceAppearance") then old:Destroy() end end
+                        for _, sa in pairs(factoryNew:GetChildren()) do
+                            if sa:IsA("SurfaceAppearance") then
+                                local lsa = sa:Clone(); pcall(function() lsa:SetAttribute("EclipseSkinSurface", true); lsa:SetAttribute("TriplewareSkinSurface", true); lsa:SetAttribute("EclipseSurfaceSource", sourceKey) end); lsa.Parent = lg
+                                local rsa = sa:Clone(); pcall(function() rsa:SetAttribute("EclipseSkinSurface", true); rsa:SetAttribute("TriplewareSkinSurface", true); rsa:SetAttribute("EclipseSurfaceSource", sourceKey) end); rsa.Parent = rg
+                            end
+                        end
+                        pcall(function() lg:SetAttribute("EclipseSkinSource", sourceKey); lg:SetAttribute("SkinApplied", gloveSkin) end)
+                        pcall(function() rg:SetAttribute("EclipseSkinSource", sourceKey); rg:SetAttribute("SkinApplied", gloveSkin) end)
+                        applied = true
+                    end
                 end
             end
         end
     end
-    model:SetAttribute("SkinApplied", skin)
+    return applied
+end
+
+function _forceRespawnCleanGloveApply()
+    if not (Config.Skins and Config.Skins.SkinChangerEnabled and IsAlive()) then return end
+    pcall(_clearGloveSkinRuntime)
+    for _, d in ipairs({0, 0.05, 0.15, 0.35, 0.7}) do
+        task.delay(d, function()
+            if Config.Skins and Config.Skins.SkinChangerEnabled and IsAlive() then
+                pcall(_applyGloveSkinCore, _TW_SelectedGlove())
+            end
+        end)
+    end
+end
+
+
+function _applySelectedGloveSkin()
+    if EX_LIMITED then return end
+    if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+    local activeType, activeSkin = nil, nil
+    for gt in pairs(GLOVES) do
+        local s = Config.Skins.SelectedSkins[gt]
+        if s and s ~= "" and s ~= "Vanilla" and s ~= "Default" and s ~= "None" then
+            activeType, activeSkin = gt, s; break
+        end
+    end
+    if not activeSkin then
+        pcall(_clearGloveSkinRuntime)
+        _forEachCameraGlove(function(glove) _restoreGloveSurfaceOnly(glove) end)
+        return
+    end
+    pcall(_applyGloveSkinCore, activeType, activeSkin)
+end
+
+
+-- Tripleware-style SA-first apply: itera os SurfaceAppearance da Factory New
+-- e para cada um localiza recursivamente a BasePart de mesmo nome no modelo.
+function _applyWeaponSkinCore(model, skin)
+    if not (model and model:IsA("Model") and SkinsFolder) then return end
+    local own = model.Name
+    local ewn = own
+    local canApply = false
+    if own == "CT Knife" or own == "T Knife" or own == "Knife" then
+        if SkinSystem and SkinSystem.scriptRunning then ewn = Config.Skins.SelectedKnife; canApply = true end
+    else
+        if Config.Skins.SkinChangerEnabled then canApply = true end
+    end
+    if GLOVES[ewn] or not canApply then return end
+    local sel = skin or Config.Skins.SelectedSkins[ewn]
+    if not sel or sel == "Vanilla" or sel == "Default" or sel == "None" then return end
+    if model:GetAttribute("TriplewareSkin") == tostring(ewn) .. ":" .. tostring(sel) then return end
+
+    local wsf = SkinsFolder:FindFirstChild(ewn)
+    if not wsf then return end
+    local sf = wsf:FindFirstChild(sel)
+    if not sf then return end
+    local cf = sf:FindFirstChild("Camera")
+    if not cf then return end
+    local fn = cf:FindFirstChild("Factory New")
+    if not fn then return end
+
+    for _, sa in pairs(fn:GetChildren()) do
+        if sa:IsA("SurfaceAppearance") then
+            local pt = model:FindFirstChild(sa.Name, true)
+            if pt and pt:IsA("BasePart") then
+                for _, old in pairs(pt:GetChildren()) do
+                    if old:IsA("SurfaceAppearance") then old:Destroy() end
+                end
+                local c = sa:Clone()
+                pcall(function() c:SetAttribute("EclipseSkinSurface", true); c:SetAttribute("TriplewareSkinSurface", true); c:SetAttribute("EclipseSurfaceSource", tostring(ewn) .. "/" .. tostring(sel)) end)
+                c.Parent = pt
+            end
+        end
+    end
+
+    model:SetAttribute("TriplewareSkin", tostring(ewn) .. ":" .. tostring(sel))
+    model:SetAttribute("SkinApplied", sel)
 end
 
 function applyWeaponSkin(model, forcedSkin)
@@ -5695,6 +5694,33 @@ end
 function ApplyWeaponSkinsFast(model, skinName)
     applyWeaponSkin(model, skinName)
 end
+
+_TW_ApplyDebounce = false
+function _TW_ApplyAllCameraSkins()
+    if _TW_ApplyDebounce then return end
+    _TW_ApplyDebounce = true
+    task.spawn(function()
+        task.wait(0.15)
+        pcall(function()
+            if Config.Skins.SkinChangerEnabled and IsAlive() then
+                pcall(_applySelectedGloveSkin)
+                local cam = workspace.CurrentCamera
+                if cam then
+                    for _, obj in ipairs(cam:GetChildren()) do
+                        if obj:IsA("Model") then
+                            local sn = Config.Skins.SelectedSkins[obj.Name]
+                            if sn and sn ~= "" and sn ~= "Vanilla" and sn ~= "Default" and sn ~= "None" then
+                                pcall(applyWeaponSkin, obj, sn)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        _TW_ApplyDebounce = false
+    end)
+end
+
 
 HUDSkin = { slots=setmetatable({}, {__mode="k"}), infoCache={}, espIconCache={}, viewer=nil, debugPrints=0, teamIconTints={}, teamNameTints={} }
 
@@ -7480,7 +7506,13 @@ function _postSkinConfigLoadApply()
     _sanitizeSkinConfig()
     _syncKnifeLock()
     pcall(function()
+        SkinSystem.scriptRunning = Config.Skins.SkinChangerEnabled and true or false
+        if Config.Skins.SkinChangerEnabled then pcall(_TW_InitSkinChangerHooks) end
+    end)
+    pcall(function()
         if Config.Skins.SkinChangerEnabled and IsAlive() then
+            pcall(_forceRespawnCleanGloveApply)
+            pcall(_TW_ApplyAllCameraSkins)
             for _, obj in pairs(Camera:GetChildren()) do
                 local skinName = Config.Skins.SelectedSkins[obj.Name]
                 if skinName then applyWeaponSkin(obj) end
@@ -7489,7 +7521,11 @@ function _postSkinConfigLoadApply()
     end)
     for _, delayT in ipairs({0, 0.2, 0.6, 1.2, 2.0}) do
         task.delay(delayT, function()
-            if Config.Skins.SkinChangerEnabled and IsAlive() then pcall(_applyHUDKnife, true) end
+            if Config.Skins.SkinChangerEnabled and IsAlive() then
+                pcall(_forceRespawnCleanGloveApply)
+                pcall(_TW_ApplyAllCameraSkins)
+                pcall(_applyHUDKnife, true)
+            end
         end)
     end
 end
@@ -7664,6 +7700,7 @@ function CleanupScript()
     pcall(removeViewmodel)
     pcall(_clearSkinChangerRuntime)
     pcall(_clearGloveSkinRuntime)
+    pcall(_purgeEclipseSkinMarks)
     pcall(_nameOverlayRestoreAll)
     pcall(_restoreHUDKnife)
     pcall(_restoreKnifeModuleOverride)
@@ -7690,6 +7727,7 @@ function CleanupScript()
         task.delay(d, function()
             pcall(_clearSkinChangerRuntime)
             pcall(_clearGloveSkinRuntime)
+            pcall(_purgeEclipseSkinMarks)
             pcall(_nameOverlayRestoreAll)
             pcall(_restoreHUDKnife)
             pcall(_purgeAllHUDOverlays)
@@ -7697,7 +7735,7 @@ function CleanupScript()
             pcall(function()
                 for _, obj in ipairs(Camera:GetChildren()) do
                     for _, ch in ipairs(obj:GetDescendants()) do
-                        if ch:IsA("SurfaceAppearance") and (ch:GetAttribute("EclipseSkinSurface") or ch:GetAttribute("EclipseSurfaceSource")) then
+                            if ch:IsA("SurfaceAppearance") and (ch:GetAttribute("EclipseSkinSurface") or ch:GetAttribute("EclipseSurfaceSource") or ch:GetAttribute("TriplewareSkinSurface")) then
                             pcall(function() ch:Destroy() end)
                         elseif ch:GetAttribute("EclipseAttached") then
                             pcall(function() ch:Destroy() end)
@@ -7983,12 +8021,7 @@ task.spawn(function()
         task.wait(1.2)
         if Config.Skins.SkinChangerEnabled and IsAlive() then
             pcall(_applySelectedGloveSkin)
-            for _, obj in Camera:GetChildren() do
-                local skinName = Config.Skins.SelectedSkins[obj.Name]
-                if skinName and obj:GetAttribute("SkinApplied") ~= skinName then
-                    applyWeaponSkin(obj)
-                end
-            end
+            pcall(_TW_ApplyAllCameraSkins)
         end
     end
 end)
@@ -8006,12 +8039,18 @@ end)
 connectSignal(Camera.ChildAdded:Connect(function(obj)
     if not scriptRunning then return end
     if Config.Skins.SkinChangerEnabled and IsAlive() then
-        local skinName = Config.Skins.SelectedSkins[obj.Name]
         task.wait(0.1)
         pcall(_applySelectedGloveSkin)
-        if skinName then applyWeaponSkin(obj) end
+        pcall(_TW_ApplyAllCameraSkins)
     end
 end))
+connectSignal(Camera.DescendantAdded:Connect(function(d)
+    if not scriptRunning then return end
+    if d:IsA("BasePart") and Config.Skins.SkinChangerEnabled and IsAlive() then
+        pcall(_TW_ApplyAllCameraSkins)
+    end
+end))
+
 
 ;(function() 
 
@@ -8110,7 +8149,7 @@ trigSpread  = TrigGB:AddSlider("Trigger_Spread",    { Text="SPREAD",       Defau
 
 function updateTriggerModeUI(m)
     if m == "NoSpread" then
-        Config.TriggerBot.HitChance=100; Config.TriggerBot.Spread=0; Config.TriggerBot.Delay=0.01
+        Config.TriggerBot.HitChance=100; Config.TriggerBot.Spread=0; Config.TriggerBot.Delay=0
         if trigHC     then trigHC:SetValue(100);      trigHC:SetDisabled(true) end
         if trigSpread then trigSpread:SetValue(0);    trigSpread:SetDisabled(true) end
         if trigDelay  then trigDelay:SetValue(0.01);  trigDelay:SetDisabled(true) end
@@ -8350,6 +8389,7 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
             SkinSystem.scriptRunning=false; removeViewmodel()
             pcall(_clearSkinChangerRuntime)
             pcall(_clearGloveSkinRuntime)
+            pcall(_purgeEclipseSkinMarks)
             pcall(_restoreHUDKnife)
             pcall(_nameOverlayRestoreAll)
             pcall(_restoreKnifeModuleOverride)
@@ -8367,7 +8407,7 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
                     pcall(function()
                         for _, obj in ipairs(Camera:GetChildren()) do
                             for _, ch in ipairs(obj:GetDescendants()) do
-                                if ch:IsA("SurfaceAppearance") and (ch:GetAttribute("EclipseSkinSurface") or ch:GetAttribute("EclipseSurfaceSource")) then
+                                if ch:IsA("SurfaceAppearance") and (ch:GetAttribute("EclipseSkinSurface") or ch:GetAttribute("EclipseSurfaceSource") or ch:GetAttribute("TriplewareSkinSurface")) then
                                     pcall(function() ch:Destroy() end)
                                 elseif ch:GetAttribute("EclipseAttached") then
                                     pcall(function() ch:Destroy() end)
@@ -8382,6 +8422,7 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
             -- ele, applyHUDKnife / name-overlay / spawnViewmodel abortam nos gates
             -- `SkinSystem.scriptRunning`, entao nome+skin nao voltam a aplicar.
             SkinSystem.scriptRunning = true
+            pcall(_TW_InitSkinChangerHooks)
             
             if SkinSystem.spawned then
                 pcall(removeViewmodel)
@@ -8833,6 +8874,20 @@ function CreateSkinDropdown(weapon, section)
             end
             if v == "Vanilla" or v == "None" then Config.Skins.SelectedSkins[weapon] = nil else Config.Skins.SelectedSkins[weapon] = v end
 
+            if GLOVES[weapon] and v ~= "Vanilla" and v ~= "None" then
+                for gt in pairs(GLOVES) do
+                    if gt ~= weapon and Config.Skins.SelectedSkins[gt] then
+                        Config.Skins.SelectedSkins[gt] = nil
+                        pcall(function()
+                            if Options and Options["Skin_"..gt] then
+                                Options["Skin_"..gt]:SetValue("Vanilla")
+                            end
+                        end)
+                    end
+                end
+                pcall(_clearGloveSkinRuntime)
+            end
+
             
             if _EclipseConfigLoading then return end
             if v == "Vanilla" or v == "None" then
@@ -8851,32 +8906,15 @@ function CreateSkinDropdown(weapon, section)
 
             pcall(SetSkinPreview, weapon)
             if Config.Skins.SkinChangerEnabled and IsAlive() then
-                for _, obj in ipairs(Camera:GetChildren()) do
-                    if obj.Name == weapon then pcall(applyWeaponSkin, obj, v) end
-                end
+                if GLOVES[weapon] or weapon == "Sports Gloves" then pcall(_forceRespawnCleanGloveApply) end
+                pcall(_TW_ApplyAllCameraSkins)
+                pcall(_applySelectedGloveSkin)
                 pcall(_applyHUDKnife, true)
             end
 
             
             if (GLOVES[weapon] or weapon == "Sports Gloves") and IsAlive() then
-                pcall(function()
-                    local sf = SkinsFolder:FindFirstChild(weapon); if not sf then return end
-                    local st = sf:FindFirstChild(v)
-                    local src = st and st:FindFirstChild("Camera") and st.Camera:FindFirstChild("Factory New")
-                    if not src then return end
-                    for _, obj in ipairs(Camera:GetChildren()) do
-                        for _, side in ipairs({"Left Arm","Right Arm"}) do
-                            local arm = obj:FindFirstChild(side)
-                            local s   = src:FindFirstChild(side)
-                            if arm and s then
-                                local gm = arm:FindFirstChild("Glove")
-                                if gm and _applySkinSourceToPart then
-                                    _applySkinSourceToPart(gm, s)
-                                end
-                            end
-                        end
-                    end
-                end)
+                pcall(_applySelectedGloveSkin)
             end
         end })
     
@@ -11283,6 +11321,11 @@ end)()
         if plr == LocalPlayer then return end
         if plr and IsAlly and IsAlly(plr) then return end
         if not _localIsAlive() then return end
+        -- Igual ao eclipse.lua: só aplica quando a kill/dano recente foi do LocalPlayer.
+        local lethalAt = plr and (_lastLethalByLP[plr] or _lastLethalByUid[tonumber(plr.UserId)])
+        local dmgAt    = plr and _lastDamagedByLP[plr]
+        local ok = (lethalAt and (tick()-lethalAt) < 5.0) or (dmgAt and (tick()-dmgAt) < 1.5)
+        if not ok then return end
         if not _killCharVisible(char) then return end
         _killEffectDone[char] = tick()
         if Config.GlobalEnable and Config.Visuals.KillEffect then
