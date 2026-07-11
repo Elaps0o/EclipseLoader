@@ -4216,6 +4216,18 @@ local lastTrigger = 0
 function updateTriggerBot()
     if not Config.GlobalEnable or not Config.TriggerBot.Enabled or not IsAlive() then return end
     if tick() - lastTrigger < Config.TriggerBot.Delay then return end
+    -- If SilentAim is on, TriggerBot auto-fires silent shots at any visible
+    -- enemy (no aim required, no manual click).
+    if Config.Misc and Config.Misc.SilentAim and _G.EclipseSilent then
+        local S = _G.EclipseSilent
+        if S.alive and not S.alive() then return end
+        local w = S.findWeapon and S.findWeapon()
+        if w and not (S.isMelee and S.isMelee(w)) and (rawget(w, "Rounds") or 0) > 0 then
+            local tgt = S.pick and S.pick()
+            if tgt then lastTrigger = tick(); pcall(S.send, tgt, w) end
+        end
+        return
+    end
     local fire = false
     if Config.TriggerBot.Mode == "HitChance" then
         if math.random(1,100) <= Config.TriggerBot.HitChance then fire = true end
@@ -8172,6 +8184,12 @@ AimGB:AddToggle("Pen_CH_Toggle", { Text="PENETRATION CROSSHAIR", Default=false,
     :AddColorPicker("Pen_CH_NoCol", { Default=Config.Crosshair.PenetrationNoColor, Title="Penetration NO color",
         Callback=function(c) Config.Crosshair.PenetrationNoColor=c end })
 
+Config.Misc.SilentAim = false
+AimGB:AddToggle("Aim_Silent", { Text="SILENT AIM", Default=false,
+    Callback=function(v) Config.Misc.SilentAim = (v and not (EX_BLOCK_SILENT)) end })
+
+
+
 
 
 TrigGB = Tabs.Aim:AddLeftGroupbox("TRIGGER BOT")
@@ -8221,6 +8239,12 @@ EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=f
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
 EspGB:AddSlider("ESP_ChamsIntensity", { Text="INTENSITY", Default=1.0, Min=0.2, Max=3.0, Rounding=2, Compact=true,
     Callback=function(v) Config.ESP.ChamsIntensity = v end })
+Config.Misc.WeaponHighlightIntensity = 3.0 -- built-in max
+EspGB:AddToggle("ESP_WeaponChams", { Text="WEAPON CHAMS", Default=false,
+    Callback=function(v) Config.Misc.WeaponHighlight = v end })
+    :AddColorPicker("ESP_WeaponChamsCol", { Default=Config.Misc.WeaponHighlightColor or Color3.fromRGB(0,170,255),
+        Title="Weapon Chams color",
+        Callback=function(c) Config.Misc.WeaponHighlightColor = c end })
 
 Config.ESP.Footstep = Config.ESP.Footstep or false
 Config.ESP.FootstepColor = Config.ESP.FootstepColor or Color3.fromRGB(150, 95, 255)
@@ -8264,16 +8288,7 @@ SafeAddDropdown(PVGB, "PV_KillEffectType", {
     Callback=function(v) Config.Visuals.KillEffectType=v end,
 })
 
--- WEAPON VISUALS (viewmodel highlight)
-local WVGB = Tabs.Visuals:AddRightGroupbox("WEAPON", "aperture")
-WVGB:AddToggle("WV_Highlight", { Text = "WEAPON HIGHLIGHT", Default = false,
-    Callback = function(v) Config.Misc.WeaponHighlight = v end })
-    :AddColorPicker("WV_HighlightColor", { Default = Config.Misc.WeaponHighlightColor or Color3.fromRGB(0,170,255),
-        Title = "Highlight Color",
-        Callback = function(c) Config.Misc.WeaponHighlightColor = c end })
-WVGB:AddSlider("WV_HighlightIntensity", { Text = "INTENSITY", Default = Config.Misc.WeaponHighlightIntensity or 1.0,
-    Min = 0.1, Max = 3.0, Rounding = 2, Suffix = "",
-    Callback = function(v) Config.Misc.WeaponHighlightIntensity = v end })
+-- (WEAPON CHAMS moved into ESP groupbox above; no separate WEAPON groupbox.)
 
 
 
@@ -9132,7 +9147,7 @@ do
         Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 600
         Config.Misc.AutoSkillPart     = Config.Misc.AutoSkillPart or "Head"
         SafeAddDropdown(ASGB, "AS_Part", {
-            Text = "TARGET PART",
+            Text = "",
             Values = { "Head", "Neck", "Chest", "Torso", "Legs" },
             Default = Config.Misc.AutoSkillPart,
             Callback = function(v) Config.Misc.AutoSkillPart = v end,
@@ -9140,13 +9155,9 @@ do
         ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 600, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillDistance = v end })
         -- AutoSkill segue o TEAM CHECK global (Config.TeamCheck); sem toggle próprio.
-        -- SILENT AIM (uses AutoSkill packet infra, single bullet per click)
+        -- SILENT AIM lives in Aim tab now; keep config keys here for shared state.
         Config.Misc.SilentAim         = false
-        Config.Misc.SilentAimTrigger  = false
-        ASGB:AddToggle("AS_Silent", { Text = "SILENT AIM", Default = false,
-            Callback = function(v) Config.Misc.SilentAim = (v and not EX_BLOCK_SILENT) end })
-        ASGB:AddToggle("AS_SilentTrigger", { Text = "SILENT + TRIGGERBOT (shoot where you look)", Default = false,
-            Callback = function(v) Config.Misc.SilentAimTrigger = v end })
+        Config.Misc.SilentAimTrigger  = false -- deprecated, kept for compat
         Config.Misc.AutoSkillChangeWeapon = false
     end
     Config.Misc.AutoSkillRespectBuy = true
@@ -9154,46 +9165,46 @@ do
 end
 
 -- ============================================================
--- THIRD PERSON (Misc) — persistent camera offset with keybind
+-- THIRD PERSON — toggle + keybind. Uses game's CameraController
+-- when available, falls back to CameraMode/MaxZoom for stability.
 -- ============================================================
 do
     local TPGB = Tabs.Misc:AddLeftGroupbox("THIRD PERSON")
     TPGB:AddToggle("TP_Enable", { Text = "THIRD PERSON", Default = false,
         Callback = function(v) Config.Misc.ThirdPerson = v end })
         :AddKeyPicker("TP_Key", { Default = "T", SyncToggleState = true, Mode = "Toggle", Text = "Third Person" })
-    TPGB:AddSlider("TP_OffX", { Text = "OFFSET X", Default = Config.Misc.ThirdPersonOffsetX or 2.5,
-        Min = -10, Max = 10, Rounding = 2, Suffix = "",
-        Callback = function(v) Config.Misc.ThirdPersonOffsetX = v end })
-    TPGB:AddSlider("TP_OffY", { Text = "OFFSET Y", Default = Config.Misc.ThirdPersonOffsetY or 1.0,
-        Min = -5, Max = 10, Rounding = 2, Suffix = "",
-        Callback = function(v) Config.Misc.ThirdPersonOffsetY = v end })
 
-    -- Persistent enforcement via Humanoid.CameraOffset (cheap, no CFrame fight)
+    local _RS = game:GetService("ReplicatedStorage")
+    local _CamCtrl = nil
+    pcall(function()
+        local c = _RS:FindFirstChild("Controllers")
+        if c and c:FindFirstChild("CameraController") then
+            _CamCtrl = require(c.CameraController)
+        end
+    end)
+
+    local _appliedTP = nil
     task.spawn(function()
         while scriptRunning do
-            task.wait(0.1)
-            local ok = pcall(function()
-                local ch = LocalPlayer.Character
-                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-                if not hum then return end
-                if Config.Misc.ThirdPerson then
-                    hum.CameraOffset = Vector3.new(
-                        Config.Misc.ThirdPersonOffsetX or 2.5,
-                        Config.Misc.ThirdPersonOffsetY or 1.0,
-                        0
-                    )
-                    pcall(function()
-                        LocalPlayer.CameraMode = Enum.CameraMode.Classic
-                        LocalPlayer.CameraMaxZoomDistance = 12
-                        LocalPlayer.CameraMinZoomDistance = 8
-                    end)
-                else
-                    if hum.CameraOffset.Magnitude > 0.01 then
-                        hum.CameraOffset = Vector3.new(0,0,0)
+            task.wait(0.5)
+            local want = Config.Misc.ThirdPerson and true or false
+            if want ~= _appliedTP then
+                _appliedTP = want
+                pcall(function()
+                    if _CamCtrl and _CamCtrl.setPerspective then
+                        _CamCtrl.setPerspective(not want, false)
                     end
-                end
-            end)
-            if not ok then task.wait(0.5) end
+                    if want then
+                        LocalPlayer.CameraMode = Enum.CameraMode.Classic
+                        LocalPlayer.CameraMaxZoomDistance = 10
+                        LocalPlayer.CameraMinZoomDistance = 8
+                    else
+                        LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+                        LocalPlayer.CameraMaxZoomDistance = 0.5
+                        LocalPlayer.CameraMinZoomDistance = 0.5
+                    end
+                end)
+            end
         end
     end)
 end
@@ -11070,7 +11081,47 @@ end)()
         Config.Sounds.Enabled = false
         EX.restoreAllSounds()
     end })
+
+    -- CUSTOM KILL SOUND — plays when LocalPlayer confirms a kill.
+    Config.Sounds.KillSoundEnabled = false
+    Config.Sounds.KillSoundPreset  = "Bell"
+    Config.Sounds.KillSoundVolume  = 1.0
+    local KILL_PRESETS = {
+        ["Bell"]     = "rbxassetid://3120909354",
+        ["Headshot"] = "rbxassetid://5153845714",
+        ["Boom"]     = "rbxassetid://6091847368",
+        ["Anime Hit"]= "rbxassetid://5153734734",
+        ["Kov Fire"] = "",
+    }
+    local KillGB = Tabs.Misc:AddRightGroupbox("CUSTOM KILL SOUND")
+    KillGB:AddToggle("KS_Enable", { Text="KILL SOUND", Default=false,
+        Callback=function(v) Config.Sounds.KillSoundEnabled = v end })
+    SafeAddDropdown(KillGB, "KS_Preset", {
+        Text="Preset", Values={"Bell","Headshot","Boom","Anime Hit","Kov Fire"},
+        Default=Config.Sounds.KillSoundPreset,
+        Callback=function(v) Config.Sounds.KillSoundPreset = v end,
+    })
+    KillGB:AddSlider("KS_Vol", { Text="Volume", Default=1.0, Min=0, Max=3, Rounding=2,
+        Callback=function(v) Config.Sounds.KillSoundVolume = v end })
+
+    _G.EclipsePlayKillSound = function()
+        if not Config.Sounds.KillSoundEnabled then return end
+        local id = KILL_PRESETS[Config.Sounds.KillSoundPreset]
+        if Config.Sounds.KillSoundPreset == "Kov Fire" then
+            local kf = EX and EX.SoundPresets and EX.SoundPresets["Kov Fire"]
+            if kf and kf.Id and kf.Id ~= "" then id = kf.Id end
+        end
+        if not id or id == "" then return end
+        local s = Instance.new("Sound")
+        s.SoundId = id
+        s.Volume = Config.Sounds.KillSoundVolume or 1.0
+        s.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or workspace
+        s:Play()
+        game:GetService("Debris"):AddItem(s, 5)
+    end
     end -- EX_LIMITED gate
+
+
 
     task.delay(2, function() pcall(EX.rebuildKB) end)
 
@@ -11597,8 +11648,10 @@ end)()
                 if not vplr or vplr == LocalPlayer then return end
                 if IsAlly and IsAlly(vplr) then return end
                 _markLocalLethal(vplr)
+                if _G.EclipsePlayKillSound then pcall(_G.EclipsePlayKillSound) end
                 local vchar = vplr.Character
                 if vchar then task.defer(function() pcall(_triggerLocalKillEffect, vplr, vchar) end) end
+
             end)
             if conn and typeof(conn)=="RBXScriptConnection" then table.insert(UnloadConnections, conn) end
         end
@@ -12450,25 +12503,19 @@ end)
         local w = _findEquippedWeapon(); if not w then return end
         if _isMeleeWeapon(w) then return end
         if (rawget(w, "Rounds") or 0) <= 0 then return end
-        -- SilentAimTrigger: fire straight ahead if crosshair is on enemy
-        if Config.Misc.SilentAimTrigger then
-            local origin = Camera.CFrame.Position
-            local look   = Camera.CFrame.LookVector
-            local rp = RaycastParams.new()
-            rp.FilterType = Enum.RaycastFilterType.Exclude
-            rp.FilterDescendantsInstances = { LocalPlayer.Character, Camera }
-            local r = workspace:Raycast(origin, look * 1000, rp)
-            if r and r.Instance then
-                local model = r.Instance:FindFirstAncestorOfClass("Model")
-                local pl = model and Players:GetPlayerFromCharacter(model)
-                if pl and pl ~= LocalPlayer then _sendKill(pl, w) end
-            end
-            return
-        end
         local target = _pickSilentTarget()
         if target then _sendKill(target, w) end
     end)
 
+    -- Expose for TriggerBot integration: when SilentAim + TriggerBot are both
+    -- on, TriggerBot auto-fires silent shots at any visible enemy (no aim).
+    _G.EclipseSilent = {
+        pick = _pickSilentTarget,
+        send = _sendKill,
+        alive = _alive,
+        findWeapon = _findEquippedWeapon,
+        isMelee = _isMeleeWeapon,
+    }
 end)()
 
 -- ============================================================
@@ -12485,40 +12532,48 @@ do
         :AddColorPicker("BT_Color", { Default = Config.Visuals.BulletTracerColor, Title = "Tracer color",
             Callback = function(c) Config.Visuals.BulletTracerColor = c end })
 
+    local Debris = game:GetService("Debris")
     local function _spawnTracer(fromPos, toPos)
         if not fromPos or not toPos then return end
         local dist = (toPos - fromPos).Magnitude
         if dist < 0.1 or dist > 2000 then return end
+        local col = Config.Visuals.BulletTracerColor or Color3.fromRGB(0,200,255)
         local p = Instance.new("Part")
         p.Name = "EclipseTracer"
-        p.Anchored = true
-        p.CanCollide = false
-        p.CanQuery = false
-        p.CanTouch = false
+        p.Anchored = true; p.CanCollide = false; p.CanQuery = false; p.CanTouch = false
         p.Material = Enum.Material.Neon
-        p.Color = Config.Visuals.BulletTracerColor or Color3.fromRGB(0,200,255)
-        p.Size = Vector3.new(0.08, 0.08, dist)
+        p.Color = col
+        p.Size = Vector3.new(0.18, 0.18, dist)
         p.CFrame = CFrame.new((fromPos + toPos) / 2, toPos)
-        p.Transparency = 0.2
+        p.Transparency = 0.1
         p.Parent = workspace
+        -- glow via PointLights on each end (like grenade prediction line)
+        local a0 = Instance.new("Attachment", p); a0.Position = Vector3.new(0,0,-dist/2)
+        local a1 = Instance.new("Attachment", p); a1.Position = Vector3.new(0,0, dist/2)
+        local l0 = Instance.new("PointLight", p); l0.Color = col; l0.Brightness = 3; l0.Range = 8
+        -- Beam for extra bloom
+        local b = Instance.new("Beam"); b.Attachment0 = a0; b.Attachment1 = a1
+        b.Color = ColorSequence.new(col); b.LightEmission = 1; b.LightInfluence = 0
+        b.Width0 = 0.35; b.Width1 = 0.35; b.FaceCamera = true
+        b.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.2),
+            NumberSequenceKeypoint.new(1, 0.2),
+        })
+        b.Parent = p
+        Debris:AddItem(p, 0.5)
         task.spawn(function()
-            for i = 1, 12 do
-                p.Transparency = 0.2 + (i / 12) * 0.8
+            for i = 1, 10 do
+                p.Transparency = 0.1 + (i/10) * 0.9
+                b.Transparency = NumberSequence.new(0.2 + (i/10) * 0.8)
                 task.wait(0.025)
             end
-            p:Destroy()
         end)
     end
 
-    -- Hook the game's ShootWeapon remote outbound so any bullet (real or silent)
-    -- draws a tracer using the same Bullets[].Origin → last Hits[].Position.
+    -- Install ShootWeapon hook once (no wait loop that swallows early shots).
     task.spawn(function()
-        while scriptRunning do
-            task.wait(0.5)
-            if Config.Visuals.BulletTracer then break end
-        end
-        local mt = pcall and getrawmetatable and getrawmetatable(game)
-        if not mt then return end
+        local ok, mt = pcall(getrawmetatable, game)
+        if not ok or not mt then return end
         local old = mt.__namecall
         if not old then return end
         pcall(function() setreadonly(mt, false) end)
@@ -12526,8 +12581,7 @@ do
             local method = getnamecallmethod and getnamecallmethod() or ""
             if Config.Visuals.BulletTracer and (method == "FireServer" or method == "InvokeServer")
                and typeof(self) == "Instance" and self.Name == "ShootWeapon" then
-                local args = { ... }
-                local pkt = args[1]
+                local pkt = (select(1, ...))
                 if type(pkt) == "table" and type(pkt.Bullets) == "table" then
                     for _, b in ipairs(pkt.Bullets) do
                         local hits = b.Hits
@@ -12544,83 +12598,7 @@ do
     end)
 end
 
--- ============================================================
--- FPS BOOST — strips textures / decals / lighting effects while
--- preserving collisions and hitboxes.
--- ============================================================
-do
-    local Lighting = game:GetService("Lighting")
-    Config.Misc.FPSBoost = false
-    local _origLighting = {
-        Brightness = Lighting.Brightness,
-        GlobalShadows = Lighting.GlobalShadows,
-        FogEnd = Lighting.FogEnd,
-        EnvironmentDiffuseScale = Lighting.EnvironmentDiffuseScale,
-        EnvironmentSpecularScale = Lighting.EnvironmentSpecularScale,
-    }
-    local _stripped = false
-    local FBGB = Tabs.Misc:AddRightGroupbox("FPS BOOST", "gauge")
-    FBGB:AddToggle("FB_Enable", { Text = "FPS BOOST", Default = false,
-        Callback = function(v) Config.Misc.FPSBoost = v end })
-
-    local function _strip(inst)
-        if inst:IsA("BasePart") then
-            pcall(function()
-                inst.Material = Enum.Material.SmoothPlastic
-                inst.Reflectance = 0
-            end)
-        elseif inst:IsA("Decal") or inst:IsA("Texture") then
-            pcall(function() inst.Transparency = 1 end)
-        elseif inst:IsA("ParticleEmitter") or inst:IsA("Trail")
-            or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") then
-            pcall(function() inst.Enabled = false end)
-        elseif inst:IsA("SurfaceAppearance") then
-            pcall(function() inst:Destroy() end)
-        elseif inst:IsA("PostEffect") or inst:IsA("BlurEffect")
-            or inst:IsA("BloomEffect") or inst:IsA("SunRaysEffect")
-            or inst:IsA("ColorCorrectionEffect") or inst:IsA("DepthOfFieldEffect") then
-            pcall(function() inst.Enabled = false end)
-        end
-    end
-
-    local function _applyStrip()
-        if _stripped then return end
-        _stripped = true
-        for _, d in ipairs(workspace:GetDescendants()) do _strip(d) end
-        for _, d in ipairs(Lighting:GetDescendants()) do _strip(d) end
-        pcall(function()
-            Lighting.GlobalShadows = false
-            Lighting.FogEnd = 1e6
-            Lighting.EnvironmentDiffuseScale = 0
-            Lighting.EnvironmentSpecularScale = 0
-            Lighting.Brightness = 2
-        end)
-        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-    end
-
-    local function _restore()
-        if not _stripped then return end
-        _stripped = false
-        pcall(function()
-            Lighting.Brightness = _origLighting.Brightness
-            Lighting.GlobalShadows = _origLighting.GlobalShadows
-            Lighting.FogEnd = _origLighting.FogEnd
-            Lighting.EnvironmentDiffuseScale = _origLighting.EnvironmentDiffuseScale
-            Lighting.EnvironmentSpecularScale = _origLighting.EnvironmentSpecularScale
-        end)
-        settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
-    end
-
-    workspace.DescendantAdded:Connect(function(d)
-        if Config.Misc.FPSBoost then task.defer(_strip, d) end
-    end)
-    task.spawn(function()
-        while scriptRunning do
-            task.wait(0.5)
-            if Config.Misc.FPSBoost then _applyStrip() else _restore() end
-        end
-    end)
-end
+-- FPS BOOST removed by user request.
 
 
 
