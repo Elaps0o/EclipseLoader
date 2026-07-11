@@ -5166,20 +5166,47 @@ function attachAsset(folder, arm, model, name, offset, ref)
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
-function _pushKnifeOutward()
+KNIFE_TUNE = KNIFE_TUNE or {
+    ["Butterfly Knife"] = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
+    ["Karambit"]        = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
+    ["Bayonet"]         = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
+    ["M9 Bayonet"]      = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
+    ["Huntsman Knife"]  = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
+    ["Flip Knife"]      = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
+    ["Gut Knife"]       = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
+    ["Skeleton Knife"]  = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
+    ["Stiletto Knife"]  = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
+}
+
+function _applyKnifeTune()
     local vm = SkinSystem.vm; if not vm then return end
-    local scale = SkinSystem.gloveScale or 1.0
-    if scale >= 0.98 then return end
-    local push = math.min((1 - scale) * 0.45, 0.18)  
-    for _, d in ipairs(vm:GetDescendants()) do
-        if d:IsA("Motor6D") and d.Part0 and (d.Part0.Name == "Right Arm" or d.Part0.Name == "Left Arm") then
-            local n = d.Part1 and d.Part1.Name or ""
-            if n ~= "Glove" and n ~= "Sleeve" then
-                pcall(function() d.C0 = d.C0 * CFrame.new(0, push * 0.5, -push) end)
+    local sel = Config.Skins.SelectedKnife
+    local tune = KNIFE_TUNE[sel]; if not tune then return end
+    local scale = tune.Scale or 1.0
+    local offset = tune.Offset
+    if scale and scale > 0 and math.abs(scale - 1.0) > 0.001 then
+        for _, d in ipairs(vm:GetDescendants()) do
+            if d:IsA("BasePart") then
+                local n = d.Name
+                if n ~= "Glove" and n ~= "Sleeve" and n ~= "Left Arm" and n ~= "Right Arm" and d ~= vm.PrimaryPart then
+                    pcall(function() _uniformScale(d, scale) end)
+                end
+            end
+        end
+    end
+    if offset and offset ~= CFrame.new() then
+        for _, d in ipairs(vm:GetDescendants()) do
+            if d:IsA("Motor6D") and d.Part0 and (d.Part0.Name == "Right Arm" or d.Part0.Name == "Left Arm") then
+                local n = d.Part1 and d.Part1.Name or ""
+                if n ~= "Glove" and n ~= "Sleeve" then
+                    pcall(function() d.C0 = d.C0 * offset end)
+                end
             end
         end
     end
 end
+
+function _pushKnifeOutward() end
 
 function playSound(folder, name)
     local s
@@ -5359,7 +5386,7 @@ function _spawnViewmodelCore(knife, me)
         attachAsset(sl,"Right Arm","Right Arm","Sleeve",CFrame.new(0,0,0.5))
         attachAsset(g,"Right Arm","Right Arm","Glove",CFrame.new(0,0,-1.5), gloveRefs and gloveRefs["Right Arm"])
     end
-    pcall(_pushKnifeOutward)
+    pcall(_applyKnifeTune)
     local ac = SkinSystem.vm:FindFirstChildOfClass("AnimationController") or SkinSystem.vm:FindFirstChildOfClass("Animator")
     if not ac then return end
     SkinSystem.animator = ac:FindFirstChildWhichIsA("Animator") or ac
