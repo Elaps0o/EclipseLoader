@@ -4710,10 +4710,25 @@ function _TW_InitSkinChangerHooks()
         local Vm = _TW_SafeRequire(VM)
         if type(Sk) ~= "table" then return end
         _TW_HooksInstalled = true
+        local function _TW_LPActive()
+            local lp = LocalPlayer or (Players and Players.LocalPlayer)
+            if not lp then return false end
+            local ch = lp.Character
+            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+            if not (hum and hum.Health > 0) then return false end
+            local cam = workspace.CurrentCamera
+            local subj = cam and cam.CameraSubject
+            if subj then
+                local subjPar = (subj:IsA("Humanoid") and subj.Parent) or (subj:IsA("BasePart") and subj.Parent) or nil
+                if subjPar and subjPar ~= ch then return false end
+            end
+            return true
+        end
         if type(Sk.GetCameraModel) == "function" then
             local oGCM = Sk.GetCameraModel
             Sk.GetCameraModel = function(w, sk, ...)
-                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning and _TW_CheckBaseKnife(w) then
+                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning
+                    and _TW_LPActive() and _TW_CheckBaseKnife(w) then
                     local nk = Config.Skins.SelectedKnife
                     local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
                     local ok, result = pcall(oGCM, nk, ns, ...)
@@ -4724,39 +4739,11 @@ function _TW_InitSkinChangerHooks()
                 return nil
             end
         end
-        if type(Sk.GetCharacterModel) == "function" then
-            local oGChM = Sk.GetCharacterModel
-            Sk.GetCharacterModel = function(w, sk, ...)
-                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning and _TW_CheckBaseKnife(w) then
-                    local nk = Config.Skins.SelectedKnife
-                    local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
-                    local ok, result = pcall(oGChM, nk, ns, ...)
-                    if ok and result then return result end
-                end
-                local ok, result = pcall(oGChM, w, sk, ...)
-                if ok then return result end
-                return nil
-            end
-        end
-        if type(Sk.GetGloves) == "function" then
-            local oGG = Sk.GetGloves
-            Sk.GetGloves = function(g, sk, ...)
-                local gm, gs = _TW_SelectedGlove()
-                if Config.Skins.SkinChangerEnabled and gm and gs then
-                    local ok, result = pcall(oGG, gm, gs, ...)
-                    if ok and result then return result end
-                end
-                local ok, result = pcall(oGG, g, sk, ...)
-                if ok then return result end
-                return nil
-            end
-        end
-
-
         if type(Vm) == "table" and type(Vm.new) == "function" then
             local oVN = Vm.new
             Vm.new = function(vc, w, sk, ...)
-                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning and _TW_CheckBaseKnife(w) then
+                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning
+                    and _TW_LPActive() and _TW_CheckBaseKnife(w) then
                     local nk = Config.Skins.SelectedKnife
                     local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
                     local ok, result = pcall(oVN, vc, nk, ns, ...)
@@ -4770,6 +4757,7 @@ function _TW_InitSkinChangerHooks()
     end)
 end
 pcall(_TW_InitSkinChangerHooks)
+
 
 function _sanitizeSkinConfig()
     if not knives[Config.Skins.SelectedKnife] or Config.Skins.SelectedKnife == "T Knife" or Config.Skins.SelectedKnife == "CT Knife" then
@@ -4862,33 +4850,6 @@ function _restoreSkinTarget(target)
     end)
 end
 
-function _purgeEclipseSkinMarks(root)
-    root = root or Camera or (workspace and workspace.CurrentCamera)
-    if not root then return end
-    pcall(function()
-        for _, obj in ipairs(root:GetChildren()) do
-            if obj.SetAttribute then
-                obj:SetAttribute("SkinApplied", nil)
-                obj:SetAttribute("EclipseSkinSource", nil)
-                obj:SetAttribute("TriplewareSkin", nil)
-            end
-            for _, d in ipairs(obj:GetDescendants()) do
-                pcall(function()
-                    if d:IsA("SurfaceAppearance") and (d:GetAttribute("EclipseSkinSurface") or d:GetAttribute("EclipseSurfaceSource") or d:GetAttribute("TriplewareSkinSurface")) then
-                        d:Destroy()
-                    elseif d:GetAttribute("EclipseAttached") then
-                        d:Destroy()
-                    else
-                        d:SetAttribute("SkinApplied", nil)
-                        d:SetAttribute("EclipseSkinSource", nil)
-                        d:SetAttribute("TriplewareSkin", nil)
-                    end
-                end)
-            end
-        end
-    end)
-end
-
 function _targetBelongsToWeapon(target, weapon)
     if not (target and weapon) then return false end
     if GLOVES[weapon] or tostring(weapon) == "Sports Gloves" then
@@ -4956,14 +4917,34 @@ function _clearSkinChangerRuntime()
     local function _sweep()
         pcall(_restoreAppliedSkins)
         pcall(_clearGloveSkinRuntime)
-        pcall(_purgeEclipseSkinMarks)
 
         
         
         SkinSystem.gloveScale = 1.0
 
         
-        pcall(_purgeEclipseSkinMarks)
+        pcall(function()
+            for _, obj in ipairs(Camera:GetChildren()) do
+                obj:SetAttribute("SkinApplied", nil)
+                obj:SetAttribute("EclipseSkinSource", nil)
+                for _, d in ipairs(obj:GetDescendants()) do
+                    local hadSkinSource = d:GetAttribute("EclipseSkinSource") ~= nil
+                    d:SetAttribute("SkinApplied", nil)
+                    if d:IsA("BasePart") and hadSkinSource then
+                        if d.Name == "Glove" then
+                            _restoreGloveSurfaceOnly(d)
+                        elseif SkinSystem._skinRestore and SkinSystem._skinRestore[d] then
+                            _restoreSkinTarget(d)
+                        else
+                            for _, ch in ipairs(d:GetChildren()) do
+                                if ch:IsA("SurfaceAppearance") and (ch:GetAttribute("EclipseSkinSurface") or ch:GetAttribute("EclipseSurfaceSource")) then pcall(function() ch:Destroy() end) end
+                            end
+                            d:SetAttribute("EclipseSkinSource", nil)
+                        end
+                    end
+                end
+            end
+        end)
 
         
 
@@ -5336,6 +5317,9 @@ function handleAction(actionName, state)
         if not track then return Enum.ContextActionResult.Pass end
         SkinSystem.inspecting = true
         if SkinSystem.idleAnim then pcall(function() SkinSystem.idleAnim:Stop() end) end
+        pcall(function() track:Stop(); track.TimePosition = 0 end)
+        pcall(function() if SkinSystem.inspectAnim and SkinSystem.inspectAnim ~= track then SkinSystem.inspectAnim:Stop() end end)
+        pcall(function() if SkinSystem.inspectAlt and SkinSystem.inspectAlt ~= track then SkinSystem.inspectAlt:Stop() end end)
         local ok = pcall(function() track:Play() end)
         if ok then
             if hasAltInspect and useAlt then
@@ -5359,8 +5343,10 @@ function handleAction(actionName, state)
             local myTok = SkinSystem._inspectToken
             _signalOnce(track.Stopped, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
             local dur = (track.Length and track.Length > 0) and track.Length or 2.2
-            task.delay(dur + 1.2, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
+            task.delay(dur + 0.6, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
+            task.delay(6, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
         else SkinSystem.inspecting = false end
+
 
 
     elseif actionName == "AttackKnifeAction" or actionName == "RightAttackKnifeAction" then
@@ -5583,7 +5569,7 @@ function _applyGloveSkinCore(gloveType, gloveSkin)
     local sourceKey = tostring(gloveType) .. "/" .. tostring(gloveSkin)
     local applied = false
     for _, am in ipairs(cam:GetChildren()) do
-        if am:IsA("Model") and (am.Name:match("Arms") or am:FindFirstChild("Right Arm") or am:FindFirstChild("Left Arm")) and not GLOVES[am.Name] then
+        if am:IsA("Model") and (am.Name:match("Arms") or am:FindFirstChild("Right Arm") or am:FindFirstChild("Left Arm")) then
             local la = am:FindFirstChild("Left Arm")
             local ra = am:FindFirstChild("Right Arm")
             if la and ra then
@@ -5611,9 +5597,6 @@ function _applyGloveSkinCore(gloveType, gloveSkin)
     end
     return applied
 end
-
-
-
 
 
 function _applySelectedGloveSkin()
@@ -7501,13 +7484,7 @@ function _postSkinConfigLoadApply()
     _sanitizeSkinConfig()
     _syncKnifeLock()
     pcall(function()
-        SkinSystem.scriptRunning = Config.Skins.SkinChangerEnabled and true or false
-        if Config.Skins.SkinChangerEnabled then pcall(_TW_InitSkinChangerHooks) end
-    end)
-    pcall(function()
         if Config.Skins.SkinChangerEnabled and IsAlive() then
-            pcall(_applySelectedGloveSkin)
-            pcall(_TW_ApplyAllCameraSkins)
             for _, obj in pairs(Camera:GetChildren()) do
                 local skinName = Config.Skins.SelectedSkins[obj.Name]
                 if skinName then applyWeaponSkin(obj) end
@@ -7516,11 +7493,7 @@ function _postSkinConfigLoadApply()
     end)
     for _, delayT in ipairs({0, 0.2, 0.6, 1.2, 2.0}) do
         task.delay(delayT, function()
-            if Config.Skins.SkinChangerEnabled and IsAlive() then
-                pcall(_applySelectedGloveSkin)
-                pcall(_TW_ApplyAllCameraSkins)
-                pcall(_applyHUDKnife, true)
-            end
+            if Config.Skins.SkinChangerEnabled and IsAlive() then pcall(_applyHUDKnife, true) end
         end)
     end
 end
@@ -7687,6 +7660,7 @@ function _hudKnifeHardCycle()
         end)
     end
 end
+
 
 function CleanupScript()
     scriptRunning = false
