@@ -861,7 +861,7 @@ local Config = {
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=8, AutoSkillSmooth=0.15, AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=25, AutoSkillSmooth=0.05, AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={} },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -1922,6 +1922,8 @@ function _renderGrenade3D()
     if not (Config and Config.GlobalEnable and Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning)) then
         _g3dHide(); return
     end
+    -- Prediction: only while charging the throw (GPD.ShowNow), so it disappears
+    -- as soon as the grenade leaves the hand. Warning: reflects enemy grenades.
     local hasPred = Config.Grenade.Prediction and GPD and GPD.ShowNow and GPD.CachedPts and #GPD.CachedPts >= 2
     local warnPts = (Config.Grenade.Warning and ECLIPSE and ECLIPSE._warn3DPts) or nil
     local hasWarn = warnPts and #warnPts >= 2
@@ -3019,6 +3021,10 @@ function _espProcessPlayer(plr, myRoot, center)
 
     
     local vs = Camera.ViewportSize
+    -- When the player is scoped (very low FOV), the projected box can grow much
+    -- larger than the viewport for close targets; using a wide tolerance based
+    -- on the current FOV avoids the flicker where the ESP hides/reappears each
+    -- frame while aiming down the sniper scope.
     local scopedNow = (isScopedIn and isScopedIn()) or (Camera.FieldOfView and Camera.FieldOfView < (OriginalCameraFOV or 70) * 0.6)
     local margin = scopedNow and math.max(vs.X, vs.Y) or 6
     if L < -margin or R > vs.X + margin or T < -margin or B > vs.Y + margin then
@@ -3160,6 +3166,7 @@ function updateChams()
         until true
     end
 
+    -- garbage collect for gone players
     for plr, _ in pairs(ChamsHL) do
         if not plr.Parent then _destroyChamsFor(plr) end
     end
@@ -4378,11 +4385,14 @@ function updateMovement()
     local root = char:FindFirstChild("HumanoidRootPart")
     if not hum or not root then return end
 
+    -- Robust ground detection (used by bhop and autostrafer)
     local hstate    = hum:GetState()
     local floorMat  = hum.FloorMaterial
     local stateGrounded = (floorMat ~= nil and floorMat ~= Enum.Material.Air)
                       and hstate ~= Enum.HumanoidStateType.Jumping
                       and hstate ~= Enum.HumanoidStateType.Freefall
+    -- Extra safety: physical downward raycast so landing on top of props
+    -- (crates, boxes) counts as grounded even if humanoid state lags.
     local rayGrounded = false
     do
         _ASF_RAY.FilterDescendantsInstances = { char }
@@ -4401,7 +4411,8 @@ function updateMovement()
         end
     end
 
-    -- AUTO STRAFER: only while Space is held AND truly airborne (fixes float+fire bug).
+    -- AUTO STRAFER: only actives while Space is held AND player is truly in air.
+    -- Skips ascent (Y>0.5) to avoid launching off object edges ("float+shoot" bug).
     do
         if not _ASF then _ASF = { chain = 0, wasAir = false, curSpd = 0 } end
 
@@ -4454,6 +4465,7 @@ function updateMovement()
             end
         end
     end
+
 
 
 
@@ -4680,7 +4692,11 @@ knives = {
 CT_ONLY = {["USP-S"]=true,["Five-SeveN"]=true,["MP9"]=true,["FAMAS"]=true,["M4A1-S"]=true,["M4A4"]=true,["AUG"]=true}
 SHARED = {["P250"]=true,["Desert Eagle"]=true,["Dual Berettas"]=true,["Negev"]=true,["P90"]=true,["Nova"]=true,["XM1014"]=true,["AWP"]=true,["SSG 08"]=true}
 KNIVES = {["Karambit"]=true,["Butterfly Knife"]=true,["M9 Bayonet"]=true,["Flip Knife"]=true,["Gut Knife"]=true,["Stiletto Knife"]=true,["Skeleton Knife"]=true,["T Knife"]=true,["CT Knife"]=true}
-GLOVES = {["Sports Gloves"]=true}
+GLOVES = {
+    ["Sports Gloves"]=true, ["Driver Gloves"]=true, ["Hand Wraps"]=true,
+    ["Operator Gloves"]=true, ["Specialist Gloves"]=true, ["Moto Gloves"]=true,
+    ["Bloodhound Gloves"]=true, ["Broken Fang Gloves"]=true, ["Hydra Gloves"]=true,
+}
 IgnoreFolders = {["HE Grenade"]=true,["Incendiary Grenade"]=true,["Molotov"]=true,["Smoke Grenade"]=true,["Flashbang"]=true,["Decoy Grenade"]=true,["C4"]=true,["CT Glove"]=true,["T Glove"]=true}
 SkinsFolder = SkinsFolder
 pcall(function()
@@ -5182,13 +5198,20 @@ function _canonicalGloveReference(side, ref)
     return nil -- no knife-specific fallback: knives must reuse the last gun glove exactly
 end
 
-function _fitGloveToReference(mesh, ref, maxScale)
+-- Fit a cloned glove template to the native arm/glove size WITHOUT distorting.
+-- Uses a single uniform factor (min axis ratio). Only shrinks, never grows,
+-- and clamps floor to 1.0 so the clone can never end up smaller than the
+-- native original glove (user requirement).
+function _fitGloveToReference(mesh, ref, _maxScale)
     if not (mesh and mesh:IsA("BasePart") and ref and ref.Size) then return false, nil end
     local s, r = mesh.Size, ref.Size
     if s.X <= 0 or s.Y <= 0 or s.Z <= 0 or r.X <= 0 or r.Y <= 0 or r.Z <= 0 then return false, nil end
-
-    local factor = math.min((r.X * 0.96) / s.X, (r.Y * 0.96) / s.Y, (r.Z * 0.96) / s.Z, maxScale or 0.96)
-    if factor > 0 and factor < 1 then _uniformScale(mesh, factor) end
+    local factor = math.min(r.X / s.X, r.Y / s.Y, r.Z / s.Z)
+    -- floor: never shrink below the native reference size
+    if factor >= 0.999 then return true, 1.0 end
+    -- give a small breathing margin so it hugs the arm without clipping
+    factor = math.max(factor * 0.98, 0.85)
+    _uniformScale(mesh, factor)
     return true, factor
 end
 
@@ -5242,6 +5265,9 @@ function _computeKnifeGloveFactor(mesh, target, armName, ref)
     return factor
 end
 
+-- Copy visual properties (SurfaceAppearance/TextureID/Color/Material) from
+-- `src` onto `dest`. Used to re-skin a native-cloned glove with the team's
+-- T/CT Glove template appearance without changing its geometry/size.
 function _copyGloveVisualFrom(src, dest)
     if not (src and dest) then return end
     pcall(function()
@@ -5268,32 +5294,28 @@ function attachAsset(folder, arm, model, name, offset, ref)
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
 
-    local base = src
-    local motorOffset = offset
-    local canonical = nil
-    if name == "Glove" then
-        canonical = _canonicalGloveReference(arm, ref)
-        if canonical and canonical.Part then
-            base = canonical.Part
-            motorOffset = canonical.Offset or offset
-        end
-    end
-
-    local mesh = base:Clone()
-    if name == "Glove" and canonical and canonical.Part then
-        pcall(function() _copyGloveVisualFrom(src, mesh) end)
-    end
+    -- Old behavior: always clone the T/CT Glove (or Sleeve) template directly.
+    -- No canonical caching, no visual-overlay hack — just a straight clone.
+    local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
     pcall(function()
         mesh:SetAttribute("EclipseAttached", true)
         mesh:SetAttribute("EclipseSkinSource", nil)
         mesh:SetAttribute("SkinApplied", nil)
     end)
+
+    -- Fit-to-arm: shrink slightly to native glove size, never below it.
+    if name == "Glove" and ref and ref.Size then
+        pcall(_fitGloveToReference, mesh, ref)
+    end
     if name == "Glove" then SkinSystem.gloveScale = 1.0 end
 
-    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=motorOffset; motor.Parent=target
+    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
+-- Per-knife intelligent size/offset table. Glove scaling no longer touches the knife.
+-- Scale: uniform mesh scale multiplier applied ONLY to knife parts (non-Glove/Sleeve/Arm).
+-- Offset: extra CFrame applied to the arm->knife Motor6D (fine positional tuning).
 KNIFE_TUNE = KNIFE_TUNE or {
     ["Butterfly Knife"] = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
     ["Karambit"]        = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
@@ -5306,34 +5328,78 @@ KNIFE_TUNE = KNIFE_TUNE or {
     ["Stiletto Knife"]  = { Scale = 1.00, Offset = CFrame.new(0, 0, 0) },
 }
 
-function _applyKnifeTune()
+-- Pequeno boost do tamanho da luva SÓ para facas onde a mão do modelo vaza
+-- (Gut/Flip/Stiletto/Skeleton). Aplicado por cima do fit-to-reference, então
+-- adapta-se automaticamente a CT vs T (que têm tamanhos nativos diferentes).
+KNIFE_GLOVE_BOOST = KNIFE_GLOVE_BOOST or {
+    ["Gut Knife"]      = 1.10,
+    ["Flip Knife"]     = 1.10,
+    ["Stiletto Knife"] = 1.12,
+    ["Skeleton Knife"] = 1.12,
+}
+
+function _applyKnifeGloveBoost()
     local vm = SkinSystem.vm; if not vm then return end
     local sel = Config.Skins.SelectedKnife
-    local tune = KNIFE_TUNE[sel]; if not tune then return end
-    local scale = tune.Scale or 1.0
-    local offset = tune.Offset
-    if scale and scale > 0 and math.abs(scale - 1.0) > 0.001 then
+    local boost = sel and KNIFE_GLOVE_BOOST[sel]
+    if not boost or boost <= 1.0 then return end
+    local isKnife = false
+    pcall(function()
         for _, d in ipairs(vm:GetDescendants()) do
             if d:IsA("BasePart") then
                 local n = d.Name
-                if n ~= "Glove" and n ~= "Sleeve" and n ~= "Left Arm" and n ~= "Right Arm" and d ~= vm.PrimaryPart then
-                    pcall(function() _uniformScale(d, scale) end)
+                if n == "Blade" or n == "Handle" or n:lower():find("knife") then
+                    isKnife = true; break
                 end
             end
         end
-    end
-    if offset and offset ~= CFrame.new() then
-        for _, d in ipairs(vm:GetDescendants()) do
-            if d:IsA("Motor6D") and d.Part0 and (d.Part0.Name == "Right Arm" or d.Part0.Name == "Left Arm") then
-                local n = d.Part1 and d.Part1.Name or ""
-                if n ~= "Glove" and n ~= "Sleeve" then
-                    pcall(function() d.C0 = d.C0 * offset end)
-                end
+    end)
+    if not isKnife then return end
+    for _, d in ipairs(vm:GetDescendants()) do
+        if d:IsA("BasePart") and (d.Name == "Glove" or d.Name == "Sleeve") then
+            if not d:GetAttribute("EclipseKnifeBoosted") then
+                pcall(function() _uniformScale(d, boost) end)
+                pcall(function() d:SetAttribute("EclipseKnifeBoosted", true) end)
             end
         end
     end
 end
 
+function _applyKnifeTune()
+    local vm = SkinSystem.vm; if not vm then return end
+    local sel = Config.Skins.SelectedKnife
+    local tune = KNIFE_TUNE[sel]
+    if tune then
+        local scale = tune.Scale or 1.0
+        local offset = tune.Offset
+
+        if scale and scale > 0 and math.abs(scale - 1.0) > 0.001 then
+            for _, d in ipairs(vm:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    local n = d.Name
+                    if n ~= "Glove" and n ~= "Sleeve" and n ~= "Left Arm" and n ~= "Right Arm" and d ~= vm.PrimaryPart then
+                        pcall(function() _uniformScale(d, scale) end)
+                    end
+                end
+            end
+        end
+
+        if offset and offset ~= CFrame.new() then
+            for _, d in ipairs(vm:GetDescendants()) do
+                if d:IsA("Motor6D") and d.Part0 and (d.Part0.Name == "Right Arm" or d.Part0.Name == "Left Arm") then
+                    local n = d.Part1 and d.Part1.Name or ""
+                    if n ~= "Glove" and n ~= "Sleeve" then
+                        pcall(function() d.C0 = d.C0 * offset end)
+                    end
+                end
+            end
+        end
+    end
+
+    pcall(_applyKnifeGloveBoost)
+end
+
+-- Backwards-compat stub: glove scale must NOT move the knife anymore.
 function _pushKnifeOutward() end
 
 function playSound(folder, name)
@@ -5417,6 +5483,7 @@ function handleAction(actionName, state)
                 end
             else
                 playSound("Inspect","1")
+                -- Butterfly first inspect chains a second sound right after
                 if isButterfly then
                     task.delay(0.55, function()
                         if SkinSystem.inspecting then playSound("Inspect","2") end
@@ -5635,12 +5702,12 @@ function _applyGloveSideDirect(glove, side, gloveSkin, gsr, directSurfaceApps, s
     end
 end
 
-function _applyGloveSkinCore(gloveSkin)
-    local gf = SkinsFolder:FindFirstChild("Sports Gloves"); if not gf then return end
+function _applyGloveSkinCore(gloveType, gloveSkin)
+    local gf = SkinsFolder:FindFirstChild(gloveType); if not gf then return end
     local gs = gf:FindFirstChild(gloveSkin)
     local gsr = gs and gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Factory New")
     if not gsr then return end
-    local sourceKey = "Sports Gloves/" .. tostring(gloveSkin)
+    local sourceKey = tostring(gloveType) .. "/" .. tostring(gloveSkin)
     _forEachCameraGlove(function(glove, side)
         pcall(_applyGloveSideDirect, glove, side, gloveSkin, gsr, nil, sourceKey)
     end)
@@ -5649,14 +5716,20 @@ end
 function _applySelectedGloveSkin()
     if EX_LIMITED then return end
     if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-    pcall(_refreshCanonicalWeaponGloves)
-    local gloveSkin = Config.Skins.SelectedSkins["Sports Gloves"]
-    if not gloveSkin or gloveSkin == "" or gloveSkin == "Vanilla" or gloveSkin == "Default" or gloveSkin == "None" then
+    -- Pick the first glove type the user has actually selected a skin for.
+    local activeType, activeSkin = nil, nil
+    for gt in pairs(GLOVES) do
+        local s = Config.Skins.SelectedSkins[gt]
+        if s and s ~= "" and s ~= "Vanilla" and s ~= "Default" and s ~= "None" then
+            activeType, activeSkin = gt, s; break
+        end
+    end
+    if not activeSkin then
         pcall(_clearGloveSkinRuntime)
         _forEachCameraGlove(function(glove) _restoreGloveSurfaceOnly(glove) end)
         return
     end
-    pcall(_applyGloveSkinCore, gloveSkin)
+    pcall(_applyGloveSkinCore, activeType, activeSkin)
 end
 
 
@@ -8957,9 +9030,9 @@ if not Config.WorldColor.Color then Config.WorldColor.Color = Color3.fromRGB(120
 if type(Config.WorldColor.Intensity) ~= "number" then Config.WorldColor.Intensity = 0.4 end
 
 -- Intensity is a linear multiplier: 0 = original scene (no tint, no changes),
--- higher = progressively stronger tint + contrast + saturation punch. Tint is
--- blended from white -> user color by min(intensity,1), so intensity=0 leaves
--- the map exactly like vanilla.
+-- higher = progressively stronger tint + contrast + saturation punch. The tint
+-- color is blended from white -> user color by min(intensity,1), so intensity=0
+-- guarantees the map looks exactly like vanilla.
 function _applyWorldColorState()
     local e = _ensureWCEffect()
     local i = tonumber(Config.WorldColor.Intensity) or 0
@@ -9006,9 +9079,60 @@ end)()
 MiscGB = Tabs.Misc:AddLeftGroupbox("MISC")
 
 -- ============================================================
--- AUTOSKILL removed in this build (eclipse-sem-autoskill).
+-- AUTOSKILL (Misc) — created here so it shares MiscGB's thread/identity
+-- (creating groupboxes later in the file was hitting "lacking capability
+-- Plugin" on some executors when the UI thread got downgraded).
 -- ============================================================
-Config.Misc.AutoSkill = false
+do
+    local ASGB = Tabs.Misc:AddLeftGroupbox("AUTOSKILL")
+    if EX_BLOCK_SILENT then
+        ASGB:AddLabel("BLOCKED ON " .. ((EX_NAME or "") ~= "" and EX_NAME:upper() or "THIS EXECUTOR"))
+        ASGB:AddLabel("Use Medium, Potassium, Wave or Swift.")
+        Config.Misc.AutoSkill = false
+    else
+        ASGB:AddToggle("AS_Enable", { Text = "AUTOSKILL", Default = false,
+            Callback = function(v) Config.Misc.AutoSkill = (v and not EX_BLOCK_SILENT) end })
+        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYLL SPEED", Default = 25, Min = 1, Max = 60, Rounding = 0, Suffix = "",
+            Callback = function(v) Config.Misc.AutoSkillSpeed = v end })
+        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYLL SMOOTH", Default = 0.05, Min = 0, Max = 1, Rounding = 2, Suffix = "",
+            Callback = function(v) Config.Misc.AutoSkillSmooth = v end })
+        Config.Misc.AutoSkillChangeWeapon = false
+    end
+    Config.Misc.AutoSkillTeamCheck  = true
+    Config.Misc.AutoSkillRespectBuy = true
+    Config.Misc.AutoSkillRefill     = true
+end
+
+-- ============================================================
+-- AUTOBUY (Misc) — fires Inventory buy remotes every buy period
+-- ============================================================
+do
+    local ABGB = Tabs.Misc:AddRightGroupbox("AUTOBUY")
+    local AUTOBUY_ITEMS = {
+        "AK-47","M4A4","M4A1-S","AWP","Deagle","USP-S","Glock-18","P250",
+        "Five-SeveN","Tec-9","MP9","MAC-10","MP7","UMP-45","P90",
+        "Galil AR","FAMAS","SSG 08","AUG","SG 553","Nova","XM1014",
+        "M249","Negev",
+        "Kevlar","Kevlar + Helmet","Defuse Kit",
+        "Flashbang","HE Grenade","Smoke Grenade","Molotov","Incendiary Grenade","Decoy Grenade",
+    }
+    table.sort(AUTOBUY_ITEMS)
+    ABGB:AddToggle("AB_Enable", { Text = "AUTOBUY", Default = false,
+        Callback = function(v) Config.Misc.AutoBuy = v end })
+    SafeAddDropdown(ABGB, "AB_Items", {
+        Text = "ITEMS", Values = AUTOBUY_ITEMS, Multi = true,
+        Default = Config.Misc.AutoBuyItems or {},
+        Callback = function(v)
+            local out = {}
+            if type(v) == "table" then
+                for k, on in pairs(v) do if on then table.insert(out, k) end end
+            end
+            Config.Misc.AutoBuyItems = out
+        end,
+    })
+    ABGB:AddLabel("Buys selected items once each buy period.")
+end
+
 
 
 Config.Misc.Explorer1 = false
@@ -10442,6 +10566,7 @@ end)()
         ["Kov Fire"]        = { Id="", Volume=1.6, Pitch=1.0 },
     }
     -- Resolve the "Kov Fire" preset from the game dump path
+    -- game:GetChildren()[118]:GetChildren()[14]:GetChildren()[4]:GetChildren()[13]:GetChildren()[1]
     task.spawn(function()
         local function _resolvePath(indices)
             local ok, inst = pcall(function()
@@ -11233,6 +11358,7 @@ end)()
         if LocalPlayer.Character then table.insert(ex, LocalPlayer.Character) end
         rp.FilterDescendantsInstances = ex
         rp.IgnoreWater = true
+        -- Check multiple body parts: any minimally visible part counts (head, torso, limbs)
         local candidates = {
             "Head","UpperTorso","LowerTorso","Torso","HumanoidRootPart",
             "LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm",
@@ -11594,6 +11720,8 @@ task.spawn(function()
 end)
 
 
+
+
 pcall(function()
     task.defer(function()
         local function readyCount()
@@ -11614,6 +11742,444 @@ pcall(function()
     end)
 end)
 
--- AUTOSKILL logic removed in this build (eclipse-sem-autoskill).
+-- AUTOSKILL groupbox UI is created earlier (right after MiscGB at line ~8592)
+-- to guarantee it runs under the same thread/identity as the rest of the tab.
+
+
+;(function()
+    if EX_BLOCK_SILENT then return end
+
+    ------------------------------------------------------------------
+    -- KOV-style discovery
+    -- Holder table has field "ShootWeapon" which is a table with .Send
+    -- Weapon table has "IsEquipped" AND Properties.FireRate + Properties.Rounds
+    ------------------------------------------------------------------
+    local _remoteHolder
+    local _weaponTable
+
+    local function _findRemote()
+        if _remoteHolder and rawget(_remoteHolder, "ShootWeapon") then return _remoteHolder end
+        if type(getgc) ~= "function" then return nil end
+        for _, t in pairs(getgc(true)) do
+            if type(t) == "table" then
+                local ok, sw = pcall(rawget, t, "ShootWeapon")
+                if ok and type(sw) == "table" then
+                    local ok2, send = pcall(rawget, sw, "Send")
+                    if ok2 and type(send) == "function" then
+                        _remoteHolder = t
+                        return t
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function _isWeaponTable(t)
+        if type(t) ~= "table" then return false end
+        local ok, props = pcall(rawget, t, "Properties")
+        if not ok or type(props) ~= "table" then return false end
+        local okA, fr = pcall(rawget, props, "FireRate")
+        local okB, rd = pcall(rawget, props, "Rounds")
+        return okA and okB and fr ~= nil and rd ~= nil
+    end
+
+    local function _findEquippedWeapon()
+        if _weaponTable then
+            local ok, eq = pcall(rawget, _weaponTable, "IsEquipped")
+            if ok and eq and _isWeaponTable(_weaponTable) then return _weaponTable end
+        end
+        if type(getgc) ~= "function" then return nil end
+        for _, t in pairs(getgc(true)) do
+            if type(t) == "table" then
+                local ok, eq = pcall(rawget, t, "IsEquipped")
+                if ok and eq and _isWeaponTable(t) then
+                    _weaponTable = t
+                    return t
+                end
+            end
+        end
+        return nil
+    end
+
+    ------------------------------------------------------------------
+    -- Gates
+    ------------------------------------------------------------------
+    local function _isBuyPeriod()
+        local ok, res = pcall(function()
+            local gs = workspace:GetAttribute("GameState")
+            if gs and tostring(gs):lower():find("buy") then return true end
+            return false
+        end)
+        return ok and res or false
+    end
+
+    local function _alive()
+        local ch = LocalPlayer.Character
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        return hum and hum.Health > 0
+    end
+
+    local function _headOf(pl)
+        local c = pl.Character; if not c then return nil end
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return nil end
+        return c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart")
+    end
+
+    ------------------------------------------------------------------
+    -- Refill (KOV r57)
+    ------------------------------------------------------------------
+    local _refilling = false
+    local function _tryRefill(w)
+        if _refilling or not w then return end
+        local props = rawget(w, "Properties"); if not props then return end
+        local maxRounds = rawget(props, "Rounds"); if not maxRounds then return end
+        local cur = rawget(w, "Rounds") or 0
+        local cap = rawget(w, "Capacity") or 0
+        if cur < maxRounds and cap > 0 then
+            _refilling = true
+            local take = math.min(maxRounds - cur, cap)
+            pcall(function()
+                w.Rounds   = cur + take
+                w.Capacity = cap - take
+            end)
+            task.wait(0.05)
+            _refilling = false
+        end
+    end
+
+    ------------------------------------------------------------------
+    -- Melee/knife filter — AutoSkill must NOT run when a knife is equipped
+    ------------------------------------------------------------------
+    local function _isMeleeWeapon(w)
+        if type(w) ~= "table" then return true end
+        local ok, name = pcall(rawget, w, "Name")
+        local n = ok and tostring(name or ""):lower() or ""
+        if n:find("knife") or n:find("melee") or n:find("bayonet") or n:find("karambit")
+           or n:find("butterfly") or n:find("gut") or n:find("flip")
+           or n:find("stiletto") or n:find("skeleton") or n:find("huntsman") or n:find("falchion") then
+            return true
+        end
+        local ok2, props = pcall(rawget, w, "Properties")
+        if ok2 and type(props) == "table" then
+            local okT, typ = pcall(rawget, props, "Type")
+            if okT and typ and tostring(typ):lower():find("mele") then return true end
+            local okC, cat = pcall(rawget, props, "Category")
+            if okC and cat and tostring(cat):lower():find("mele") then return true end
+            local okR, rd = pcall(rawget, props, "Rounds")
+            if okR and (not rd or tonumber(rd) == nil or tonumber(rd) <= 0) then return true end
+        end
+        return false
+    end
+
+    ------------------------------------------------------------------
+    -- Blood sound — resolved from dump path, cached and cloned per shot
+    -- Path: game:GetChildren()[118]:GetChildren()[14]:GetChildren()[2]:GetChildren()[2]:GetChildren()[4]
+    ------------------------------------------------------------------
+    local _bloodTemplate
+    local function _resolveByChildPath(indices)
+        local ok, inst = pcall(function()
+            local cur = game:GetChildren()[indices[1]]
+            for i = 2, #indices do
+                if not cur then return nil end
+                cur = cur:GetChildren()[indices[i]]
+            end
+            return cur
+        end)
+        return ok and inst or nil
+    end
+    local function _resolveBloodSound()
+        if _bloodTemplate and _bloodTemplate:IsA("Sound") then return _bloodTemplate end
+        local paths = {
+            {118,14,2,2,4},
+            {119,14,2,2,4},
+            {117,14,2,2,4},
+        }
+        for _, p in ipairs(paths) do
+            local inst = _resolveByChildPath(p)
+            if inst and inst:IsA("Sound") then _bloodTemplate = inst; return inst end
+        end
+        return nil
+    end
+    local function _playBlood()
+        local src = _resolveBloodSound(); if not src then return end
+        local ok, clone = pcall(function() return src:Clone() end)
+        if not ok or not clone then return end
+        pcall(function()
+            clone.Parent = Camera or Workspace
+            clone.Volume = math.min(1.5, (src.Volume or 1) * 1.1)
+            clone:Play()
+        end)
+        task.delay(3, function() if clone then pcall(function() clone:Destroy() end) end end)
+    end
+
+    ------------------------------------------------------------------
+    -- Fire ShootWeapon packet — NEW STRUCTURE (matches live dump)
+    --
+    -- ReplicatedStorage.NetworkRemotes.Inventory.ShootWeapon:FireServer({
+    --   Identifier, ShootingHand, Bullets = {{Direction, Origin, Hits}},
+    --   Seq, IsSniperScoped
+    -- })
+    --
+    -- Hits are just {Normal, Position, Instance, Distance, Material, Exit}
+    -- — no AttackerUserId / Ricochet / SuppressVisuals / IsWallbang.
+    -- We simulate realistic penetration: entry+exit through a limb, then
+    -- entry+exit through the torso, then a terminal wall impact. That
+    -- shape matches what the client normally sends and passes server
+    -- validation cleanly.
+    ------------------------------------------------------------------
+    local _shootRE          -- cached RemoteEvent (new path)
+    local _seq = 0
+
+    local function _findShootRE()
+        if typeof(_shootRE) == "Instance" and _shootRE.Parent then return _shootRE end
+        local ok, re = pcall(function()
+            local rs = game:GetService("ReplicatedStorage")
+            local nr = rs:FindFirstChild("NetworkRemotes")
+            local inv = nr and nr:FindFirstChild("Inventory")
+            return inv and inv:FindFirstChild("ShootWeapon")
+        end)
+        if ok and typeof(re) == "Instance" then _shootRE = re; return re end
+        return nil
+    end
+
+    local function _partOf(pl, name)
+        local c = pl.Character; if not c then return nil end
+        return c:FindFirstChild(name)
+    end
+
+    local function _sendKill(pl, w)
+        local head = _headOf(pl); if not head then return end
+
+        local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
+        local hitPos = head.Position
+        local delta  = (hitPos - origin)
+        if delta.Magnitude < 0.01 then return end
+        local dist = delta.Magnitude
+        local dir  = delta.Unit
+
+        pcall(function()
+            local r = rawget(w, "Rounds") or 0
+            if r > 0 then w.Rounds = r - 1 end
+        end)
+
+        -- Headshot only — single hit on the Head
+        local function mkHit(inst, offset, exit, normal)
+            local pos = (inst and inst.Position) or hitPos
+            return {
+                Normal   = normal or (-dir),
+                Position = pos + (offset or Vector3.new()),
+                Instance = inst or head,
+                Distance = math.max(0.05, (pos - origin).Magnitude),
+                Material = "Plastic",
+                Exit     = exit and true or false,
+            }
+        end
+
+        local hits = {
+            mkHit(head, Vector3.new(0, 0.02, 0), false),
+        }
+
+        _seq = _seq + 1
+        local packet = {
+            Identifier     = rawget(w, "Identifier"),
+            ShootingHand   = "Right",
+            Bullets = {
+                {
+                    Direction = dir,
+                    Origin    = origin,
+                    Hits      = hits,
+                },
+            },
+            Seq            = _seq,
+            IsSniperScoped = false,
+        }
+
+        -- Preferred path: direct RemoteEvent:FireServer (matches new dump)
+        local sent = false
+        local re = _findShootRE()
+        if re then
+            sent = pcall(function() re:FireServer(packet) end)
+        end
+        -- Fallback: legacy KOV holder.ShootWeapon.Send dot-call
+        if not sent then
+            local holder = _findRemote()
+            if holder then
+                local sw = rawget(holder, "ShootWeapon")
+                if type(sw) == "table" then
+                    local send = rawget(sw, "Send")
+                    if type(send) == "function" then
+                        sent = pcall(send, packet)
+                    end
+                end
+            end
+        end
+        if sent then pcall(_playBlood) end
+    end
+
+
+    ------------------------------------------------------------------
+    -- (Auto weapon switch removed)
+    ------------------------------------------------------------------
+
+    ------------------------------------------------------------------
+    -- Respawn reset — clears cached weapon / gates so AutoSkill doesn't
+    -- carry over a stale "buy period" or dead weapon table across lives.
+    ------------------------------------------------------------------
+    local _lastTarget = nil
+    local function _resetASState()
+        _weaponTable = nil
+        _refilling   = false
+        _lastTarget  = nil
+        _seq         = 0
+    end
+
+    LocalPlayer.CharacterAdded:Connect(function(_)
+        _resetASState()
+        task.delay(0.35, _resetASState)
+    end)
+    LocalPlayer.CharacterRemoving:Connect(_resetASState)
+
+    ------------------------------------------------------------------
+    -- Dedicated refill loop (KOV background) — cheap gates first
+    ------------------------------------------------------------------
+    task.spawn(function()
+        while scriptRunning do
+            task.wait(0.15)
+            repeat
+                if not (Config.Misc.AutoSkill and Config.Misc.AutoSkillRefill) then break end
+                if not _alive() then break end
+                if _isBuyPeriod() then break end
+                local w = _findEquippedWeapon()
+                if w and not _isMeleeWeapon(w) then pcall(_tryRefill, w) end
+            until true
+        end
+    end)
+
+    ------------------------------------------------------------------
+    -- Main KILL loop
+    --   Speed  = shots per second   (higher = faster)
+    --   Smooth = extra delay (sec)  (higher = slower / smoother)
+    ------------------------------------------------------------------
+    task.spawn(function()
+        while scriptRunning do
+            local spd    = math.clamp(tonumber(Config.Misc.AutoSkillSpeed)  or 25, 1, 60)
+            local smooth = math.max(0, tonumber(Config.Misc.AutoSkillSmooth) or 0)
+            local dt     = (1 / spd) + smooth
+            task.wait(dt)
+
+            repeat
+                if not Config.Misc.AutoSkill then break end
+                if not _alive() then break end
+                if _isBuyPeriod() then
+                    -- Respect buy period, clear cache so a stale weapon doesn't lock us
+                    _weaponTable = nil
+                    break
+                end
+
+                local w = _findEquippedWeapon()
+                if not w then break end
+                if _isMeleeWeapon(w) then break end
+                local rounds = rawget(w, "Rounds") or 0
+                if rounds <= 0 then pcall(_tryRefill, w); break end
+
+                local myTeam = LocalPlayer.Team
+                local killed = 0
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl ~= LocalPlayer and not (myTeam and pl.Team == myTeam) then
+                        local c = pl.Character
+                        local h = c and c:FindFirstChildOfClass("Humanoid")
+                        local hp = h and h.Health or 0
+                        if hp > 0 then
+                            _sendKill(pl, w)
+                            killed = killed + 1
+                            if _lastTarget ~= pl.Name then
+                                _lastTarget = pl.Name
+                                pcall(function()
+                                    if Library and Library.Notify then
+                                        Library:Notify("[killed by eclipse] " .. pl.Name, 1)
+                                    end
+                                end)
+                            end
+                        end
+                    end
+                end
+                if killed == 0 then _lastTarget = nil end
+            until true
+        end
+    end)
+
+    ------------------------------------------------------------------
+    -- AUTOBUY — fires the game's Inventory buy remote for each item
+    -- selected in the Misc > AUTOBUY dropdown, once per buy period.
+    -- Tries multiple payload shapes because different builds use
+    -- {Weapon=name}, {Item=name}, or a raw string arg.
+    ------------------------------------------------------------------
+    local _buyRE, _boughtThisPeriod, _wasBuy = nil, {}, false
+
+    local function _findBuyRemote()
+        if typeof(_buyRE) == "Instance" and _buyRE.Parent then return _buyRE end
+        local ok, re = pcall(function()
+            local rs  = game:GetService("ReplicatedStorage")
+            local nr  = rs:FindFirstChild("NetworkRemotes")
+            local inv = nr and nr:FindFirstChild("Inventory")
+            if not inv then return nil end
+            for _, want in ipairs({"BuyWeapon","PurchaseWeapon","BuyItem","PurchaseItem","Buy","Purchase"}) do
+                local c = inv:FindFirstChild(want)
+                if c and (c:IsA("RemoteEvent") or c:IsA("RemoteFunction")) then return c end
+            end
+            for _, c in ipairs(inv:GetChildren()) do
+                local n = c.Name:lower()
+                if (c:IsA("RemoteEvent") or c:IsA("RemoteFunction")) and (n:find("buy") or n:find("purchase")) then
+                    return c
+                end
+            end
+            return nil
+        end)
+        if ok and typeof(re) == "Instance" then _buyRE = re; return re end
+        return nil
+    end
+
+    local function _fireBuy(item)
+        local re = _findBuyRemote(); if not re then return false end
+        local payloads = {
+            { Weapon = item }, { Item = item }, { Name = item },
+            { WeaponName = item }, { ItemName = item },
+        }
+        local method = re:IsA("RemoteFunction") and "InvokeServer" or "FireServer"
+        for _, p in ipairs(payloads) do
+            local ok = pcall(function() re[method](re, p) end)
+            if ok then return true end
+        end
+        pcall(function() re[method](re, item) end)
+        return true
+    end
+
+    task.spawn(function()
+        while scriptRunning do
+            task.wait(0.5)
+            repeat
+                if not Config.Misc.AutoBuy then _wasBuy = false; _boughtThisPeriod = {}; break end
+                local buy = _isBuyPeriod()
+                if buy and not _wasBuy then _boughtThisPeriod = {} end
+                _wasBuy = buy
+                if not buy then break end
+                if not _alive() then break end
+                local items = Config.Misc.AutoBuyItems or {}
+                for _, item in ipairs(items) do
+                    if not _boughtThisPeriod[item] then
+                        _boughtThisPeriod[item] = true
+                        pcall(_fireBuy, item)
+                        task.wait(0.1)
+                    end
+                end
+            until true
+        end
+    end)
+
+end)()
+
+
 
 
