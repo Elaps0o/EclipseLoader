@@ -5608,17 +5608,8 @@ function _applyGloveSkinCore(gloveType, gloveSkin)
     return applied
 end
 
-function _forceRespawnCleanGloveApply()
-    if not (Config.Skins and Config.Skins.SkinChangerEnabled and IsAlive()) then return end
-    pcall(_clearGloveSkinRuntime)
-    for _, d in ipairs({0, 0.05, 0.15, 0.35, 0.7}) do
-        task.delay(d, function()
-            if Config.Skins and Config.Skins.SkinChangerEnabled and IsAlive() then
-                pcall(_applyGloveSkinCore, _TW_SelectedGlove())
-            end
-        end)
-    end
-end
+
+
 
 
 function _applySelectedGloveSkin()
@@ -7511,7 +7502,7 @@ function _postSkinConfigLoadApply()
     end)
     pcall(function()
         if Config.Skins.SkinChangerEnabled and IsAlive() then
-            pcall(_forceRespawnCleanGloveApply)
+            pcall(_applySelectedGloveSkin)
             pcall(_TW_ApplyAllCameraSkins)
             for _, obj in pairs(Camera:GetChildren()) do
                 local skinName = Config.Skins.SelectedSkins[obj.Name]
@@ -7522,7 +7513,7 @@ function _postSkinConfigLoadApply()
     for _, delayT in ipairs({0, 0.2, 0.6, 1.2, 2.0}) do
         task.delay(delayT, function()
             if Config.Skins.SkinChangerEnabled and IsAlive() then
-                pcall(_forceRespawnCleanGloveApply)
+                pcall(_applySelectedGloveSkin)
                 pcall(_TW_ApplyAllCameraSkins)
                 pcall(_applyHUDKnife, true)
             end
@@ -8906,7 +8897,7 @@ function CreateSkinDropdown(weapon, section)
 
             pcall(SetSkinPreview, weapon)
             if Config.Skins.SkinChangerEnabled and IsAlive() then
-                if GLOVES[weapon] or weapon == "Sports Gloves" then pcall(_forceRespawnCleanGloveApply) end
+                if GLOVES[weapon] or weapon == "Sports Gloves" then pcall(_applySelectedGloveSkin) end
                 pcall(_TW_ApplyAllCameraSkins)
                 pcall(_applySelectedGloveSkin)
                 pcall(_applyHUDKnife, true)
