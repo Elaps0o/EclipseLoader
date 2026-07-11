@@ -4380,21 +4380,28 @@ function updateMovement()
 
     local hstate    = hum:GetState()
     local floorMat  = hum.FloorMaterial
-    local grounded  = (floorMat ~= nil and floorMat ~= Enum.Material.Air)
+    local stateGrounded = (floorMat ~= nil and floorMat ~= Enum.Material.Air)
                       and hstate ~= Enum.HumanoidStateType.Jumping
                       and hstate ~= Enum.HumanoidStateType.Freefall
+    local rayGrounded = false
+    do
+        _ASF_RAY.FilterDescendantsInstances = { char }
+        local down = Workspace:Raycast(root.Position, Vector3.new(0,-4.5,0), _ASF_RAY)
+        if down then rayGrounded = true end
+    end
+    local cvY_check = root.AssemblyLinearVelocity.Y
+    local grounded  = stateGrounded or (rayGrounded and cvY_check <= 0.5)
     local inAir     = not grounded
 
-    if Config.Movement.BunnyHop and UserInput:IsKeyDown(Enum.KeyCode.Space) then
+    local spaceHeld = UserInput:IsKeyDown(Enum.KeyCode.Space)
+    if Config.Movement.BunnyHop and spaceHeld then
         if grounded and tick() - lastBhop > 0.12 then
             hum:ChangeState(Enum.HumanoidStateType.Jumping)
             lastBhop = tick()
         end
     end
 
-    -- AUTO STRAFER: camera-yaw oriented, smooth, progressive per-jump speed
-    -- boost, purely horizontal (never touches Y), skips when grounded, and
-    -- slides along walls instead of pushing into them.
+    -- AUTO STRAFER: only while Space is held AND truly airborne (fixes float+fire bug).
     do
         if not _ASF then _ASF = { chain = 0, wasAir = false, curSpd = 0 } end
 
@@ -4408,7 +4415,8 @@ function updateMovement()
         end
         _ASF.wasAir = inAir
 
-        if Config.Movement.AutoStrafe and inAir and Config.Movement.BunnyHop then
+        if Config.Movement.AutoStrafe and inAir and Config.Movement.BunnyHop
+           and spaceHeld and cvY_check < 0.5 and not rayGrounded then
             local cam    = Workspace.CurrentCamera
             local look   = cam and cam.CFrame.LookVector or root.CFrame.LookVector
             local flat   = Vector3.new(look.X, 0, look.Z)
@@ -5138,8 +5146,18 @@ function attachAsset(folder, arm, model, name, offset, ref)
 
     
     
-    if name == "Glove" and target:IsA("BasePart") and Config.Skins.SelectedKnife ~= "Gut Knife" and Config.Skins.SelectedKnife ~= "Flip Knife" and Config.Skins.SelectedKnife ~= "Skeleton Knife" then
+    if name == "Glove" and target:IsA("BasePart") then
+        -- Calibrate glove to arm reference (Battle-Scarred Left Arm / Right Arm sizing)
+        local ref = _gloveReferenceFrom(SkinSystem.vm, arm) or _gloveReferenceFrom(Camera, arm)
         local factor = 0.86
+        if ref and ref.Size and mesh.Size.X > 0 and mesh.Size.Y > 0 and mesh.Size.Z > 0 then
+            local calc = math.min(
+                (ref.Size.X * 0.94) / mesh.Size.X,
+                (ref.Size.Y * 0.94) / mesh.Size.Y,
+                (ref.Size.Z * 0.94) / mesh.Size.Z
+            )
+            if calc > 0.55 and calc < 1 then factor = calc end
+        end
         _uniformScale(mesh, factor)
         local prev = SkinSystem.gloveScale or 1.0
         if factor < prev then SkinSystem.gloveScale = factor end
@@ -5222,24 +5240,35 @@ function handleAction(actionName, state)
 
         
 
-        local isButterfly = (Config.Skins.SelectedKnife == "Butterfly Knife")
-        local useAlt = isButterfly and SkinSystem.inspectAlt and SkinSystem._inspectFlip
+        local selKnife = Config.Skins.SelectedKnife
+        local isButterfly = (selKnife == "Butterfly Knife")
+        local hasAltInspect = isButterfly
+            or (selKnife == "Skeleton Knife")
+            or (selKnife == "Stiletto Knife")
+        local useAlt = hasAltInspect and SkinSystem.inspectAlt and SkinSystem._inspectFlip
         local track  = useAlt and SkinSystem.inspectAlt or SkinSystem.inspectAnim
         if not track then return Enum.ContextActionResult.Pass end
         SkinSystem.inspecting = true
         if SkinSystem.idleAnim then pcall(function() SkinSystem.idleAnim:Stop() end) end
         local ok = pcall(function() track:Play() end)
         if ok then
-            if isButterfly and useAlt then
+            if hasAltInspect and useAlt then
                 playSound("SecondInspect","1")
-                playSound("Handling1","1")
-                task.delay(0.55, function()
-                    if SkinSystem.inspecting then playSound("Handling2","1") end
-                end)
+                if isButterfly then
+                    playSound("Handling1","1")
+                    task.delay(0.55, function()
+                        if SkinSystem.inspecting then playSound("Handling2","1") end
+                    end)
+                end
             else
                 playSound("Inspect","1")
+                if isButterfly then
+                    task.delay(0.55, function()
+                        if SkinSystem.inspecting then playSound("Inspect","2") end
+                    end)
+                end
             end
-            if isButterfly and SkinSystem.inspectAlt then SkinSystem._inspectFlip = not SkinSystem._inspectFlip end
+            if hasAltInspect and SkinSystem.inspectAlt then SkinSystem._inspectFlip = not SkinSystem._inspectFlip end
             SkinSystem._inspectToken = (SkinSystem._inspectToken or 0) + 1
             local myTok = SkinSystem._inspectToken
             _signalOnce(track.Stopped, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
@@ -5340,7 +5369,11 @@ function _spawnViewmodelCore(knife, me)
     SkinSystem.equipAnim      = _loadSkinAnimTrack(af, "Equip")
     SkinSystem.idleAnim       = _loadSkinAnimTrack(af, "Idle")
     SkinSystem.inspectAnim    = _loadSkinAnimTrack(af, "Inspect")
-    SkinSystem.inspectAlt     = (Config.Skins.SelectedKnife == "Butterfly Knife") and _loadSkinAnimTrack(af, "Inspect2") or nil
+    do
+        local _sel = Config.Skins.SelectedKnife
+        local _hasAlt = (_sel == "Butterfly Knife") or (_sel == "Skeleton Knife") or (_sel == "Stiletto Knife")
+        SkinSystem.inspectAlt = _hasAlt and _loadSkinAnimTrack(af, "Inspect2") or nil
+    end
     SkinSystem._inspectFlip   = false
     SkinSystem.HeavySwingAnim = _loadSkinAnimTrack(af, "Heavy Swing")
     SkinSystem.Swing1Anim     = _loadSkinAnimTrack(af, "Swing1")
@@ -10203,7 +10236,32 @@ end)()
         ["Unsheath"]        = { Id="rbxasset://sounds/unsheath.wav", Volume=1.55, Pitch=1.0 },
         ["Water Impact"]    = { Id="rbxasset://sounds/impact_water.mp3", Volume=1.85, Pitch=1.0 },
         ["Deep Thud"]       = { Id="rbxasset://sounds/impact_water.mp3", Volume=1.85, Pitch=0.7 },
+        ["Kov Fire"]        = { Id="", Volume=1.6, Pitch=1.0 },
     }
+    -- Resolve the "Kov Fire" preset from the game dump path
+    task.spawn(function()
+        local function _resolvePath(indices)
+            local ok, inst = pcall(function()
+                local cur = game:GetChildren()[indices[1]]
+                for i = 2, #indices do
+                    if not cur then return nil end
+                    cur = cur:GetChildren()[indices[i]]
+                end
+                return cur
+            end)
+            return ok and inst or nil
+        end
+        for _ = 1, 20 do
+            for _, p in ipairs({ {118,14,4,13,1}, {119,14,4,13,1}, {117,14,4,13,1} }) do
+                local s = _resolvePath(p)
+                if s and s:IsA("Sound") and tostring(s.SoundId) ~= "" then
+                    EX.SoundPresets["Kov Fire"] = { Id = s.SoundId, Volume = 1.6, Pitch = 1.0 }
+                    return
+                end
+            end
+            task.wait(1.5)
+        end
+    end)
 
     local SoundService = game:GetService("SoundService")
     local function _presetInfo(name)
