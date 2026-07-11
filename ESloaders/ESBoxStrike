@@ -5126,6 +5126,62 @@ function _collectGloveReferences(originalModel)
     return refs
 end
 
+function _rememberCanonicalGlove(side, glove, arm)
+    if not (side and glove and glove:IsA("BasePart")) then return end
+    if glove:GetAttribute("EclipseAttached") then return end
+    SkinSystem._canonicalGloves = SkinSystem._canonicalGloves or {}
+    local clone = nil
+    local ok = pcall(function() clone = glove:Clone() end)
+    if not ok or not clone then return end
+    pcall(function()
+        clone.Parent = nil
+        clone:SetAttribute("EclipseAttached", nil)
+        clone:SetAttribute("EclipseSkinSource", nil)
+        clone:SetAttribute("SkinApplied", nil)
+    end)
+    local offset = nil
+    pcall(function()
+        if arm and arm:IsA("BasePart") then offset = arm.CFrame:ToObjectSpace(glove.CFrame) end
+    end)
+    local old = SkinSystem._canonicalGloves[side]
+    if old and old.Part then pcall(function() old.Part:Destroy() end) end
+    SkinSystem._canonicalGloves[side] = { Part = clone, Size = glove.Size, Offset = offset }
+end
+
+function _captureCanonicalGlovesFrom(root)
+    if not root then return end
+    local rootName = tostring(root.Name or "")
+    local lowName = rootName:lower()
+    if (knives and knives[rootName]) or lowName:find("knife", 1, true) then return end
+    for _, side in ipairs({"Left Arm", "Right Arm"}) do
+        local arm = _findArmPart(root, side)
+        local glove = nil
+        if arm then
+            glove = arm:FindFirstChild("Glove")
+            if not (glove and glove:IsA("BasePart")) then
+                for _, d in ipairs(arm:GetDescendants()) do
+                    if d.Name == "Glove" and d:IsA("BasePart") then glove = d; break end
+                end
+            end
+        end
+        if glove then _rememberCanonicalGlove(side, glove, arm) end
+    end
+end
+
+function _refreshCanonicalWeaponGloves()
+    pcall(function()
+        for _, obj in ipairs(Camera:GetChildren()) do
+            if obj ~= SkinSystem.vm then _captureCanonicalGlovesFrom(obj) end
+        end
+    end)
+end
+
+function _canonicalGloveReference(side, ref)
+    local cached = SkinSystem._canonicalGloves and SkinSystem._canonicalGloves[side]
+    if cached and cached.Part and cached.Part:IsA("BasePart") then return cached end
+    return nil -- no knife-specific fallback: knives must reuse the last gun glove exactly
+end
+
 function _fitGloveToReference(mesh, ref, maxScale)
     if not (mesh and mesh:IsA("BasePart") and ref and ref.Size) then return false, nil end
     local s, r = mesh.Size, ref.Size
@@ -5212,12 +5268,30 @@ function attachAsset(folder, arm, model, name, offset, ref)
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
 
-    local mesh = src:Clone()
+    local base = src
+    local motorOffset = offset
+    local canonical = nil
+    if name == "Glove" then
+        canonical = _canonicalGloveReference(arm, ref)
+        if canonical and canonical.Part then
+            base = canonical.Part
+            motorOffset = canonical.Offset or offset
+        end
+    end
+
+    local mesh = base:Clone()
+    if name == "Glove" and canonical and canonical.Part then
+        pcall(function() _copyGloveVisualFrom(src, mesh) end)
+    end
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
-    pcall(function() mesh:SetAttribute("EclipseAttached", true) end)
+    pcall(function()
+        mesh:SetAttribute("EclipseAttached", true)
+        mesh:SetAttribute("EclipseSkinSource", nil)
+        mesh:SetAttribute("SkinApplied", nil)
+    end)
     if name == "Glove" then SkinSystem.gloveScale = 1.0 end
 
-    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
+    local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=motorOffset; motor.Parent=target
 end
 
 KNIFE_TUNE = KNIFE_TUNE or {
@@ -5422,6 +5496,7 @@ function _spawnViewmodelCore(knife, me)
     local tpl = weapons:WaitForChild(Config.Skins.SelectedKnife, 5); if not tpl then return end
     local off = (knives[Config.Skins.SelectedKnife] or knives["Butterfly Knife"]).Offset
     local camTpl = tpl:WaitForChild("Camera", 5); if not camTpl then return end
+    pcall(_refreshCanonicalWeaponGloves)
     SkinSystem.vm = camTpl:Clone()
     SkinSystem.vm.Name = Config.Skins.SelectedKnife; SkinSystem.vm.Parent = Camera
     disableCollisions(SkinSystem.vm); hideOriginalKnife(knife)
@@ -5574,6 +5649,7 @@ end
 function _applySelectedGloveSkin()
     if EX_LIMITED then return end
     if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
+    pcall(_refreshCanonicalWeaponGloves)
     local gloveSkin = Config.Skins.SelectedSkins["Sports Gloves"]
     if not gloveSkin or gloveSkin == "" or gloveSkin == "Vanilla" or gloveSkin == "Default" or gloveSkin == "None" then
         pcall(_clearGloveSkinRuntime)
