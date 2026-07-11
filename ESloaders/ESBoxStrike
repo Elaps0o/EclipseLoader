@@ -4246,11 +4246,17 @@ function updateTriggerBot()
     rp.FilterDescendantsInstances = ig
     local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
     local function _doClick()
+        -- Sinaliza para o Silent Aim que o disparo veio do TriggerBot.
+        _G.EclipseMB1Virtual = true
         if isNoSpread then
             if mouse1press then pcall(mouse1press) end
-            task.delay(0.02, function() if mouse1release then pcall(mouse1release) end end)
+            task.delay(0.05, function()
+                if mouse1release then pcall(mouse1release) end
+                _G.EclipseMB1Virtual = false
+            end)
         else
             if mouse1click then pcall(mouse1click) end
+            task.delay(0.05, function() _G.EclipseMB1Virtual = false end)
         end
     end
     local function _tryFireOnPlayer(pl)
@@ -9366,30 +9372,34 @@ do
         if not model or not model.Parent then return end
         if _wh and _wh.Parent ~= model then pcall(function() _wh:Destroy() end); _wh = nil end
         if _whRim and _whRim.Parent ~= model then pcall(function() _whRim:Destroy() end); _whRim = nil end
+        -- Main fill (AlwaysOnTop) — cobre a arma inteira com fill sólido bonito.
         if not _wh then
             _wh = Instance.new("Highlight")
             _wh.Name = "EclipseWH"
             _wh.Adornee = model
-            _wh.DepthMode = Enum.HighlightDepthMode.Occluded
+            _wh.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             _wh.Parent = model
         end
-        -- Second highlight = crisp rim outline for 3D "premium" pop.
+        -- Second highlight = extra glow layer (Occluded) for depth.
         if not _whRim then
             _whRim = Instance.new("Highlight")
             _whRim.Name = "EclipseWHRim"
             _whRim.Adornee = model
-            _whRim.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            _whRim.FillTransparency = 1        -- rim only, no inner fill
+            _whRim.DepthMode = Enum.HighlightDepthMode.Occluded
             _whRim.Parent = model
         end
-        local a = math.clamp((inten or 1) * 0.45, 0.15, 0.9)
+        local a = math.clamp((inten or 1), 0.2, 1.5)
         pcall(function()
-            _wh.FillColor          = color
-            _wh.OutlineColor       = color
-            _wh.FillTransparency   = 1 - a * 0.55
-            _wh.OutlineTransparency= math.clamp(1 - a, 0, 0.4)
-            _whRim.OutlineColor    = color
-            _whRim.OutlineTransparency = math.clamp(1 - a * 0.9, 0, 0.5)
+            -- Fill principal preenche a arma toda (transparência baixa = mais sólido).
+            _wh.FillColor           = color
+            _wh.OutlineColor        = color
+            _wh.FillTransparency    = math.clamp(0.55 - a * 0.30, 0.10, 0.75)
+            _wh.OutlineTransparency = math.clamp(0.30 - a * 0.20, 0,    0.40)
+            -- Camada extra dá o brilho suave por trás de paredes.
+            _whRim.FillColor           = color
+            _whRim.OutlineColor        = color
+            _whRim.FillTransparency    = math.clamp(0.80 - a * 0.25, 0.40, 0.95)
+            _whRim.OutlineTransparency = math.clamp(0.60 - a * 0.30, 0.10, 0.85)
         end)
     end
 
@@ -9417,28 +9427,64 @@ end
 -- ============================================================
 do
     local ABGB = Tabs.Misc:AddRightGroupbox("AUTO SHOP")
-    local AUTOBUY_ITEMS = {
-        -- Equipment
-        "Kevlar","Kevlar + Helmet","Zeus x27","Defuse Kit",
-        -- Pistols
-        "USP-S","Glock-18","R8 Revolver","P250","Five-SeveN","Tec-9",
-        "CZ75-Auto","Desert Eagle","Dual Berettas","P2000",
-        -- SMGs
-        "MP9","MAC-10","MP7","UMP-45","P90","PP-Bizon","MP5-SD",
-        -- Heavy
-        "Nova","Sawed-Off","XM1014","MAG-7","M249","Negev",
-        -- Rifles
-        "FAMAS","Galil AR","M4A4","M4A1-S","AK-47","AWP","SSG 08","AUG","SG 553","SCAR-20","G3SG1",
-        -- Grenades
-        "Flashbang","Smoke Grenade","HE Grenade","Incendiary Grenade","Molotov","Decoy Grenade",
+
+    -- Team-restricted item catalogs (matches T shop / CT shop / Both)
+    local SHOP_T = {
+        "Glock-18","Tec-9","MAC-10","Galil AR","AK-47","SG 553","Sawed-Off","G3SG1","Molotov",
     }
-    table.sort(AUTOBUY_ITEMS)
-    -- Explicit off on load to avoid stale autosave firing purchases
+    local SHOP_CT = {
+        "USP-S","P2000","Five-SeveN","MP9","MP5-SD","FAMAS","M4A4","M4A1-S","AUG","MAG-7","SCAR-20","Defuse Kit","Incendiary Grenade",
+    }
+    local SHOP_BOTH = {
+        "Kevlar","Kevlar + Helmet","Zeus x27",
+        "P250","CZ75-Auto","Desert Eagle","Dual Berettas","R8 Revolver",
+        "MP7","UMP-45","P90","PP-Bizon",
+        "Nova","XM1014","M249","Negev",
+        "SSG 08","AWP",
+        "Flashbang","Smoke Grenade","HE Grenade","Decoy Grenade",
+    }
+    _G._Eclipse_ShopBoth = SHOP_BOTH
+    _G._Eclipse_ShopT   = SHOP_T
+    _G._Eclipse_ShopCT  = SHOP_CT
+    _G._Eclipse_ShopAll = (function()
+        local m = {}
+        for _,v in ipairs(SHOP_T) do m[v]=true end
+        for _,v in ipairs(SHOP_CT) do m[v]=true end
+        for _,v in ipairs(SHOP_BOTH) do m[v]=true end
+        return m
+    end)()
+
+    local function _teamKey()
+        local t = LocalPlayer and LocalPlayer.Team
+        if not t then return nil end
+        local n = tostring(t.Name):lower()
+        if n:find("terror") and not n:find("counter") then return "T" end
+        if n:find("counter") or n:find("ct") then return "CT" end
+        return nil
+    end
+
+    local function _buildValues()
+        local set, out = {}, {}
+        for _,v in ipairs(SHOP_BOTH) do if not set[v] then set[v]=true; out[#out+1]=v end end
+        local tk = _teamKey()
+        if tk == "T" then
+            for _,v in ipairs(SHOP_T) do if not set[v] then set[v]=true; out[#out+1]=v end end
+        elseif tk == "CT" then
+            for _,v in ipairs(SHOP_CT) do if not set[v] then set[v]=true; out[#out+1]=v end end
+        else
+            for _,v in ipairs(SHOP_T)  do if not set[v] then set[v]=true; out[#out+1]=v end end
+            for _,v in ipairs(SHOP_CT) do if not set[v] then set[v]=true; out[#out+1]=v end end
+        end
+        table.sort(out)
+        return out
+    end
+
     Config.Misc.AutoBuy = false
     ABGB:AddToggle("AB_Enable", { Text = "AUTO SHOP", Default = false,
         Callback = function(v) Config.Misc.AutoBuy = v and true or false end })
-    SafeAddDropdown(ABGB, "AB_Items", {
-        Text = "ITEMS", Values = AUTOBUY_ITEMS, Multi = true,
+
+    local dd = SafeAddDropdown(ABGB, "AB_Items", {
+        Text = "ITEMS", Values = _buildValues(), Multi = true,
         Default = Config.Misc.AutoBuyItems or {},
         Callback = function(v)
             local out = {}
@@ -9448,6 +9494,24 @@ do
             Config.Misc.AutoBuyItems = out
         end,
     })
+
+    local function _refreshValues()
+        if not dd then return end
+        local vals = _buildValues()
+        pcall(function()
+            if type(dd.SetValues) == "function" then dd:SetValues(vals)
+            elseif type(dd.Refresh)   == "function" then dd:Refresh(vals) end
+        end)
+    end
+
+    task.spawn(function()
+        local last = _teamKey()
+        while scriptRunning do
+            task.wait(1.0)
+            local cur = _teamKey()
+            if cur ~= last then last = cur; _refreshValues() end
+        end
+    end)
 end
 
 
@@ -12548,8 +12612,26 @@ end)
                 if not buy then break end
                 if not _alive() then break end
                 local items = Config.Misc.AutoBuyItems or {}
+                local function _teamValid(nm)
+                    local tk
+                    do
+                        local t = LocalPlayer and LocalPlayer.Team
+                        if t then
+                            local n = tostring(t.Name):lower()
+                            if n:find("terror") and not n:find("counter") then tk = "T"
+                            elseif n:find("counter") or n:find("ct") then tk = "CT" end
+                        end
+                    end
+                    local function inList(list, v) for _,x in ipairs(list) do if x == v then return true end end return false end
+                    if inList(_G._Eclipse_ShopBoth or {}, nm) then return true end
+                    if tk == "T"  and inList(_G._Eclipse_ShopT  or {}, nm) then return true end
+                    if tk == "CT" and inList(_G._Eclipse_ShopCT or {}, nm) then return true end
+                    -- If we cannot determine team, allow attempt (server will reject invalid)
+                    if not tk then return true end
+                    return false
+                end
                 for _, item in ipairs(items) do
-                    if not _boughtThisPeriod[item] then
+                    if not _boughtThisPeriod[item] and _teamValid(item) then
                         _boughtThisPeriod[item] = true
                         pcall(_fireBuy, item)
                         task.wait(0.1)
@@ -12560,13 +12642,21 @@ end)
     end)
 
     ------------------------------------------------------------------
-    -- SILENT AIM — sustained fire while MB1 is held (like the previous
-    -- behavior). Also cooperates with TriggerBot: when both SilentAim and
-    -- TriggerBot are enabled, auto-fires at the closest visible enemy WITHOUT
-    -- requiring the user to hold MB1 or aim at the enemy.
+    -- SILENT AIM — mesma mecânica do AutoSkill (usa _sendKill/_tryRefill/
+    -- _findEquippedWeapon), porém só dispara ENQUANTO MB1 está segurado,
+    -- e sempre no inimigo visível mais próximo.
     ------------------------------------------------------------------
     do
         local UIS = game:GetService("UserInputService")
+        local _mb1Held = false
+        UIS.InputBegan:Connect(function(inp, gp)
+            if gp then return end
+            if inp.UserInputType == Enum.UserInputType.MouseButton1 then _mb1Held = true end
+        end)
+        UIS.InputEnded:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1 then _mb1Held = false end
+        end)
+
         local function _visibleHead(pl)
             local c = pl.Character; if not c then return nil end
             local hd = c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart")
@@ -12607,29 +12697,27 @@ end)
             return best
         end
 
-        local function _fireOnce()
-            if not Config.Misc.SilentAim then return end
-            if not _alive() then return end
-            if _isBuyPeriod() then return end
-            local w = _findEquippedWeapon(); if not w then return end
-            if _isMeleeWeapon(w) then return end
-            local rounds = rawget(w, "Rounds") or 0
-            if rounds <= 0 then pcall(_tryRefill, w); return end
-            local best = _pickTarget()
-            if best then pcall(_sendKill, best, w) end
-        end
-
-        -- Sustained fire loop (like the old behavior).
         task.spawn(function()
             while scriptRunning do
-                task.wait(0.06)
-                if Config.Misc.SilentAim then
-                    local mb1 = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-                    local trigCombo = Config.TriggerBot and Config.TriggerBot.Enabled
-                    if mb1 or trigCombo then
-                        _fireOnce()
-                    end
-                end
+                local spd    = math.clamp(tonumber(Config.Misc.AutoSkillSpeed)  or 25, 1, 60)
+                local smooth = math.max(0, tonumber(Config.Misc.AutoSkillSmooth) or 0)
+                task.wait((1 / spd) + smooth)
+
+                repeat
+                    if not Config.Misc.SilentAim then break end
+                    local pressed = _mb1Held
+                        or (UIS.IsMouseButtonPressed and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1))
+                        or _G.EclipseMB1Virtual
+                    if not pressed then break end
+                    if not _alive() then break end
+                    if _isBuyPeriod() then break end
+                    local w = _findEquippedWeapon(); if not w then break end
+                    if _isMeleeWeapon(w) then break end
+                    local rounds = rawget(w, "Rounds") or 0
+                    if rounds <= 0 then pcall(_tryRefill, w); break end
+                    local best = _pickTarget(); if not best then break end
+                    pcall(_sendKill, best, w)
+                until true
             end
         end)
     end
