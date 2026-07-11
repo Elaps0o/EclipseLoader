@@ -221,54 +221,6 @@ do
     end
 end
 
-do
-    local ok = rawget(getgenv(), "EclipseLoaderLoaded") == true
-    if not ok and writefile and readfile and isfile then
-        local SESSION_FILE = "EclipseHub_session.dat"
-        local SIG_SECRET   = "ES_v1_9f2a4c1e8b6d3a57f2e0c9b1a48d76e2c5f0"
-        local SESSION_TTL  = 30 * 86400
-        local function _sign(data)
-            local payload = data .. "|" .. SIG_SECRET
-            if crypt and type(crypt.hash) == "function" then
-                local o, h = pcall(crypt.hash, payload, "sha256"); if o and h then return h end
-            end
-            if syn and syn.crypto and type(syn.crypto.hash) == "function" then
-                local o, h = pcall(syn.crypto.hash, "sha256", payload); if o and h then return h end
-            end
-            local h1, h2 = 2166136261, 3735928559
-            for i = 1, #payload do
-                local b = string.byte(payload, i)
-                h1 = (bit32.bxor(h1, b) * 16777619) % 0x100000000
-                h2 = (bit32.bxor(h2, b * 131 + i) * 2246822519) % 0x100000000
-            end
-            return string.format("%08x%08x", h1, h2)
-        end
-        local ex = pcall(isfile, SESSION_FILE) and isfile(SESSION_FILE)
-        if ex then
-            local _, body = pcall(readfile, SESSION_FILE)
-            if body and body ~= "" then
-                local payload, sig = body:match("^(.-)%.([^%.]+)$")
-                if payload and sig and _sign(payload) == sig then
-                    local o, tbl = pcall(function() return HttpService:JSONDecode(payload) end)
-                    if o and type(tbl) == "table"
-                        and tbl.userId == LocalPlayer.UserId
-                        and tbl.username == LocalPlayer.Name
-                        and type(tbl.issued) == "number"
-                        and (os.time() - tbl.issued) <= SESSION_TTL then
-                        ok = true
-                    end
-                end
-            end
-        end
-    end
-    if not ok then
-        pcall(function()
-            LocalPlayer:Kick("Eclipse Hub: please use the official loader. Direct execution is blocked.")
-        end)
-        error("Eclipse Hub: loader gate failed — script must be launched by the Eclipse loader.")
-    end
-end
-
 if getgenv().EclipseHubLoaded then
     warn("Eclipse Hub: reloading previous instance.")
     pcall(function()
@@ -12653,19 +12605,6 @@ end)
     end
 
 
-        if cat == "" then
-            pcall(function() re[method](re, { Equipment = false, Path = item, Name = item }) end)
-            return true
-        end
-        -- Weapons + grenades: Path = Loadout.<Category>.Options.<slot>, Equipment=false.
-        -- Slot varies per team/loadout; the server picks whichever slot's item
-        -- Name matches, silently ignoring the others.
-        for slot = 1, 12 do
-            local path = ("Loadout.%s.Options.%d"):format(cat, slot)
-            pcall(function() re[method](re, { Equipment = false, Path = path, Name = item }) end)
-        end
-        return true
-    end
 
     task.spawn(function()
         while scriptRunning do
