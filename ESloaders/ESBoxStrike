@@ -12570,23 +12570,34 @@ do
         end)
     end
 
-    -- Install ShootWeapon hook once (no wait loop that swallows early shots).
-    task.spawn(function()
+    -- Lazy-install ShootWeapon hook ONLY after the user first enables the
+    -- tracer. Wrapping __namecall globally is a hot path — we must exit as
+    -- fast as possible when disabled (single upvalue read, no getnamecallmethod).
+    local _hookInstalled = false
+    local _tracerActive  = false
+    local function _installHook()
+        if _hookInstalled then return end
+        _hookInstalled = true
         local ok, mt = pcall(getrawmetatable, game)
         if not ok or not mt then return end
         local old = mt.__namecall
         if not old then return end
         pcall(function() setreadonly(mt, false) end)
         mt.__namecall = newcclosure(function(self, ...)
+            -- FAST PATH: single upvalue read; skip everything when disabled.
+            if not _tracerActive then return old(self, ...) end
             local method = getnamecallmethod and getnamecallmethod() or ""
-            if Config.Visuals.BulletTracer and (method == "FireServer" or method == "InvokeServer")
+            if (method == "FireServer" or method == "InvokeServer")
                and typeof(self) == "Instance" and self.Name == "ShootWeapon" then
                 local pkt = (select(1, ...))
                 if type(pkt) == "table" and type(pkt.Bullets) == "table" then
+                    -- LP-only: bullet origin must be near LP camera/head.
+                    local camPos = Camera and Camera.CFrame.Position
                     for _, b in ipairs(pkt.Bullets) do
                         local hits = b.Hits
                         local hit = hits and hits[#hits]
-                        if b.Origin and hit and hit.Position then
+                        if b.Origin and hit and hit.Position and camPos
+                           and (b.Origin - camPos).Magnitude < 12 then
                             pcall(_spawnTracer, b.Origin, hit.Position)
                         end
                     end
@@ -12595,6 +12606,13 @@ do
             return old(self, ...)
         end)
         pcall(function() setreadonly(mt, true) end)
+    end
+    task.spawn(function()
+        while scriptRunning do
+            task.wait(0.5)
+            _tracerActive = Config.Visuals.BulletTracer and true or false
+            if _tracerActive and not _hookInstalled then _installHook() end
+        end
     end)
 end
 
