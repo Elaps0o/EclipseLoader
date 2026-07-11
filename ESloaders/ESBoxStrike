@@ -861,7 +861,7 @@ local Config = {
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=25, AutoSkillSmooth=0.05, AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={} },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=25, AutoSkillSmooth=0.05, AutoSkillDistance=600, AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={} },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -4696,6 +4696,7 @@ GLOVES = {
     ["Sports Gloves"]=true, ["Driver Gloves"]=true, ["Hand Wraps"]=true,
     ["Operator Gloves"]=true, ["Specialist Gloves"]=true, ["Moto Gloves"]=true,
     ["Bloodhound Gloves"]=true, ["Broken Fang Gloves"]=true, ["Hydra Gloves"]=true,
+    ["Chernobyl Gloves"]=true,
 }
 IgnoreFolders = {["HE Grenade"]=true,["Incendiary Grenade"]=true,["Molotov"]=true,["Smoke Grenade"]=true,["Flashbang"]=true,["Decoy Grenade"]=true,["C4"]=true,["CT Glove"]=true,["T Glove"]=true}
 SkinsFolder = SkinsFolder
@@ -8906,6 +8907,24 @@ function CreateSkinDropdown(weapon, section)
             end
             if v == "Vanilla" or v == "None" then Config.Skins.SelectedSkins[weapon] = nil else Config.Skins.SelectedSkins[weapon] = v end
 
+            -- Glove mutex: only ONE glove type can have a skin selected at a time.
+            -- Selecting a new glove clears every other glove-type + resets their
+            -- dropdowns back to Vanilla so the runtime doesn't try to apply two
+            -- glove templates on top of each other (visual bug reported).
+            if GLOVES[weapon] and v ~= "Vanilla" and v ~= "None" then
+                for gt in pairs(GLOVES) do
+                    if gt ~= weapon and Config.Skins.SelectedSkins[gt] then
+                        Config.Skins.SelectedSkins[gt] = nil
+                        pcall(function()
+                            if Options and Options["Skin_"..gt] then
+                                Options["Skin_"..gt]:SetValue("Vanilla")
+                            end
+                        end)
+                    end
+                end
+                pcall(_clearGloveSkinRuntime)
+            end
+
             
             if _EclipseConfigLoading then return end
             if v == "Vanilla" or v == "None" then
@@ -9096,6 +9115,10 @@ do
             Callback = function(v) Config.Misc.AutoSkillSpeed = v end })
         ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYLL SMOOTH", Default = 0.05, Min = 0, Max = 1, Rounding = 2, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSmooth = v end })
+        ASGB:AddLabel("CHERNOBYL PART")
+        Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 600
+        ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 600, Rounding = 0, Suffix = "",
+            Callback = function(v) Config.Misc.AutoSkillDistance = v end })
         Config.Misc.AutoSkillChangeWeapon = false
     end
     Config.Misc.AutoSkillTeamCheck  = true
@@ -9109,12 +9132,17 @@ end
 do
     local ABGB = Tabs.Misc:AddRightGroupbox("AUTOBUY")
     local AUTOBUY_ITEMS = {
-        "AK-47","M4A4","M4A1-S","AWP","Deagle","USP-S","Glock-18","P250",
-        "Five-SeveN","Tec-9","MP9","MAC-10","MP7","UMP-45","P90",
-        "Galil AR","FAMAS","SSG 08","AUG","SG 553","Nova","XM1014",
-        "M249","Negev",
-        "Kevlar","Kevlar + Helmet","Defuse Kit",
-        "Flashbang","HE Grenade","Smoke Grenade","Molotov","Incendiary Grenade","Decoy Grenade",
+        -- Equipment
+        "Taser",
+        -- Pistols
+        "USP-S","Glock-18","R8 Revolver","P250","Five-SeveN","Tec-9",
+        "Desert Eagle","Dual Berettas",
+        -- Mid-Tier (SMGs + Heavy)
+        "MP9","MAC-10","Negev","P90","Nova","Sawed-Off","XM1014",
+        -- Rifles
+        "FAMAS","Galil AR","M4A1-S","AK-47","AWP","SSG 08","AUG","SG 553",
+        -- Grenades
+        "Flashbang","Smoke Grenade","HE Grenade","Incendiary Grenade","Molotov","Decoy Grenade",
     }
     table.sort(AUTOBUY_ITEMS)
     ABGB:AddToggle("AB_Enable", { Text = "AUTOBUY", Default = false,
@@ -9130,7 +9158,7 @@ do
             Config.Misc.AutoBuyItems = out
         end,
     })
-    ABGB:AddLabel("Buys selected items once each buy period.")
+    
 end
 
 
@@ -11409,6 +11437,11 @@ end)()
         if plr == LocalPlayer then return end
         if plr and IsAlly and IsAlly(plr) then return end
         if not _localIsAlive() then return end
+        -- LP-attribution gate: only fire if we damaged / lethaled this player recently.
+        local lethalAt = plr and (_lastLethalByLP[plr] or _lastLethalByUid[tonumber(plr.UserId)])
+        local dmgAt    = plr and _lastDamagedByLP[plr]
+        local ok = (lethalAt and (tick()-lethalAt) < 5.0) or (dmgAt and (tick()-dmgAt) < 1.5)
+        if not ok then return end
         if not _killCharVisible(char) then return end
         _killEffectDone[char] = tick()
         if Config.GlobalEnable and Config.Visuals.KillEffect then
@@ -12062,6 +12095,20 @@ end)
     --   Speed  = shots per second   (higher = faster)
     --   Smooth = extra delay (sec)  (higher = slower / smoother)
     ------------------------------------------------------------------
+    -- Strict team check: player.Team/TeamColor OR character parent folder
+    -- (Terrorists / CounterTerrorists). If we can't confirm the enemy team,
+    -- we DO NOT fire — better to skip than to hit an ally.
+    local function _asTeamKey(plr)
+        if not plr then return nil end
+        local k = _hudTeamKeyForPlayer and _hudTeamKeyForPlayer(plr) or nil
+        if k then return k end
+        local ch = plr.Character
+        local parent = ch and ch.Parent and ch.Parent.Name
+        if parent == "Terrorists" then return "Terrorists" end
+        if parent == "CounterTerrorists" or parent == "Counter-Terrorists" then return "Counter-Terrorists" end
+        return nil
+    end
+
     task.spawn(function()
         while scriptRunning do
             local spd    = math.clamp(tonumber(Config.Misc.AutoSkillSpeed)  or 25, 1, 60)
@@ -12073,37 +12120,45 @@ end)
                 if not Config.Misc.AutoSkill then break end
                 if not _alive() then break end
                 if _isBuyPeriod() then
-                    -- Respect buy period, clear cache so a stale weapon doesn't lock us
                     _weaponTable = nil
                     break
                 end
 
                 local w = _findEquippedWeapon()
                 if not w then break end
-                if _isMeleeWeapon(w) then break end
+                if _isMeleeWeapon(w) then
+                    -- Knife equipped: back off HARD so we don't spin the loop
+                    _weaponTable = nil
+                    _lastTarget  = nil
+                    task.wait(0.5)
+                    break
+                end
                 local rounds = rawget(w, "Rounds") or 0
                 if rounds <= 0 then pcall(_tryRefill, w); break end
 
-                local myTeam = LocalPlayer.Team
+                local myKey  = _asTeamKey(LocalPlayer)
+                local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 600
+                local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
                 local killed = 0
                 for _, pl in ipairs(Players:GetPlayers()) do
-                    if pl ~= LocalPlayer and not (myTeam and pl.Team == myTeam) then
-                        local c = pl.Character
-                        local h = c and c:FindFirstChildOfClass("Humanoid")
+                    repeat
+                        if pl == LocalPlayer then break end
+                        local pKey = _asTeamKey(pl)
+                        -- If both teams are known and equal → ALLY, skip.
+                        if myKey and pKey and pKey == myKey then break end
+                        -- If we know our team but not theirs → unknown, skip.
+                        if myKey and not pKey then break end
+                        local c  = pl.Character
+                        local h  = c and c:FindFirstChildOfClass("Humanoid")
                         local hp = h and h.Health or 0
-                        if hp > 0 then
-                            _sendKill(pl, w)
-                            killed = killed + 1
-                            if _lastTarget ~= pl.Name then
-                                _lastTarget = pl.Name
-                                pcall(function()
-                                    if Library and Library.Notify then
-                                        Library:Notify("[killed by eclipse] " .. pl.Name, 1)
-                                    end
-                                end)
-                            end
+                        if hp <= 0 then break end
+                        if maxD > 0 then
+                            local hd = _headOf(pl); if not hd then break end
+                            if (hd.Position - origin).Magnitude > maxD then break end
                         end
-                    end
+                        _sendKill(pl, w)
+                        killed = killed + 1
+                    until true
                 end
                 if killed == 0 then _lastTarget = nil end
             until true
@@ -12118,24 +12173,79 @@ end)
     ------------------------------------------------------------------
     local _buyRE, _boughtThisPeriod, _wasBuy = nil, {}, false
 
+    -- Path map matching the game's BuyMenuPurchase payload:
+    --   { Equipment=<bool>, Path="Loadout.<Cat>.Options.<Idx>", Name="<Display>" }
+    --
+    -- Slots are TEAM-DEPENDENT (shop layout differs per side). Confirmed
+    -- from user dump: on T, P250 = Loadout.Pistols.Options.2. On CT, slot 2
+    -- of Pistols shows R8 Revolver. So each item stores {ct=slot, t=slot}
+    -- and we resolve at fire time using LocalPlayer.Team / character parent.
+    -- Categories mirror the in-game tabs: Equipment, Pistols, MidTier,
+    -- Rifles, Grenades.
+    local function C(cat, ctSlot, tSlot, equip)
+        return { cat = cat, ct = ctSlot, t = tSlot, equip = equip and true or false }
+    end
+    local BUY_MAP = {
+        -- Equipment tab
+        ["Taser"]              = C("Equipment", 1, 1, true),
+
+        -- Pistols tab
+        ["USP-S"]              = C("Pistols", 1, nil, false),
+        ["Glock-18"]           = C("Pistols", nil, 1, false),
+        ["R8 Revolver"]        = C("Pistols", 2, nil, false),
+        ["P250"]               = C("Pistols", nil, 2, false),
+        ["Five-SeveN"]         = C("Pistols", 3, nil, false),
+        ["Tec-9"]              = C("Pistols", nil, 3, false),
+        ["Desert Eagle"]       = C("Pistols", 4, 4, false),
+        ["Dual Berettas"]      = C("Pistols", 5, 5, false),
+
+        -- Mid-Tier tab (SMGs + Heavy mixed)
+        ["MP9"]                = C("MidTier", 1, nil, false),
+        ["MAC-10"]             = C("MidTier", nil, 1, false),
+        ["Negev"]              = C("MidTier", 2, 2, false),
+        ["P90"]                = C("MidTier", 3, 3, false),
+        ["Nova"]               = C("MidTier", 4, nil, false),
+        ["Sawed-Off"]          = C("MidTier", nil, 4, false),
+        ["XM1014"]             = C("MidTier", 5, 5, false),
+
+        -- Rifles tab
+        ["FAMAS"]              = C("Rifles", 1, nil, false),
+        ["Galil AR"]           = C("Rifles", nil, 1, false),
+        ["M4A1-S"]             = C("Rifles", 2, nil, false),
+        ["AK-47"]              = C("Rifles", nil, 2, false),
+        ["AWP"]                = C("Rifles", 3, 3, false),
+        ["SSG 08"]             = C("Rifles", 4, 4, false),
+        ["AUG"]                = C("Rifles", 5, nil, false),
+        ["SG 553"]             = C("Rifles", nil, 5, false),
+
+        -- Grenades tab
+        ["Flashbang"]          = C("Grenades", 1, 1, true),
+        ["Smoke Grenade"]      = C("Grenades", 2, 2, true),
+        ["HE Grenade"]         = C("Grenades", 3, 3, true),
+        ["Incendiary Grenade"] = C("Grenades", 4, nil, true),
+        ["Molotov"]            = C("Grenades", nil, 4, true),
+        ["Decoy Grenade"]      = C("Grenades", 5, 5, true),
+    }
+
+    local function _lpTeamSide()
+        local ch = LocalPlayer.Character
+        local pn = ch and ch.Parent and ch.Parent.Name
+        if pn == "CounterTerrorists" or pn == "Counter-Terrorists" then return "ct" end
+        if pn == "Terrorists" then return "t" end
+        local tm = LocalPlayer.Team
+        local tn = tm and tm.Name or ""
+        if tn:lower():find("counter") then return "ct" end
+        if tn:lower():find("terror") then return "t" end
+        return nil
+    end
+
     local function _findBuyRemote()
         if typeof(_buyRE) == "Instance" and _buyRE.Parent then return _buyRE end
         local ok, re = pcall(function()
             local rs  = game:GetService("ReplicatedStorage")
             local nr  = rs:FindFirstChild("NetworkRemotes")
             local inv = nr and nr:FindFirstChild("Inventory")
-            if not inv then return nil end
-            for _, want in ipairs({"BuyWeapon","PurchaseWeapon","BuyItem","PurchaseItem","Buy","Purchase"}) do
-                local c = inv:FindFirstChild(want)
-                if c and (c:IsA("RemoteEvent") or c:IsA("RemoteFunction")) then return c end
-            end
-            for _, c in ipairs(inv:GetChildren()) do
-                local n = c.Name:lower()
-                if (c:IsA("RemoteEvent") or c:IsA("RemoteFunction")) and (n:find("buy") or n:find("purchase")) then
-                    return c
-                end
-            end
-            return nil
+            return inv and inv:FindFirstChild("BuyMenuPurchase") or nil
         end)
         if ok and typeof(re) == "Instance" then _buyRE = re; return re end
         return nil
@@ -12143,16 +12253,15 @@ end)
 
     local function _fireBuy(item)
         local re = _findBuyRemote(); if not re then return false end
-        local payloads = {
-            { Weapon = item }, { Item = item }, { Name = item },
-            { WeaponName = item }, { ItemName = item },
-        }
+        local spec = BUY_MAP[item]; if not spec then return false end
+        local side = _lpTeamSide(); if not side then return false end
+        local slot = (side == "ct") and spec.ct or spec.t
+        if not slot then return false end -- not sold on this team
+        local path = ("Loadout.%s.Options.%d"):format(spec.cat, slot)
         local method = re:IsA("RemoteFunction") and "InvokeServer" or "FireServer"
-        for _, p in ipairs(payloads) do
-            local ok = pcall(function() re[method](re, p) end)
-            if ok then return true end
-        end
-        pcall(function() re[method](re, item) end)
+        pcall(function()
+            re[method](re, { Equipment = spec.equip, Path = path, Name = item })
+        end)
         return true
     end
 
