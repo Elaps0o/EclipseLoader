@@ -4428,9 +4428,19 @@ function updateMovement()
 
     local spaceHeld = UserInput:IsKeyDown(Enum.KeyCode.Space)
     if Config.Movement.BunnyHop and spaceHeld then
-        if grounded and tick() - lastBhop > 0.12 then
+        if grounded and tick() - lastBhop > 0.06 then
             hum:ChangeState(Enum.HumanoidStateType.Jumping)
             lastBhop = tick()
+            -- Small horizontal momentum preservation for persistent bhop chains
+            -- (no vertical boost — avoids the "floating character" bug).
+            pcall(function()
+                local cv = root.AssemblyLinearVelocity
+                local horiz = Vector3.new(cv.X, 0, cv.Z)
+                if horiz.Magnitude > 4 then
+                    local boost = horiz.Unit * math.min(horiz.Magnitude * 0.18, 6)
+                    root.AssemblyLinearVelocity = Vector3.new(cv.X + boost.X, cv.Y, cv.Z + boost.Z)
+                end
+            end)
         end
     end
 
@@ -9317,12 +9327,22 @@ end
 -- ============================================================
 do
     local RunS = game:GetService("RunService")
-    local _wh, _whWeapon = nil, nil
+    local _wh, _whRim, _whWeapon = nil, nil, nil
     local function _clear()
-        if _wh then pcall(function() _wh:Destroy() end); _wh = nil end
+        if _wh    then pcall(function() _wh:Destroy()    end); _wh = nil end
+        if _whRim then pcall(function() _whRim:Destroy() end); _whRim = nil end
         _whWeapon = nil
     end
     _G.EclipseWHClear = _clear
+
+    -- Reset state on respawn so the WH re-applies on the new viewmodel.
+    if LocalPlayer then
+        LocalPlayer.CharacterAdded:Connect(function()
+            _clear()
+            task.wait(0.5)
+            _whWeapon = nil
+        end)
+    end
 
     local function _findVMWeapon()
         -- Highlight active viewmodel weapon INCLUDING custom knife viewmodel.
@@ -9333,9 +9353,6 @@ do
         local vm = cam:FindFirstChild("Viewmodel") or cam:FindFirstChild("ViewModel")
             or cam:FindFirstChildWhichIsA("Model")
         if not vm then return nil end
-        -- If the viewmodel itself IS the weapon (e.g. T Knife / CT Knife / gun models
-        -- parented directly under Camera), use it; otherwise pick the first non-arm
-        -- child model.
         for _, ch in ipairs(vm:GetChildren()) do
             local n = ch.Name:lower()
             if ch:IsA("Model") and n ~= "arms" and n ~= "gloves" and not n:find("hand") then
@@ -9348,6 +9365,7 @@ do
     local function _ensureHighlight(model, color, inten)
         if not model or not model.Parent then return end
         if _wh and _wh.Parent ~= model then pcall(function() _wh:Destroy() end); _wh = nil end
+        if _whRim and _whRim.Parent ~= model then pcall(function() _whRim:Destroy() end); _whRim = nil end
         if not _wh then
             _wh = Instance.new("Highlight")
             _wh.Name = "EclipseWH"
@@ -9355,19 +9373,30 @@ do
             _wh.DepthMode = Enum.HighlightDepthMode.Occluded
             _wh.Parent = model
         end
-        local a = math.clamp((inten or 1) * 0.35, 0.10, 0.85)
+        -- Second highlight = crisp rim outline for 3D "premium" pop.
+        if not _whRim then
+            _whRim = Instance.new("Highlight")
+            _whRim.Name = "EclipseWHRim"
+            _whRim.Adornee = model
+            _whRim.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            _whRim.FillTransparency = 1        -- rim only, no inner fill
+            _whRim.Parent = model
+        end
+        local a = math.clamp((inten or 1) * 0.45, 0.15, 0.9)
         pcall(function()
-            _wh.FillColor = color
-            _wh.OutlineColor = color
-            _wh.FillTransparency = 1 - a       -- subtle glow, no light emission
-            _wh.OutlineTransparency = math.clamp(1 - a * 1.2, 0, 0.6)
+            _wh.FillColor          = color
+            _wh.OutlineColor       = color
+            _wh.FillTransparency   = 1 - a * 0.55
+            _wh.OutlineTransparency= math.clamp(1 - a, 0, 0.4)
+            _whRim.OutlineColor    = color
+            _whRim.OutlineTransparency = math.clamp(1 - a * 0.9, 0, 0.5)
         end)
     end
 
     RunS.Heartbeat:Connect(function()
         if not scriptRunning then return end
         if not Config.Misc.WeaponHighlight then
-            if _wh then _clear() end
+            if _wh or _whRim then _clear() end
             return
         end
         local w = _findVMWeapon()
@@ -12531,9 +12560,10 @@ end)
     end)
 
     ------------------------------------------------------------------
-    -- SILENT AIM — fires ONE bullet per MB1 press. While MB1 is held,
-    -- additional bullets are queued at 1 per second (tap 3x = 3 bullets;
-    -- hold 10s = 10 bullets). No aim/FOV movement — packet-level hit.
+    -- SILENT AIM — sustained fire while MB1 is held (like the previous
+    -- behavior). Also cooperates with TriggerBot: when both SilentAim and
+    -- TriggerBot are enabled, auto-fires at the closest visible enemy WITHOUT
+    -- requiring the user to hold MB1 or aim at the enemy.
     ------------------------------------------------------------------
     do
         local UIS = game:GetService("UserInputService")
@@ -12589,28 +12619,16 @@ end)
             if best then pcall(_sendKill, best, w) end
         end
 
-        -- Immediate shot on MB1 press
-        UIS.InputBegan:Connect(function(inp, gp)
-            if gp then return end
-            if inp.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-            if not Config.Misc.SilentAim then return end
-            task.spawn(_fireOnce)
-        end)
-
-        -- Sustained fire while held: 1 bullet per second
+        -- Sustained fire loop (like the old behavior).
         task.spawn(function()
-            local nextShot = 0
             while scriptRunning do
-                task.wait(0.05)
-                if Config.Misc.SilentAim
-                   and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-                    local now = os.clock()
-                    if now >= nextShot then
+                task.wait(0.06)
+                if Config.Misc.SilentAim then
+                    local mb1 = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+                    local trigCombo = Config.TriggerBot and Config.TriggerBot.Enabled
+                    if mb1 or trigCombo then
                         _fireOnce()
-                        nextShot = now + 1.0
                     end
-                else
-                    nextShot = 0
                 end
             end
         end)
