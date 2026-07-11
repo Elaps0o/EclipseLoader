@@ -4724,30 +4724,34 @@ function _TW_InitSkinChangerHooks()
                 return nil
             end
         end
-        local function _TW_IsLocal(...)
-            local lp = LocalPlayer or (Players and Players.LocalPlayer)
-            if not lp then return false end
-            local lpChar = lp.Character
-            for i = 1, select("#", ...) do
-                local a = select(i, ...)
-                if a == lp then return true end
-                if typeof(a) == "Instance" then
-                    if a == lpChar then return true end
-                    if lpChar and a:IsDescendantOf(lpChar) then return true end
-                    local ok, plr = pcall(function() return Players:GetPlayerFromCharacter(a) end)
-                    if ok and plr == lp then return true end
-                    if a.Parent == workspace.CurrentCamera then return true end
+        if type(Sk.GetCharacterModel) == "function" then
+            local oGChM = Sk.GetCharacterModel
+            Sk.GetCharacterModel = function(w, sk, ...)
+                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning and _TW_CheckBaseKnife(w) then
+                    local nk = Config.Skins.SelectedKnife
+                    local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
+                    local ok, result = pcall(oGChM, nk, ns, ...)
+                    if ok and result then return result end
                 end
+                local ok, result = pcall(oGChM, w, sk, ...)
+                if ok then return result end
+                return nil
             end
-            return false
         end
-        -- NOTE: Sk.GetCharacterModel e Sk.GetGloves sao chamados pelo jogo
-        -- para renderizar o personagem/luva de TODOS os players no mundo.
-        -- Sem forma 100% confiavel de identificar o LocalPlayer via varargs,
-        -- hookar esses caminhos vaza a skin para todos. O viewmodel do
-        -- LocalPlayer ja e coberto por Sk.GetCameraModel + Vm.new
-        -- (naturalmente locais), entao esses dois hooks ficam desativados.
-        local _ = _TW_IsLocal -- reservado para uso futuro
+        if type(Sk.GetGloves) == "function" then
+            local oGG = Sk.GetGloves
+            Sk.GetGloves = function(g, sk, ...)
+                local gm, gs = _TW_SelectedGlove()
+                if Config.Skins.SkinChangerEnabled and gm and gs then
+                    local ok, result = pcall(oGG, gm, gs, ...)
+                    if ok and result then return result end
+                end
+                local ok, result = pcall(oGG, g, sk, ...)
+                if ok then return result end
+                return nil
+            end
+        end
+
 
         if type(Vm) == "table" and type(Vm.new) == "function" then
             local oVN = Vm.new
