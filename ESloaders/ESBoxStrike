@@ -861,7 +861,7 @@ local Config = {
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=25, AutoSkillSmooth=0.05, AutoSkillDistance=600, AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={} },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=25, AutoSkillSmooth=0.05, AutoSkillDistance=600, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255) },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -8264,6 +8264,18 @@ SafeAddDropdown(PVGB, "PV_KillEffectType", {
     Callback=function(v) Config.Visuals.KillEffectType=v end,
 })
 
+-- WEAPON VISUALS (viewmodel highlight)
+local WVGB = Tabs.Visuals:AddRightGroupbox("WEAPON", "aperture")
+WVGB:AddToggle("WV_Highlight", { Text = "WEAPON HIGHLIGHT", Default = false,
+    Callback = function(v) Config.Misc.WeaponHighlight = v end })
+    :AddColorPicker("WV_HighlightColor", { Default = Config.Misc.WeaponHighlightColor or Color3.fromRGB(0,170,255),
+        Title = "Highlight Color",
+        Callback = function(c) Config.Misc.WeaponHighlightColor = c end })
+WVGB:AddSlider("WV_HighlightIntensity", { Text = "INTENSITY", Default = Config.Misc.WeaponHighlightIntensity or 1.0,
+    Min = 0.1, Max = 3.0, Rounding = 2, Suffix = "",
+    Callback = function(v) Config.Misc.WeaponHighlightIntensity = v end })
+
+
 
 
 ChGB = Tabs.Visuals:AddLeftGroupbox("SNIPER CROSSHAIR", "crosshair")
@@ -9111,42 +9123,170 @@ do
     else
         ASGB:AddToggle("AS_Enable", { Text = "AUTOSKILL", Default = false,
             Callback = function(v) Config.Misc.AutoSkill = (v and not EX_BLOCK_SILENT) end })
+            :AddKeyPicker("AS_Key", { Default = "J", SyncToggleState = true, Mode = "Toggle", Text = "AutoSkill" })
         ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYLL SPEED", Default = 25, Min = 1, Max = 60, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSpeed = v end })
         ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYLL SMOOTH", Default = 0.05, Min = 0, Max = 1, Rounding = 2, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSmooth = v end })
         ASGB:AddLabel("CHERNOBYL PART")
         Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 600
+        Config.Misc.AutoSkillPart     = Config.Misc.AutoSkillPart or "Head"
+        SafeAddDropdown(ASGB, "AS_Part", {
+            Text = "TARGET PART",
+            Values = { "Head", "Neck", "Chest", "Torso", "Legs" },
+            Default = Config.Misc.AutoSkillPart,
+            Callback = function(v) Config.Misc.AutoSkillPart = v end,
+        })
         ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 600, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillDistance = v end })
+        -- AutoSkill segue o TEAM CHECK global (Config.TeamCheck); sem toggle próprio.
+        -- SILENT AIM (uses AutoSkill packet infra, single bullet per click)
+        Config.Misc.SilentAim         = false
+        Config.Misc.SilentAimTrigger  = false
+        ASGB:AddToggle("AS_Silent", { Text = "SILENT AIM", Default = false,
+            Callback = function(v) Config.Misc.SilentAim = (v and not EX_BLOCK_SILENT) end })
+        ASGB:AddToggle("AS_SilentTrigger", { Text = "SILENT + TRIGGERBOT (shoot where you look)", Default = false,
+            Callback = function(v) Config.Misc.SilentAimTrigger = v end })
         Config.Misc.AutoSkillChangeWeapon = false
     end
-    Config.Misc.AutoSkillTeamCheck  = true
     Config.Misc.AutoSkillRespectBuy = true
     Config.Misc.AutoSkillRefill     = true
+end
+
+-- ============================================================
+-- THIRD PERSON (Misc) — persistent camera offset with keybind
+-- ============================================================
+do
+    local TPGB = Tabs.Misc:AddLeftGroupbox("THIRD PERSON")
+    TPGB:AddToggle("TP_Enable", { Text = "THIRD PERSON", Default = false,
+        Callback = function(v) Config.Misc.ThirdPerson = v end })
+        :AddKeyPicker("TP_Key", { Default = "T", SyncToggleState = true, Mode = "Toggle", Text = "Third Person" })
+    TPGB:AddSlider("TP_OffX", { Text = "OFFSET X", Default = Config.Misc.ThirdPersonOffsetX or 2.5,
+        Min = -10, Max = 10, Rounding = 2, Suffix = "",
+        Callback = function(v) Config.Misc.ThirdPersonOffsetX = v end })
+    TPGB:AddSlider("TP_OffY", { Text = "OFFSET Y", Default = Config.Misc.ThirdPersonOffsetY or 1.0,
+        Min = -5, Max = 10, Rounding = 2, Suffix = "",
+        Callback = function(v) Config.Misc.ThirdPersonOffsetY = v end })
+
+    -- Persistent enforcement via Humanoid.CameraOffset (cheap, no CFrame fight)
+    task.spawn(function()
+        while scriptRunning do
+            task.wait(0.1)
+            local ok = pcall(function()
+                local ch = LocalPlayer.Character
+                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                if not hum then return end
+                if Config.Misc.ThirdPerson then
+                    hum.CameraOffset = Vector3.new(
+                        Config.Misc.ThirdPersonOffsetX or 2.5,
+                        Config.Misc.ThirdPersonOffsetY or 1.0,
+                        0
+                    )
+                    pcall(function()
+                        LocalPlayer.CameraMode = Enum.CameraMode.Classic
+                        LocalPlayer.CameraMaxZoomDistance = 12
+                        LocalPlayer.CameraMinZoomDistance = 8
+                    end)
+                else
+                    if hum.CameraOffset.Magnitude > 0.01 then
+                        hum.CameraOffset = Vector3.new(0,0,0)
+                    end
+                end
+            end)
+            if not ok then task.wait(0.5) end
+        end
+    end)
+end
+
+-- ============================================================
+-- WEAPON HIGHLIGHT — premium glow on viewmodel weapon
+-- ============================================================
+do
+    local RunS = game:GetService("RunService")
+    local _wh, _whLight = nil, nil
+    local function _clear()
+        if _wh then pcall(function() _wh:Destroy() end); _wh = nil end
+        if _whLight then pcall(function() _whLight:Destroy() end); _whLight = nil end
+    end
+    local function _findVMWeapon()
+        local cam = workspace.CurrentCamera; if not cam then return nil end
+        local vm = cam:FindFirstChild("Viewmodel") or cam:FindFirstChild("ViewModel")
+            or cam:FindFirstChildWhichIsA("Model")
+        if not vm then return nil end
+        for _, ch in ipairs(vm:GetChildren()) do
+            local n = ch.Name:lower()
+            if ch:IsA("Model") and n ~= "arms" and n ~= "gloves" and not n:find("hand") then
+                return ch
+            end
+        end
+        return nil
+    end
+    RunS.Heartbeat:Connect(function()
+        if not scriptRunning then return end
+        if not Config.Misc.WeaponHighlight then
+            if _wh then _clear() end
+            return
+        end
+        local w = _findVMWeapon()
+        if not w or not w.Parent then _clear(); return end
+        -- skip melee
+        local wn = (w.Name or ""):lower()
+        if wn:find("knife") or wn:find("bayonet") or wn:find("karambit") then _clear(); return end
+        local col = Config.Misc.WeaponHighlightColor or Color3.fromRGB(0,170,255)
+        local inten = Config.Misc.WeaponHighlightIntensity or 1.0
+        if not _wh or _wh.Adornee ~= w then
+            _clear()
+            _wh = Instance.new("Highlight")
+            _wh.Name = "EclipseWH"
+            _wh.Adornee = w
+            _wh.FillTransparency = 0.6
+            _wh.OutlineTransparency = 0
+            _wh.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            _wh.Parent = game:GetService("CoreGui")
+            local anchor = w:FindFirstChildWhichIsA("BasePart", true)
+            if anchor then
+                _whLight = Instance.new("PointLight")
+                _whLight.Name = "EclipseWHLight"
+                _whLight.Range = 6
+                _whLight.Parent = anchor
+            end
+        end
+        _wh.FillColor = col
+        _wh.OutlineColor = col
+        _wh.FillTransparency = math.clamp(0.8 - inten * 0.25, 0.15, 0.85)
+        if _whLight then
+            _whLight.Color = col
+            _whLight.Brightness = inten * 2.5
+            _whLight.Range = 4 + inten * 6
+        end
+    end)
 end
 
 -- ============================================================
 -- AUTOBUY (Misc) — fires Inventory buy remotes every buy period
 -- ============================================================
 do
-    local ABGB = Tabs.Misc:AddRightGroupbox("AUTOBUY")
+    local ABGB = Tabs.Misc:AddRightGroupbox("AUTO SHOP")
     local AUTOBUY_ITEMS = {
         -- Equipment
-        "Taser",
+        "Kevlar","Kevlar + Helmet","Zeus x27","Defuse Kit",
         -- Pistols
         "USP-S","Glock-18","R8 Revolver","P250","Five-SeveN","Tec-9",
-        "Desert Eagle","Dual Berettas",
-        -- Mid-Tier (SMGs + Heavy)
-        "MP9","MAC-10","Negev","P90","Nova","Sawed-Off","XM1014",
+        "CZ75-Auto","Desert Eagle","Dual Berettas","P2000",
+        -- SMGs
+        "MP9","MAC-10","MP7","UMP-45","P90","PP-Bizon","MP5-SD",
+        -- Heavy
+        "Nova","Sawed-Off","XM1014","MAG-7","M249","Negev",
         -- Rifles
-        "FAMAS","Galil AR","M4A1-S","AK-47","AWP","SSG 08","AUG","SG 553",
+        "FAMAS","Galil AR","M4A4","M4A1-S","AK-47","AWP","SSG 08","AUG","SG 553","SCAR-20","G3SG1",
         -- Grenades
         "Flashbang","Smoke Grenade","HE Grenade","Incendiary Grenade","Molotov","Decoy Grenade",
     }
     table.sort(AUTOBUY_ITEMS)
-    ABGB:AddToggle("AB_Enable", { Text = "AUTOBUY", Default = false,
-        Callback = function(v) Config.Misc.AutoBuy = v end })
+    -- Explicit off on load to avoid stale autosave firing purchases
+    Config.Misc.AutoBuy = false
+    ABGB:AddToggle("AB_Enable", { Text = "AUTO SHOP", Default = false,
+        Callback = function(v) Config.Misc.AutoBuy = v and true or false end })
     SafeAddDropdown(ABGB, "AB_Items", {
         Text = "ITEMS", Values = AUTOBUY_ITEMS, Multi = true,
         Default = Config.Misc.AutoBuyItems or {},
@@ -9158,7 +9298,6 @@ do
             Config.Misc.AutoBuyItems = out
         end,
     })
-    
 end
 
 
@@ -11982,11 +12121,30 @@ end)
         return c:FindFirstChild(name)
     end
 
+    -- Resolves a target BasePart in the character based on Config.Misc.AutoSkillPart
+    local _PART_MAP = {
+        Head  = { "Head" },
+        Neck  = { "Neck", "Head" },
+        Chest = { "UpperTorso", "Torso" },
+        Torso = { "LowerTorso", "UpperTorso", "Torso", "HumanoidRootPart" },
+        Legs  = { "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg", "Left Leg", "Right Leg" },
+    }
+    local function _resolveHitPart(pl)
+        local c = pl.Character; if not c then return nil end
+        local key = Config.Misc.AutoSkillPart or "Head"
+        local list = _PART_MAP[key] or _PART_MAP.Head
+        for _, name in ipairs(list) do
+            local p = c:FindFirstChild(name)
+            if p and p:IsA("BasePart") then return p, name end
+        end
+        return c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart"), "Head"
+    end
+
     local function _sendKill(pl, w)
-        local head = _headOf(pl); if not head then return end
+        local target, partName = _resolveHitPart(pl); if not target then return end
 
         local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
-        local hitPos = head.Position
+        local hitPos = target.Position
         local delta  = (hitPos - origin)
         if delta.Magnitude < 0.01 then return end
         local dist = delta.Magnitude
@@ -11997,13 +12155,12 @@ end)
             if r > 0 then w.Rounds = r - 1 end
         end)
 
-        -- Headshot only — single hit on the Head
         local function mkHit(inst, offset, exit, normal)
             local pos = (inst and inst.Position) or hitPos
             return {
                 Normal   = normal or (-dir),
                 Position = pos + (offset or Vector3.new()),
-                Instance = inst or head,
+                Instance = inst or target,
                 Distance = math.max(0.05, (pos - origin).Magnitude),
                 Material = "Plastic",
                 Exit     = exit and true or false,
@@ -12011,7 +12168,7 @@ end)
         end
 
         local hits = {
-            mkHit(head, Vector3.new(0, 0.02, 0), false),
+            mkHit(target, Vector3.new(0, 0.02, 0), false),
         }
 
         _seq = _seq + 1
@@ -12029,13 +12186,11 @@ end)
             IsSniperScoped = false,
         }
 
-        -- Preferred path: direct RemoteEvent:FireServer (matches new dump)
         local sent = false
         local re = _findShootRE()
         if re then
             sent = pcall(function() re:FireServer(packet) end)
         end
-        -- Fallback: legacy KOV holder.ShootWeapon.Send dot-call
         if not sent then
             local holder = _findRemote()
             if holder then
@@ -12140,14 +12295,15 @@ end)
                 local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 600
                 local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
                 local killed = 0
+                local skipTeam = _IS_DEATHMATCH or (not Config.TeamCheck)
                 for _, pl in ipairs(Players:GetPlayers()) do
                     repeat
                         if pl == LocalPlayer then break end
-                        local pKey = _asTeamKey(pl)
-                        -- If both teams are known and equal → ALLY, skip.
-                        if myKey and pKey and pKey == myKey then break end
-                        -- If we know our team but not theirs → unknown, skip.
-                        if myKey and not pKey then break end
+                        if not skipTeam then
+                            local pKey = _asTeamKey(pl)
+                            if myKey and pKey and pKey == myKey then break end
+                            if myKey and not pKey then break end
+                        end
                         local c  = pl.Character
                         local h  = c and c:FindFirstChildOfClass("Humanoid")
                         local hp = h and h.Health or 0
@@ -12166,78 +12322,31 @@ end)
     end)
 
     ------------------------------------------------------------------
-    -- AUTOBUY — fires the game's Inventory buy remote for each item
-    -- selected in the Misc > AUTOBUY dropdown, once per buy period.
-    -- Tries multiple payload shapes because different builds use
-    -- {Weapon=name}, {Item=name}, or a raw string arg.
+    -- AUTO SHOP — fires BuyMenuPurchase with the display Name.
+    -- The user can rearrange their loadout slots, so we don't hardcode
+    -- paths anymore. We send the Name (and category-guessed Paths as
+    -- fallback), letting the server resolve the actual slot.
     ------------------------------------------------------------------
     local _buyRE, _boughtThisPeriod, _wasBuy = nil, {}, false
 
-    -- Path map matching the game's BuyMenuPurchase payload:
-    --   { Equipment=<bool>, Path="Loadout.<Cat>.Options.<Idx>", Name="<Display>" }
-    --
-    -- Slots are TEAM-DEPENDENT (shop layout differs per side). Confirmed
-    -- from user dump: on T, P250 = Loadout.Pistols.Options.2. On CT, slot 2
-    -- of Pistols shows R8 Revolver. So each item stores {ct=slot, t=slot}
-    -- and we resolve at fire time using LocalPlayer.Team / character parent.
-    -- Categories mirror the in-game tabs: Equipment, Pistols, MidTier,
-    -- Rifles, Grenades.
-    local function C(cat, ctSlot, tSlot, equip)
-        return { cat = cat, ct = ctSlot, t = tSlot, equip = equip and true or false }
-    end
-    local BUY_MAP = {
-        -- Equipment tab
-        ["Taser"]              = C("Equipment", 1, 1, true),
-
-        -- Pistols tab
-        ["USP-S"]              = C("Pistols", 1, nil, false),
-        ["Glock-18"]           = C("Pistols", nil, 1, false),
-        ["R8 Revolver"]        = C("Pistols", 2, nil, false),
-        ["P250"]               = C("Pistols", nil, 2, false),
-        ["Five-SeveN"]         = C("Pistols", 3, nil, false),
-        ["Tec-9"]              = C("Pistols", nil, 3, false),
-        ["Desert Eagle"]       = C("Pistols", 4, 4, false),
-        ["Dual Berettas"]      = C("Pistols", 5, 5, false),
-
-        -- Mid-Tier tab (SMGs + Heavy mixed)
-        ["MP9"]                = C("MidTier", 1, nil, false),
-        ["MAC-10"]             = C("MidTier", nil, 1, false),
-        ["Negev"]              = C("MidTier", 2, 2, false),
-        ["P90"]                = C("MidTier", 3, 3, false),
-        ["Nova"]               = C("MidTier", 4, nil, false),
-        ["Sawed-Off"]          = C("MidTier", nil, 4, false),
-        ["XM1014"]             = C("MidTier", 5, 5, false),
-
-        -- Rifles tab
-        ["FAMAS"]              = C("Rifles", 1, nil, false),
-        ["Galil AR"]           = C("Rifles", nil, 1, false),
-        ["M4A1-S"]             = C("Rifles", 2, nil, false),
-        ["AK-47"]              = C("Rifles", nil, 2, false),
-        ["AWP"]                = C("Rifles", 3, 3, false),
-        ["SSG 08"]             = C("Rifles", 4, 4, false),
-        ["AUG"]                = C("Rifles", 5, nil, false),
-        ["SG 553"]             = C("Rifles", nil, 5, false),
-
-        -- Grenades tab
-        ["Flashbang"]          = C("Grenades", 1, 1, true),
-        ["Smoke Grenade"]      = C("Grenades", 2, 2, true),
-        ["HE Grenade"]         = C("Grenades", 3, 3, true),
-        ["Incendiary Grenade"] = C("Grenades", 4, nil, true),
-        ["Molotov"]            = C("Grenades", nil, 4, true),
-        ["Decoy Grenade"]      = C("Grenades", 5, 5, true),
+    -- Category hint used only as a fallback Path when the server needs it.
+    local ITEM_CAT = {
+        ["Kevlar"]="Equipment", ["Kevlar + Helmet"]="Equipment", ["Zeus x27"]="Equipment", ["Defuse Kit"]="Equipment", ["Taser"]="Equipment",
+        ["USP-S"]="Pistols",["Glock-18"]="Pistols",["R8 Revolver"]="Pistols",["P250"]="Pistols",
+        ["Five-SeveN"]="Pistols",["Tec-9"]="Pistols",["CZ75-Auto"]="Pistols",["Desert Eagle"]="Pistols",
+        ["Dual Berettas"]="Pistols",["P2000"]="Pistols",
+        ["MP9"]="SMGs",["MAC-10"]="SMGs",["MP7"]="SMGs",["UMP-45"]="SMGs",["P90"]="SMGs",["PP-Bizon"]="SMGs",["MP5-SD"]="SMGs",
+        ["Nova"]="Heavy",["Sawed-Off"]="Heavy",["XM1014"]="Heavy",["MAG-7"]="Heavy",["M249"]="Heavy",["Negev"]="Heavy",
+        ["FAMAS"]="Rifles",["Galil AR"]="Rifles",["M4A4"]="Rifles",["M4A1-S"]="Rifles",["AK-47"]="Rifles",
+        ["AWP"]="Rifles",["SSG 08"]="Rifles",["AUG"]="Rifles",["SG 553"]="Rifles",["SCAR-20"]="Rifles",["G3SG1"]="Rifles",
+        ["Flashbang"]="Grenades",["Smoke Grenade"]="Grenades",["HE Grenade"]="Grenades",
+        ["Incendiary Grenade"]="Grenades",["Molotov"]="Grenades",["Decoy Grenade"]="Grenades",
     }
-
-    local function _lpTeamSide()
-        local ch = LocalPlayer.Character
-        local pn = ch and ch.Parent and ch.Parent.Name
-        if pn == "CounterTerrorists" or pn == "Counter-Terrorists" then return "ct" end
-        if pn == "Terrorists" then return "t" end
-        local tm = LocalPlayer.Team
-        local tn = tm and tm.Name or ""
-        if tn:lower():find("counter") then return "ct" end
-        if tn:lower():find("terror") then return "t" end
-        return nil
-    end
+    local EQUIPMENT_ITEMS = {
+        ["Kevlar"]=true,["Kevlar + Helmet"]=true,["Zeus x27"]=true,["Taser"]=true,["Defuse Kit"]=true,
+        ["Flashbang"]=true,["Smoke Grenade"]=true,["HE Grenade"]=true,
+        ["Incendiary Grenade"]=true,["Molotov"]=true,["Decoy Grenade"]=true,
+    }
 
     local function _findBuyRemote()
         if typeof(_buyRE) == "Instance" and _buyRE.Parent then return _buyRE end
@@ -12252,15 +12361,14 @@ end)
     end
 
     local function _fireBuy(item)
+        if not Config.Misc.AutoBuy then return false end
         local re = _findBuyRemote(); if not re then return false end
-        local spec = BUY_MAP[item]; if not spec then return false end
-        local side = _lpTeamSide(); if not side then return false end
-        local slot = (side == "ct") and spec.ct or spec.t
-        if not slot then return false end -- not sold on this team
-        local path = ("Loadout.%s.Options.%d"):format(spec.cat, slot)
         local method = re:IsA("RemoteFunction") and "InvokeServer" or "FireServer"
+        local cat    = ITEM_CAT[item] or ""
+        local equip  = EQUIPMENT_ITEMS[item] and true or false
+        local path   = (cat ~= "") and ("Loadout.%s.Options.%s"):format(cat, item) or item
         pcall(function()
-            re[method](re, { Equipment = spec.equip, Path = path, Name = item })
+            re[method](re, { Equipment = equip, Path = path, Name = item })
         end)
         return true
     end
@@ -12287,7 +12395,233 @@ end)
         end
     end)
 
+    ------------------------------------------------------------------
+    -- SILENT AIM — one bullet per MB1, redirected to closest visible
+    -- enemy. If SilentAimTrigger is on, sends to where the user is
+    -- currently looking (no redirect).
+    ------------------------------------------------------------------
+    local UIS = game:GetService("UserInputService")
+    local function _visible(pl)
+        local c = pl.Character; if not c then return false end
+        local hd = c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart")
+        if not hd then return false end
+        local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.FilterDescendantsInstances = { LocalPlayer.Character, Camera }
+        local r = workspace:Raycast(origin, hd.Position - origin, rp)
+        if not r then return true end
+        return r.Instance and r.Instance:IsDescendantOf(c) or false
+    end
+    local function _pickSilentTarget()
+        local skipTeam = _IS_DEATHMATCH or (not Config.TeamCheck)
+        local myKey = _asTeamKey(LocalPlayer)
+        local best, bestD = nil, math.huge
+        local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
+        local look   = Camera and Camera.CFrame.LookVector or Vector3.new(0,0,-1)
+        local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 600
+        for _, pl in ipairs(Players:GetPlayers()) do
+            repeat
+                if pl == LocalPlayer then break end
+                if not skipTeam then
+                    local pKey = _asTeamKey(pl)
+                    if myKey and pKey and pKey == myKey then break end
+                    if myKey and not pKey then break end
+                end
+                local c = pl.Character
+                local h = c and c:FindFirstChildOfClass("Humanoid")
+                if not h or h.Health <= 0 then break end
+                local hd = _headOf(pl); if not hd then break end
+                local d = hd.Position - origin
+                if maxD > 0 and d.Magnitude > maxD then break end
+                if not _visible(pl) then break end
+                -- score: angle to crosshair (smaller = better)
+                local ang = 1 - math.max(-1, math.min(1, d.Unit:Dot(look)))
+                if ang < bestD then bestD = ang; best = pl end
+            until true
+        end
+        return best
+    end
+    UIS.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+        if not Config.Misc.SilentAim or EX_BLOCK_SILENT then return end
+        if not _alive() then return end
+        local w = _findEquippedWeapon(); if not w then return end
+        if _isMeleeWeapon(w) then return end
+        if (rawget(w, "Rounds") or 0) <= 0 then return end
+        -- SilentAimTrigger: fire straight ahead if crosshair is on enemy
+        if Config.Misc.SilentAimTrigger then
+            local origin = Camera.CFrame.Position
+            local look   = Camera.CFrame.LookVector
+            local rp = RaycastParams.new()
+            rp.FilterType = Enum.RaycastFilterType.Exclude
+            rp.FilterDescendantsInstances = { LocalPlayer.Character, Camera }
+            local r = workspace:Raycast(origin, look * 1000, rp)
+            if r and r.Instance then
+                local model = r.Instance:FindFirstAncestorOfClass("Model")
+                local pl = model and Players:GetPlayerFromCharacter(model)
+                if pl and pl ~= LocalPlayer then _sendKill(pl, w) end
+            end
+            return
+        end
+        local target = _pickSilentTarget()
+        if target then _sendKill(target, w) end
+    end)
+
 end)()
+
+-- ============================================================
+-- BULLET TRACER — 3D neon beam from muzzle to hit point
+-- ============================================================
+do
+    local RunS = game:GetService("RunService")
+    Config.Visuals = Config.Visuals or {}
+    Config.Visuals.BulletTracer = false
+    Config.Visuals.BulletTracerColor = Color3.fromRGB(0, 200, 255)
+    local TrGB = Tabs.Visuals:AddLeftGroupbox("BULLET TRACER", "zap")
+    TrGB:AddToggle("BT_Enable", { Text = "BULLET TRACER", Default = false,
+        Callback = function(v) Config.Visuals.BulletTracer = v end })
+        :AddColorPicker("BT_Color", { Default = Config.Visuals.BulletTracerColor, Title = "Tracer color",
+            Callback = function(c) Config.Visuals.BulletTracerColor = c end })
+
+    local function _spawnTracer(fromPos, toPos)
+        if not fromPos or not toPos then return end
+        local dist = (toPos - fromPos).Magnitude
+        if dist < 0.1 or dist > 2000 then return end
+        local p = Instance.new("Part")
+        p.Name = "EclipseTracer"
+        p.Anchored = true
+        p.CanCollide = false
+        p.CanQuery = false
+        p.CanTouch = false
+        p.Material = Enum.Material.Neon
+        p.Color = Config.Visuals.BulletTracerColor or Color3.fromRGB(0,200,255)
+        p.Size = Vector3.new(0.08, 0.08, dist)
+        p.CFrame = CFrame.new((fromPos + toPos) / 2, toPos)
+        p.Transparency = 0.2
+        p.Parent = workspace
+        task.spawn(function()
+            for i = 1, 12 do
+                p.Transparency = 0.2 + (i / 12) * 0.8
+                task.wait(0.025)
+            end
+            p:Destroy()
+        end)
+    end
+
+    -- Hook the game's ShootWeapon remote outbound so any bullet (real or silent)
+    -- draws a tracer using the same Bullets[].Origin → last Hits[].Position.
+    task.spawn(function()
+        while scriptRunning do
+            task.wait(0.5)
+            if Config.Visuals.BulletTracer then break end
+        end
+        local mt = pcall and getrawmetatable and getrawmetatable(game)
+        if not mt then return end
+        local old = mt.__namecall
+        if not old then return end
+        pcall(function() setreadonly(mt, false) end)
+        mt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod and getnamecallmethod() or ""
+            if Config.Visuals.BulletTracer and (method == "FireServer" or method == "InvokeServer")
+               and typeof(self) == "Instance" and self.Name == "ShootWeapon" then
+                local args = { ... }
+                local pkt = args[1]
+                if type(pkt) == "table" and type(pkt.Bullets) == "table" then
+                    for _, b in ipairs(pkt.Bullets) do
+                        local hits = b.Hits
+                        local hit = hits and hits[#hits]
+                        if b.Origin and hit and hit.Position then
+                            pcall(_spawnTracer, b.Origin, hit.Position)
+                        end
+                    end
+                end
+            end
+            return old(self, ...)
+        end)
+        pcall(function() setreadonly(mt, true) end)
+    end)
+end
+
+-- ============================================================
+-- FPS BOOST — strips textures / decals / lighting effects while
+-- preserving collisions and hitboxes.
+-- ============================================================
+do
+    local Lighting = game:GetService("Lighting")
+    Config.Misc.FPSBoost = false
+    local _origLighting = {
+        Brightness = Lighting.Brightness,
+        GlobalShadows = Lighting.GlobalShadows,
+        FogEnd = Lighting.FogEnd,
+        EnvironmentDiffuseScale = Lighting.EnvironmentDiffuseScale,
+        EnvironmentSpecularScale = Lighting.EnvironmentSpecularScale,
+    }
+    local _stripped = false
+    local FBGB = Tabs.Misc:AddRightGroupbox("FPS BOOST", "gauge")
+    FBGB:AddToggle("FB_Enable", { Text = "FPS BOOST", Default = false,
+        Callback = function(v) Config.Misc.FPSBoost = v end })
+
+    local function _strip(inst)
+        if inst:IsA("BasePart") then
+            pcall(function()
+                inst.Material = Enum.Material.SmoothPlastic
+                inst.Reflectance = 0
+            end)
+        elseif inst:IsA("Decal") or inst:IsA("Texture") then
+            pcall(function() inst.Transparency = 1 end)
+        elseif inst:IsA("ParticleEmitter") or inst:IsA("Trail")
+            or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") then
+            pcall(function() inst.Enabled = false end)
+        elseif inst:IsA("SurfaceAppearance") then
+            pcall(function() inst:Destroy() end)
+        elseif inst:IsA("PostEffect") or inst:IsA("BlurEffect")
+            or inst:IsA("BloomEffect") or inst:IsA("SunRaysEffect")
+            or inst:IsA("ColorCorrectionEffect") or inst:IsA("DepthOfFieldEffect") then
+            pcall(function() inst.Enabled = false end)
+        end
+    end
+
+    local function _applyStrip()
+        if _stripped then return end
+        _stripped = true
+        for _, d in ipairs(workspace:GetDescendants()) do _strip(d) end
+        for _, d in ipairs(Lighting:GetDescendants()) do _strip(d) end
+        pcall(function()
+            Lighting.GlobalShadows = false
+            Lighting.FogEnd = 1e6
+            Lighting.EnvironmentDiffuseScale = 0
+            Lighting.EnvironmentSpecularScale = 0
+            Lighting.Brightness = 2
+        end)
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+    end
+
+    local function _restore()
+        if not _stripped then return end
+        _stripped = false
+        pcall(function()
+            Lighting.Brightness = _origLighting.Brightness
+            Lighting.GlobalShadows = _origLighting.GlobalShadows
+            Lighting.FogEnd = _origLighting.FogEnd
+            Lighting.EnvironmentDiffuseScale = _origLighting.EnvironmentDiffuseScale
+            Lighting.EnvironmentSpecularScale = _origLighting.EnvironmentSpecularScale
+        end)
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+    end
+
+    workspace.DescendantAdded:Connect(function(d)
+        if Config.Misc.FPSBoost then task.defer(_strip, d) end
+    end)
+    task.spawn(function()
+        while scriptRunning do
+            task.wait(0.5)
+            if Config.Misc.FPSBoost then _applyStrip() else _restore() end
+        end
+    end)
+end
+
 
 
 
