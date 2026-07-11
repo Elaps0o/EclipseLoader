@@ -5136,46 +5136,105 @@ function _fitGloveToReference(mesh, ref, maxScale)
     return true, factor
 end
 
+GLOVE_KNIFE_MAX_SCALE = GLOVE_KNIFE_MAX_SCALE or 0.72
+GLOVE_KNIFE_FALLBACK_SCALE = GLOVE_KNIFE_FALLBACK_SCALE or 0.62
+
+function _isUsableGloveReference(ref, mesh)
+    if not (ref and ref.Size) then return false end
+    if ref.Part and mesh and ref.Part == mesh then return false end
+    local r = ref.Size
+    return r.X > 0 and r.Y > 0 and r.Z > 0
+end
+
+function _findExternalGloveReference(armName, mesh)
+    local found = nil
+    pcall(function()
+        for _, obj in ipairs(Camera:GetChildren()) do
+            if obj ~= SkinSystem.vm then
+                local ref = _gloveReferenceFrom(obj, armName)
+                if _isUsableGloveReference(ref, mesh) then
+                    found = ref
+                    break
+                end
+            end
+        end
+    end)
+    return found
+end
+
+function _computeKnifeGloveFactor(mesh, target, armName, ref)
+    if not (mesh and mesh:IsA("BasePart") and target and target:IsA("BasePart")) then return GLOVE_KNIFE_FALLBACK_SCALE end
+    if not _isUsableGloveReference(ref, mesh) then ref = _findExternalGloveReference(armName, mesh) end
+    local s = mesh.Size
+    local factor = nil
+    if _isUsableGloveReference(ref, mesh) and s.X > 0 and s.Y > 0 and s.Z > 0 then
+        local r = ref.Size
+        factor = math.min(
+            (r.X * 0.92) / s.X,
+            (r.Y * 0.92) / s.Y,
+            (r.Z * 0.92) / s.Z,
+            GLOVE_KNIFE_MAX_SCALE
+        )
+    end
+    if not factor or factor <= 0 then
+        local a = target.Size
+        if s.X > 0 and s.Z > 0 and a.X > 0 and a.Z > 0 then
+            factor = math.min((a.X * 1.18) / s.X, (a.Z * 1.18) / s.Z, GLOVE_KNIFE_FALLBACK_SCALE)
+        end
+    end
+    if not factor or factor < 0.45 or factor > GLOVE_KNIFE_MAX_SCALE then factor = GLOVE_KNIFE_FALLBACK_SCALE end
+    return factor
+end
+
+function _copyGloveVisualFrom(src, dest)
+    if not (src and dest) then return end
+    pcall(function()
+        for _, ch in ipairs(dest:GetChildren()) do
+            if ch:IsA("SurfaceAppearance") then ch:Destroy() end
+        end
+        for _, ch in ipairs(src:GetChildren()) do
+            if ch:IsA("SurfaceAppearance") then
+                local c = ch:Clone(); c.Name = "SurfaceAppearance"; c.Parent = dest
+            end
+        end
+        if src:IsA("MeshPart") and dest:IsA("MeshPart") and src.TextureID and src.TextureID ~= "" then
+            dest.TextureID = src.TextureID
+        end
+        if src:IsA("BasePart") and dest:IsA("BasePart") then
+            dest.Color = src.Color
+            dest.Material = src.Material
+        end
+    end)
+end
+
 function attachAsset(folder, arm, model, name, offset, ref)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
-    local mesh = src:Clone()
+
+    local mesh
+    local usedNativeRef = false
+    if name == "Glove" and ref and ref.Part and ref.Part:IsA("BasePart") and ref.Part ~= target then
+        local okClone, cloned = pcall(function() return ref.Part:Clone() end)
+        if okClone and cloned then
+            mesh = cloned
+            usedNativeRef = true
+        end
+    end
+    if not mesh then mesh = src:Clone() end
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
     pcall(function() mesh:SetAttribute("EclipseAttached", true) end)
 
-    
-    
-    if name == "Glove" and target:IsA("BasePart") then
-        -- Calibrate glove to arm reference. Cache per-arm so the factor is
-        -- STABLE across weapon swaps (knife viewmodels frequently lack a
-        -- native Glove child, which used to leave gloves oversized).
+    if usedNativeRef then
+        pcall(_copyGloveVisualFrom, src, mesh)
+        SkinSystem.gloveScale = 1.0
+    elseif name == "Glove" and target:IsA("BasePart") then
         SkinSystem._gloveFactorCache = SkinSystem._gloveFactorCache or {}
         local factor = SkinSystem._gloveFactorCache[arm]
+        if factor and (factor < 0.45 or factor > GLOVE_KNIFE_MAX_SCALE) then factor = nil end
         if not factor then
-            local ref = _gloveReferenceFrom(SkinSystem.vm, arm)
-            if not (ref and ref.Size) then
-                pcall(function()
-                    for _, obj in ipairs(Camera:GetChildren()) do
-                        if obj ~= SkinSystem.vm then
-                            ref = _gloveReferenceFrom(obj, arm)
-                            if ref and ref.Size then break end
-                        end
-                    end
-                end)
-            end
-            if ref and ref.Size and mesh.Size.X > 0 and mesh.Size.Y > 0 and mesh.Size.Z > 0 then
-                local calc = math.min(
-                    (ref.Size.X * 0.94) / mesh.Size.X,
-                    (ref.Size.Y * 0.94) / mesh.Size.Y,
-                    (ref.Size.Z * 0.94) / mesh.Size.Z
-                )
-                if calc > 0.55 and calc < 1 then
-                    factor = calc
-                    SkinSystem._gloveFactorCache[arm] = factor
-                end
-            end
-            factor = factor or 0.86
+            factor = _computeKnifeGloveFactor(mesh, target, arm, ref)
+            SkinSystem._gloveFactorCache[arm] = factor
         end
         _uniformScale(mesh, factor)
         local prev = SkinSystem.gloveScale or 1.0
