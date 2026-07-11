@@ -5212,34 +5212,10 @@ function attachAsset(folder, arm, model, name, offset, ref)
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
     local src = folder:WaitForChild(model, 5); if not src then return end
 
-    local mesh
-    local usedNativeRef = false
-    if name == "Glove" and ref and ref.Part and ref.Part:IsA("BasePart") and ref.Part ~= target then
-        local okClone, cloned = pcall(function() return ref.Part:Clone() end)
-        if okClone and cloned then
-            mesh = cloned
-            usedNativeRef = true
-        end
-    end
-    if not mesh then mesh = src:Clone() end
+    local mesh = src:Clone()
     cleanPart(mesh); mesh.Name = name; mesh.Parent = target
     pcall(function() mesh:SetAttribute("EclipseAttached", true) end)
-
-    if usedNativeRef then
-        pcall(_copyGloveVisualFrom, src, mesh)
-        SkinSystem.gloveScale = 1.0
-    elseif name == "Glove" and target:IsA("BasePart") then
-        SkinSystem._gloveFactorCache = SkinSystem._gloveFactorCache or {}
-        local factor = SkinSystem._gloveFactorCache[arm]
-        if factor and (factor < 0.45 or factor > GLOVE_KNIFE_MAX_SCALE) then factor = nil end
-        if not factor then
-            factor = _computeKnifeGloveFactor(mesh, target, arm, ref)
-            SkinSystem._gloveFactorCache[arm] = factor
-        end
-        _uniformScale(mesh, factor)
-        local prev = SkinSystem.gloveScale or 1.0
-        if factor < prev then SkinSystem.gloveScale = factor end
-    end
+    if name == "Glove" then SkinSystem.gloveScale = 1.0 end
 
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
@@ -5508,28 +5484,78 @@ function spawnViewmodel(knife)
     if not SkinSystem.spawned and SkinSystem.vm then pcall(function() SkinSystem.vm:Destroy() end); SkinSystem.vm=nil; restoreOriginalKnife() end
 end
 
+function _findGloveSkinSource(gsr, side)
+    if not gsr then return nil end
+    local candidates = {
+        side,
+        side == "Left Arm" and "Left" or "Right",
+        side == "Left Arm" and "L" or "R",
+        side .. " Glove",
+        "Glove",
+    }
+    for _, n in ipairs(candidates) do
+        local src = gsr:FindFirstChild(n)
+        if src then return src end
+    end
+    for _, d in ipairs(gsr:GetDescendants()) do
+        local n = tostring(d.Name)
+        if d:IsA("SurfaceAppearance") and (n == side or n:find(side == "Left Arm" and "Left" or "Right", 1, true)) then return d end
+        if d:IsA("BasePart") and n == "Glove" then return d end
+    end
+    return nil
+end
+
+function _copyGloveSkinDirect(glove, source, sourceKey, gsr)
+    if not (glove and glove:IsA("BasePart") and source) then return false end
+    local visual = source
+    if not visual:IsA("SurfaceAppearance") then
+        local nested = visual:FindFirstChild("Glove", true)
+        if nested and nested:IsA("BasePart") then visual = nested end
+    end
+
+    local surfaceList = {}
+    if visual:IsA("SurfaceAppearance") then
+        table.insert(surfaceList, visual)
+    else
+        for _, d in ipairs(visual:GetDescendants()) do
+            if d:IsA("SurfaceAppearance") then table.insert(surfaceList, d) end
+        end
+    end
+    if #surfaceList == 0 and gsr then
+        for _, d in ipairs(gsr:GetChildren()) do
+            if d:IsA("SurfaceAppearance") then table.insert(surfaceList, d) end
+        end
+    end
+
+    for _, old in ipairs(glove:GetChildren()) do
+        if old:IsA("SurfaceAppearance") then old:Destroy() end
+    end
+    for _, sa in ipairs(surfaceList) do
+        local c = sa:Clone()
+        c.Name = "SurfaceAppearance"
+        pcall(function()
+            c:SetAttribute("EclipseSkinSurface", true)
+            c:SetAttribute("EclipseSurfaceSource", sourceKey)
+        end)
+        c.Parent = glove
+    end
+    if visual:IsA("MeshPart") and glove:IsA("MeshPart") and visual.TextureID and visual.TextureID ~= "" then
+        glove.TextureID = visual.TextureID
+    end
+    if visual:IsA("BasePart") then
+        glove.Color = visual.Color
+        glove.Material = visual.Material
+    end
+    return #surfaceList > 0 or visual:IsA("BasePart")
+end
+
 function _applyGloveSideDirect(glove, side, gloveSkin, gsr, directSurfaceApps, sourceKey)
     if glove:GetAttribute("EclipseSkinSource") == sourceKey and glove:GetAttribute("SkinApplied") == gloveSkin then return end
     _restoreGloveSurfaceOnly(glove, side)
     _cacheSkinTarget(glove)
-    for _, old in ipairs(glove:GetChildren()) do
-        if old:IsA("SurfaceAppearance") then old:Destroy() end
-    end
-    if #directSurfaceApps > 0 then
-        for _, sa in ipairs(directSurfaceApps) do
-            local c = sa:Clone()
-            c.Name = "SurfaceAppearance"
-            c:SetAttribute("EclipseSkinSurface", true)
-            c:SetAttribute("EclipseSurfaceSource", sourceKey)
-            c.Parent = glove
-        end
+    local source = _findGloveSkinSource(gsr, side) or gsr
+    if _copyGloveSkinDirect(glove, source, sourceKey, gsr) then
         glove:SetAttribute("EclipseSkinSource", sourceKey)
-        glove:SetAttribute("SkinApplied", gloveSkin)
-        return
-    end
-    local sideSource = gsr:FindFirstChild(side)
-    if sideSource then
-        _applySkinSourceToPart(glove, sideSource)
         glove:SetAttribute("SkinApplied", gloveSkin)
     end
 end
@@ -5539,13 +5565,9 @@ function _applyGloveSkinCore(gloveSkin)
     local gs = gf:FindFirstChild(gloveSkin)
     local gsr = gs and gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Factory New")
     if not gsr then return end
-    local directSurfaceApps = {}
-    for _, sa in ipairs(gsr:GetChildren()) do
-        if sa:IsA("SurfaceAppearance") then table.insert(directSurfaceApps, sa) end
-    end
     local sourceKey = "Sports Gloves/" .. tostring(gloveSkin)
     _forEachCameraGlove(function(glove, side)
-        pcall(_applyGloveSideDirect, glove, side, gloveSkin, gsr, directSurfaceApps, sourceKey)
+        pcall(_applyGloveSideDirect, glove, side, gloveSkin, gsr, nil, sourceKey)
     end)
 end
 
