@@ -3573,7 +3573,30 @@ function ensureC4UI()
     pcall(_bindPanelPosition, "C4Panel", f)
     local stroke = Instance.new("UIStroke", f)
     stroke.Color = Color3.fromRGB(70, 40, 110); stroke.Thickness = 1; stroke.Transparency = 0.35
-    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 3)
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 5)
+    pcall(function()
+        local gr = Instance.new("UIGradient", f)
+        gr.Rotation = 90
+        gr.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 14, 34)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 6, 14)),
+        }
+        local glow = Instance.new("UIStroke", f)
+        glow.Name = "EclipseGlow"; glow.Color = Color3.fromRGB(180, 110, 255)
+        glow.Thickness = 2; glow.Transparency = 0.82
+        glow.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        local bar = Instance.new("Frame", f)
+        bar.Name = "EclipseAccentBar"; bar.BorderSizePixel = 0
+        bar.BackgroundColor3 = Color3.fromRGB(180, 110, 255)
+        bar.Position = UDim2.fromOffset(0, 3); bar.Size = UDim2.new(0, 2, 1, -6)
+        bar.ZIndex = 62
+        Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+        local bgr = Instance.new("UIGradient", bar); bgr.Rotation = 90
+        bgr.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 90, 200)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 80, 255)),
+        }
+    end)
 
 
     local pad = Instance.new("UIPadding", f)
@@ -3664,8 +3687,8 @@ function C4Show(status, timeText, sub, color)
     ensureC4UI()
     if not C4UI.frame then return end
 
-    local caret = "<font color='rgb(180,110,255)'>&gt;</font>  "
-    local function head(t) return caret .. "<font color='rgb(210,140,255)'><b>" .. t .. "</b></font>" end
+    local caret = "<font color='rgb(255,120,140)'>◆</font>  "
+    local function head(t) return caret .. "<font color='rgb(220,160,255)'><b>" .. t .. "</b></font>" end
     local rich
     if status == "PLANTED" then
         rich = head("C4") .. "   " .. tostring(timeText or "")
@@ -5762,20 +5785,6 @@ function _applyGloveSkinCore(gloveType, gloveSkin)
     local cam = workspace.CurrentCamera
     if not cam then return end
 
-    local am
-    for _, ch in ipairs(cam:GetChildren()) do
-        if ch:IsA("Model") and (ch.Name:match("Arms") or ch:FindFirstChild("Right Arm")) then
-            am = ch; break
-        end
-    end
-    if not am then return end
-    local la = am:FindFirstChild("Left Arm")
-    local ra = am:FindFirstChild("Right Arm")
-    if not la or not ra then return end
-    local lg = la:FindFirstChild("Glove")
-    local rg = ra:FindFirstChild("Glove")
-    if not lg or not rg then return end
-
     if not gloveSkin or gloveSkin == "" or gloveSkin == "Vanilla" or gloveSkin == "Default" or gloveSkin == "None" then
         return
     end
@@ -5791,20 +5800,58 @@ function _applyGloveSkinCore(gloveType, gloveSkin)
         or cf
     if not fn then return end
 
-
-    pcall(_saveOriginalSA, lg); pcall(_saveOriginalSA, rg)
-    for _, old in pairs(lg:GetChildren()) do if old:IsA("SurfaceAppearance") then old:Destroy() end end
-    for _, old in pairs(rg:GetChildren()) do if old:IsA("SurfaceAppearance") then old:Destroy() end end
-    for _, sa in pairs(fn:GetChildren()) do
-        if sa:IsA("SurfaceAppearance") then
-            sa:Clone().Parent = lg
-            sa:Clone().Parent = rg
+    -- Coleta alvos de luva em cam: Arms(.Glove) + T Glove/CT Glove models
+    local targets = {}
+    for _, obj in ipairs(cam:GetChildren()) do
+        if obj:IsA("Model") then
+            local isArms = obj.Name:find("Arms") or obj:FindFirstChild("Right Arm") or obj:FindFirstChild("Left Arm")
+            local isGloveModel = obj.Name == "T Glove" or obj.Name == "CT Glove" or obj.Name:find("Glove")
+            if isArms then
+                for _, side in ipairs({"Left Arm", "Right Arm"}) do
+                    local arm = obj:FindFirstChild(side)
+                    local glove = arm and arm:FindFirstChild("Glove")
+                    if glove then table.insert(targets, glove) end
+                end
+                table.insert(targets, obj)
+            end
+            if isGloveModel then table.insert(targets, obj) end
         end
     end
-    pcall(function()
-        lg:SetAttribute("EclipseSkinSource", gloveType.."/"..gloveSkin)
-        rg:SetAttribute("EclipseSkinSource", gloveType.."/"..gloveSkin)
-    end)
+    if #targets == 0 then return end
+
+    -- M4 ApplySkinProps: itera filhos da wearFol, name-match recursivo,
+    -- remove SA/Texture/Decal antigos e clona o novo.
+    for _, target in ipairs(targets) do
+        pcall(_saveOriginalSA, target)
+        for _, texObj in ipairs(fn:GetChildren()) do
+            local tPart
+            if target:IsA("BasePart") and target.Name == texObj.Name then
+                tPart = target
+            elseif target.FindFirstChild then
+                tPart = target:FindFirstChild(texObj.Name, true)
+            end
+            if tPart and tPart:IsA("BasePart") then
+                for _, old in ipairs(tPart:GetChildren()) do
+                    if old:IsA("SurfaceAppearance") or old:IsA("Texture") or old:IsA("Decal") then
+                        old.Parent = nil
+                    end
+                end
+                local c = texObj:Clone()
+                pcall(function() c:SetAttribute("EclipseSkinSurface", true) end)
+                c.Parent = tPart
+                pcall(function() tPart:SetAttribute("EclipseSkinSource", gloveType.."/"..gloveSkin) end)
+            end
+        end
+        -- Fallback: wearFol com SA solto (sem name match)
+        if target:IsA("BasePart") then
+            pcall(function() target:SetAttribute("EclipseSkinSource", gloveType.."/"..gloveSkin) end)
+            for _, sa in ipairs(fn:GetChildren()) do
+                if sa:IsA("SurfaceAppearance") and not target:FindFirstChildOfClass("SurfaceAppearance") then
+                    local c = sa:Clone(); c.Parent = target
+                end
+            end
+        end
+    end
     return true
 end
 
@@ -9844,7 +9891,29 @@ SpecFrame.ZIndex = 50
 SpecFrame.Parent = SpecParent
 sfStroke = Instance.new("UIStroke", SpecFrame)
 sfStroke.Color = Color3.fromRGB(70, 40, 110); sfStroke.Thickness = 1; sfStroke.Transparency = 0.35
-Instance.new("UICorner", SpecFrame).CornerRadius = UDim.new(0, 3)
+Instance.new("UICorner", SpecFrame).CornerRadius = UDim.new(0, 5)
+pcall(function()
+    local gr = Instance.new("UIGradient", SpecFrame); gr.Rotation = 90
+    gr.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 14, 34)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 6, 14)),
+    }
+    local glow = Instance.new("UIStroke", SpecFrame)
+    glow.Name = "EclipseGlow"; glow.Color = Color3.fromRGB(180, 110, 255)
+    glow.Thickness = 2; glow.Transparency = 0.82
+    glow.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    local bar = Instance.new("Frame", SpecFrame)
+    bar.Name = "EclipseAccentBar"; bar.BorderSizePixel = 0
+    bar.BackgroundColor3 = Color3.fromRGB(180, 110, 255)
+    bar.Position = UDim2.fromOffset(0, 3); bar.Size = UDim2.new(0, 2, 1, -6)
+    bar.ZIndex = 52
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+    local bgr = Instance.new("UIGradient", bar); bgr.Rotation = 90
+    bgr.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 90, 200)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 80, 255)),
+    }
+end)
 
 
 Header = Instance.new("Frame", SpecFrame)
@@ -9862,7 +9931,7 @@ TitleLbl.TextColor3 = Color3.new(1, 1, 1)
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 TitleLbl.TextYAlignment = Enum.TextYAlignment.Center
 TitleLbl.RichText = true
-TitleLbl.Text = '<font color="rgb(180,110,255)">&gt;</font>  <font color="rgb(210,140,255)"><b>SPECTATORS: 0</b></font>'
+TitleLbl.Text = '<font color="rgb(255,120,140)">◉</font>  <font color="rgb(220,160,255)"><b>SPECTATORS: 0</b></font>'
 TitleLbl.ZIndex = 52
 
 Divider = Instance.new("Frame", SpecFrame)
@@ -10048,7 +10117,7 @@ task.spawn(function()
             local attrCount
             pcall(function() attrCount = LocalPlayer:GetAttribute("Spectators") end)
             local count = math.max(#names, tonumber(attrCount) or 0)
-            TitleLbl.Text = string.format('<font color="rgb(180,110,255)">&gt;</font>  <font color="rgb(210,140,255)"><b>SPECTATORS: %d</b></font>', count)
+            TitleLbl.Text = string.format('<font color="rgb(255,120,140)">◉</font>  <font color="rgb(220,160,255)"><b>SPECTATORS: %d</b></font>', count)
             specRebuild(names)
             SpecFrame.Size = UDim2.fromOffset(150, 23 + math.max(0, #names) * 16)
             local shouldShow = isGuiOpen() or (count > 0)
@@ -10536,7 +10605,7 @@ end)()
             if ch:IsA("UIStroke") then
                 ch.Color = Color3.fromRGB(70, 40, 110); ch.Transparency = 0.35; ch.Thickness = 1
             elseif ch:IsA("UICorner") then
-                ch.CornerRadius = UDim.new(0, 3)
+                ch.CornerRadius = UDim.new(0, 5)
             elseif ch:IsA("Frame") and ch:FindFirstChildOfClass("TextLabel") then
                 ch.Size = UDim2.new(1, 0, 0, 16)
                 local tl = ch:FindFirstChildOfClass("TextLabel")
@@ -10544,13 +10613,33 @@ end)()
                     tl.Font = Enum.Font.GothamBold; tl.TextSize = 10
                     tl.TextColor3 = Color3.fromRGB(210, 140, 255)
                     tl.RichText = true
-                    tl.Text = '<font color="rgb(180,110,255)">&gt;</font>  <b>KEYBINDS</b>'
+                    tl.Text = '<font color="rgb(255,120,140)">◆</font>  <font color="rgb(220,160,255)"><b>KEYBINDS</b></font>'
                     tl.TextXAlignment = Enum.TextXAlignment.Left
                     tl.Position = UDim2.fromOffset(8, 0)
                     tl.Size = UDim2.new(1, -16, 1, 0)
                 end
             end
         end
+        local gr = Instance.new("UIGradient", EX.KBFrame); gr.Rotation = 90
+        gr.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 14, 34)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 6, 14)),
+        }
+        local glow = Instance.new("UIStroke", EX.KBFrame)
+        glow.Name = "EclipseGlow"; glow.Color = Color3.fromRGB(180, 110, 255)
+        glow.Thickness = 2; glow.Transparency = 0.82
+        glow.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        local bar = Instance.new("Frame", EX.KBFrame)
+        bar.Name = "EclipseAccentBar"; bar.BorderSizePixel = 0
+        bar.BackgroundColor3 = Color3.fromRGB(180, 110, 255)
+        bar.Position = UDim2.fromOffset(0, 3); bar.Size = UDim2.new(0, 2, 1, -6)
+        bar.ZIndex = 53
+        Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+        local bgr = Instance.new("UIGradient", bar); bgr.Rotation = 90
+        bgr.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 90, 200)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 80, 255)),
+        }
     end)
 
     local list = Instance.new("Frame", EX.KBFrame)
