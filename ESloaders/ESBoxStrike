@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.1.0 [OFFICIAL]",
+    Version       = "2.2.0 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -1653,7 +1653,7 @@ local function _pen3dEnsure()
     return _EclipsePen3D
 end
 function _pen3dHide()
-    if _EclipsePen3D.part then pcall(function() _EclipsePen3D.part:Destroy() end); _EclipsePen3D.part = nil end
+    if _EclipsePen3D.part then pcall(function() _EclipsePen3D.part.Transparency = 1; _EclipsePen3D.part.CFrame = CFrame.new(0, -5000, 0) end) end
     if _EclipsePen3D.ring then pcall(function() _EclipsePen3D.ring:Destroy() end); _EclipsePen3D.ring = nil end
 end
 function _pen3dDestroy()
@@ -4666,11 +4666,12 @@ _G.EclipseBadges = EclipseBadges
 knives = {
     ["Karambit"]={Offset=CFrame.new(0,-1.5,1.5)}, ["Butterfly Knife"]={Offset=CFrame.new(0,-1.5,1.5)},
     ["M9 Bayonet"]={Offset=CFrame.new(0,-1.5,1)}, ["Flip Knife"]={Offset=CFrame.new(0,-1.5,1.25)},
-    ["Gut Knife"]={Offset=CFrame.new(0,-1.5,0.5)}, ["Stiletto Knife"]={Offset=CFrame.new(0,-1.5,1.25)},
+    ["Gut Knife"]={Offset=CFrame.new(0,-1.5,0.5)},
+    ["Stiletto Knife"]={Offset=CFrame.new(0,-1.5,1.1)}, ["Skeleton Knife"]={Offset=CFrame.new(0,-1.5,1.2)},
 }
 CT_ONLY = {["USP-S"]=true,["Five-SeveN"]=true,["MP9"]=true,["FAMAS"]=true,["M4A1-S"]=true,["M4A4"]=true,["AUG"]=true}
 SHARED = {["P250"]=true,["Desert Eagle"]=true,["Dual Berettas"]=true,["Negev"]=true,["P90"]=true,["Nova"]=true,["XM1014"]=true,["AWP"]=true,["SSG 08"]=true}
-KNIVES = {["Karambit"]=true,["Butterfly Knife"]=true,["M9 Bayonet"]=true,["Flip Knife"]=true,["Gut Knife"]=true,["Stiletto Knife"]=true,["T Knife"]=true,["CT Knife"]=true}
+KNIVES = {["Karambit"]=true,["Butterfly Knife"]=true,["M9 Bayonet"]=true,["Flip Knife"]=true,["Gut Knife"]=true,["Stiletto Knife"]=true,["Skeleton Knife"]=true,["T Knife"]=true,["CT Knife"]=true}
 GLOVES = {["Sports Gloves"]=true}
 IgnoreFolders = {["HE Grenade"]=true,["Incendiary Grenade"]=true,["Molotov"]=true,["Smoke Grenade"]=true,["Flashbang"]=true,["Decoy Grenade"]=true,["C4"]=true,["CT Glove"]=true,["T Glove"]=true}
 SkinsFolder = SkinsFolder
@@ -5137,7 +5138,7 @@ function attachAsset(folder, arm, model, name, offset, ref)
 
     
     
-    if name == "Glove" and target:IsA("BasePart") and Config.Skins.SelectedKnife ~= "Gut Knife" then
+    if name == "Glove" and target:IsA("BasePart") and Config.Skins.SelectedKnife ~= "Gut Knife" and Config.Skins.SelectedKnife ~= "Flip Knife" then
         local factor = 0.86
         _uniformScale(mesh, factor)
         local prev = SkinSystem.gloveScale or 1.0
@@ -7595,18 +7596,6 @@ end))
 _frameN = 0
 _lastFrameT = tick()
 _emaDt = 1/60
--- Time-based throttle counters (perf: avoid running low-priority work at 240Hz)
-_ThrChams   = _ThrChams   or 0
-_ThrWorld   = _ThrWorld   or 0
-_ThrFlash   = _ThrFlash   or 0
-_ThrSmoke   = _ThrSmoke   or 0
-_ThrSkin    = _ThrSkin    or 0
-_ThrWeather = _ThrWeather or 0
-_ThrFoot    = _ThrFoot    or 0
-_FootRP     = _FootRP or RaycastParams.new()
-_FootRP.FilterType = Enum.RaycastFilterType.Exclude
-_FootRP.IgnoreWater = true
-
 connectSignal(RunService.RenderStepped:Connect(function()
     if not scriptRunning then return end
     _frameN = _frameN + 1
@@ -7615,7 +7604,9 @@ connectSignal(RunService.RenderStepped:Connect(function()
     _emaDt = _emaDt * 0.9 + dt * 0.1
 
     local laggy = _emaDt > (1/45)
+    local heavy = (not laggy) or (_frameN % 2 == 0)
     local severeLag = _emaDt > (1/25)
+    local runLowPri = (not severeLag) or (_frameN % 3 == 0)
 
     safeUpdate("Aimbot", updateAimbot)
     safeUpdate("TriggerBot", updateTriggerBot)
@@ -7628,36 +7619,24 @@ connectSignal(RunService.RenderStepped:Connect(function()
     safeUpdate("GrenadePrediction", updateGrenadePrediction)
 
     safeUpdate("ESP", updateESP)
-
-    if now - _ThrChams >= (severeLag and 0.10 or 0.033) then
-        _ThrChams = now
+    if heavy then
         safeUpdate("Chams", updateChams)
-    end
-    if now - _ThrWorld >= (severeLag and 0.15 or 0.066) then
-        _ThrWorld = now
+        
         safeUpdate("WorldESP", updateWorldESP)
-    end
-    if now - _ThrFlash >= 0.033 then
-        _ThrFlash = now
         safeUpdate("AntiFlash", updateAntiFlash)
-    end
-    if now - _ThrSmoke >= 0.10 then
-        _ThrSmoke = now
         safeUpdate("AntiSmoke", updateAntiSmoke)
     end
 
-    safeUpdate("SkinSystem", function()
-        if SkinSystem.scriptRunning and SkinSystem.vm and SkinSystem.vm.PrimaryPart then
-            local k = knives[Config.Skins.SelectedKnife] or knives["Butterfly Knife"]
-            SkinSystem.vm.PrimaryPart.CFrame = Camera.CFrame * k.Offset
-            if not SkinSystem.inspecting and not SkinSystem.swinging then
+    if runLowPri then
+        safeUpdate("SkinSystem", function()
+            if SkinSystem.scriptRunning and SkinSystem.vm and SkinSystem.vm.PrimaryPart then
+                local k = knives[Config.Skins.SelectedKnife] or knives["Butterfly Knife"]
+                SkinSystem.vm.PrimaryPart.CFrame = Camera.CFrame * k.Offset
+                if not SkinSystem.inspecting and not SkinSystem.swinging then
                 if SkinSystem.idleAnim and not SkinSystem.idleAnim.IsPlaying then SkinSystem.idleAnim:Play() end
+                end
             end
-        end
-    end)
-
-    if now - _ThrWeather >= 0.20 then
-        _ThrWeather = now
+        end)
         safeUpdate("Weather", function()
             if WeatherPart then
                 local cam = Workspace.CurrentCamera
@@ -7668,8 +7647,11 @@ connectSignal(RunService.RenderStepped:Connect(function()
                         local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart"))
                         local underCover = false
                         if head then
-                            pcall(function() _FootRP.FilterDescendantsInstances = { ch, WeatherPart } end)
-                            local res = Workspace:Raycast(head.Position, Vector3.new(0, 100, 0), _FootRP)
+                            local rp = RaycastParams.new()
+                            rp.FilterType = Enum.RaycastFilterType.Exclude
+                            rp.IgnoreWater = true
+                            pcall(function() rp.FilterDescendantsInstances = { ch, WeatherPart } end)
+                            local res = Workspace:Raycast(head.Position, Vector3.new(0, 100, 0), rp)
                             if res and res.Instance and res.Instance.Transparency < 1 then underCover = true end
                         end
                         WeatherEmitter.Enabled = not underCover
@@ -7677,10 +7659,6 @@ connectSignal(RunService.RenderStepped:Connect(function()
                 end
             end
         end)
-    end
-
-    if now - _ThrFoot >= 0.20 then
-        _ThrFoot = now
         safeUpdate("Footstep", function()
             if not (Config.GlobalEnable and Config.ESP.Footstep) then return end
             _EclipseFootstepTick = _EclipseFootstepTick or {}
@@ -7692,15 +7670,21 @@ connectSignal(RunService.RenderStepped:Connect(function()
                     if hrp and hum and hum.Health > 0 and (IsAlly == nil or not IsAlly(p)) then
                         local st = _EclipseFootstepTick[p] or { last=0, lastPos=hrp.Position }
                         _EclipseFootstepTick[p] = st
+                        local now = tick()
                         local moved = (hrp.Position - st.lastPos).Magnitude
                         if now - st.last > 0.42 and moved > 3.5 then
                             st.last = now; st.lastPos = hrp.Position
                             local col = Config.ESP.FootstepColor or Color3.fromRGB(150,95,255)
-                            pcall(function() _FootRP.FilterDescendantsInstances = { ch, LocalPlayer.Character } end)
-                            local hit = Workspace:Raycast(hrp.Position, Vector3.new(0, -12, 0), _FootRP)
+                            local rayParams = RaycastParams.new()
+                            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                            rayParams.FilterDescendantsInstances = { ch, LocalPlayer.Character }
+                            rayParams.IgnoreWater = true
+                            local hit = Workspace:Raycast(hrp.Position, Vector3.new(0, -12, 0), rayParams)
                             local floorPos = hit and hit.Position or (hrp.Position - Vector3.new(0, 3, 0))
                             local floorNormal = hit and hit.Normal or Vector3.new(0, 1, 0)
+                            
                             local orient = CFrame.lookAt(floorPos + floorNormal * 0.06, floorPos + floorNormal * 0.06 + floorNormal) * CFrame.Angles(0, math.rad(90), 0)
+                            -- inner bright ring (visible)
                             local disc = Instance.new("Part")
                             disc.Name = "EclipseFootstep"
                             disc.Shape = Enum.PartType.Cylinder
@@ -7712,6 +7696,7 @@ connectSignal(RunService.RenderStepped:Connect(function()
                             disc.Size = Vector3.new(0.06, 2.0, 2.0)
                             disc.CFrame = orient
                             disc.Parent = Workspace
+                            -- outer soft halo
                             local halo = Instance.new("Part")
                             halo.Name = "EclipseFootstepHalo"
                             halo.Shape = Enum.PartType.Cylinder
@@ -7723,6 +7708,7 @@ connectSignal(RunService.RenderStepped:Connect(function()
                             halo.Size = Vector3.new(0.04, 2.4, 2.4)
                             halo.CFrame = orient
                             halo.Parent = Workspace
+                            -- glow light
                             local pl = Instance.new("PointLight")
                             pl.Color = col; pl.Brightness = 4; pl.Range = 10
                             pl.Parent = disc
@@ -8191,7 +8177,7 @@ SkinGB:AddToggle("Knife_Toggle", { Text="CUSTOM KNIFE", Default=false,
         if IsAlive() then pcall(_applyHUDKnife, true) end
     end })
 SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
-    Values={"Butterfly Knife","Flip Knife","Gut Knife","Karambit","M9 Bayonet","Stiletto Knife"},
+    Values={"Butterfly Knife","Karambit","M9 Bayonet","Flip Knife","Gut Knife","Skeleton Knife","Stiletto Knife"},
     Default=Config.Skins.SelectedKnife,
     Callback=function(v)
         
@@ -8666,19 +8652,23 @@ end
 if SkinsFolder then
     local KGB = Tabs.Skins:AddLeftGroupbox("KNIVES")
     
-    do local _kn={}; for n in pairs(KNIVES) do if not (n=="T Knife" or n=="CT Knife") then table.insert(_kn, n) end end; table.sort(_kn); for _,n in ipairs(_kn) do CreateSkinDropdown(n, KGB) end end
+    for n in pairs(KNIVES) do
+        if not (n == "T Knife" or n == "CT Knife") then
+            CreateSkinDropdown(n, KGB)
+        end
+    end
     local GGB = Tabs.Skins:AddRightGroupbox("GLOVES")
-    do local _gn={}; for n in pairs(GLOVES) do table.insert(_gn, n) end; table.sort(_gn); for _,n in ipairs(_gn) do CreateSkinDropdown(n, GGB) end end
+    for n in pairs(GLOVES) do CreateSkinDropdown(n, GGB) end
     local CGB = Tabs.Skins:AddLeftGroupbox("CT WEAPONS")
-    do local _cn={}; for n in pairs(CT_ONLY) do table.insert(_cn, n) end; table.sort(_cn); for _,n in ipairs(_cn) do CreateSkinDropdown(n, CGB) end end
+    for n in pairs(CT_ONLY) do CreateSkinDropdown(n, CGB) end
     local SGB = Tabs.Skins:AddRightGroupbox("SHARED WEAPONS")
-    do local _sn={}; for n in pairs(SHARED) do table.insert(_sn, n) end; table.sort(_sn); for _,n in ipairs(_sn) do CreateSkinDropdown(n, SGB) end end
-    do local _xn={}; for _, folder in SkinsFolder:GetChildren() do table.insert(_xn, folder.Name) end; table.sort(_xn); for _, _fname in ipairs(_xn) do local folder = SkinsFolder:FindFirstChild(_fname); if folder then
+    for n in pairs(SHARED) do CreateSkinDropdown(n, SGB) end
+    for _, folder in SkinsFolder:GetChildren() do
         local n = folder.Name
         if not IgnoreFolders[n] and not KNIVES[n] and not GLOVES[n] and not CT_ONLY[n] and not SHARED[n] then
             CreateSkinDropdown(n, SGB)
         end
-    end end end
+    end
 else
     Tabs.Skins:AddLeftGroupbox("SKINS"):AddLabel("Skins not available for this game.", true)
 end
@@ -11301,73 +11291,44 @@ task.spawn(function()
     end
 end)
 
--- AUTO UPDATE NOTIFIER: polls GitHub raw source and notifies once when a
--- newer Version string is detected. Does NOT re-inject. Cache-busted URL.
+-- AUTO UPDATE NOTIFIER: polls GitHub raw source every 3 min and notifies
+-- the user when a newer Version string is detected. Does NOT re-inject.
 task.spawn(function()
-    local BASE = "https://raw.githubusercontent.com/Elaps0o/EclipseLoader/main/ESloaders/ESBoxStrike"
-    local httpGet = (syn and syn.request) or (http and http.request) or rawget(getfenv(0), "request") or nil
-
+    local URL = "https://raw.githubusercontent.com/Elaps0o/EclipseLoader/main/ESloaders/ESBoxStrike"
+    local httpGet = (syn and syn.request) or (http and http.request) or (request) or nil
     local function fetch()
-        local url = BASE .. "?t=" .. tostring(os.time())
         local body
-        if httpGet then
-            pcall(function()
-                local r = httpGet({ Url = url, Method = "GET", Headers = { ["Cache-Control"] = "no-cache" } })
-                if r then body = r.Body or r.body end
-            end)
-        end
-        if not body or #tostring(body) < 32 then
-            pcall(function() body = game:HttpGet(url, true) end)
-        end
-        if not body or #tostring(body) < 32 then
-            pcall(function() body = game:HttpGetAsync(url) end)
-        end
-        return body
-    end
-
-    local function parseVersion(src)
-        if type(src) ~= "string" then return nil end
-        return src:match('Version%s*=%s*"([^"]+)"')
-    end
-
-    local function verGT(remote, local_)
-        local function nums(s)
-            local t = {}
-            for n in tostring(s):gmatch("(%d+)") do t[#t+1] = tonumber(n) or 0 end
-            return t
-        end
-        local a, b = nums(remote), nums(local_)
-        for i = 1, math.max(#a, #b) do
-            local x, y = a[i] or 0, b[i] or 0
-            if x ~= y then return x > y end
-        end
-        return false
-    end
-
-    local notifiedFor = nil
-    local function tick()
-        local ok, err = pcall(function()
-            local src = fetch()
-            local remote = parseVersion(src)
-            if remote and remote ~= ECLIPSE.Version and remote ~= notifiedFor and verGT(remote, ECLIPSE.Version) then
-                notifiedFor = remote
-                pcall(function()
-                    Library:Notify({
-                        Title = "Eclipse Hub — Update Available",
-                        Description = "New version <b>"..remote.."</b> detected (current "..ECLIPSE.Version.."). Rejoin to apply.",
-                        Time = 10,
-                    })
-                end)
+        pcall(function()
+            if httpGet then
+                local r = httpGet({ Url = URL, Method = "GET" })
+                body = r and (r.Body or r.body)
+            else
+                body = game:HttpGetAsync(URL)
             end
         end)
-        if not ok then warn("[Eclipse] update check error: " .. tostring(err)) end
+        return body
     end
-
-    task.wait(10)
-    tick()
+    local function parseVersion(src)
+        if type(src) ~= "string" then return nil end
+        local v = src:match('Version%s*=%s*"([^"]+)"')
+        return v
+    end
+    task.wait(15)
+    local notified = {}
     while true do
-        task.wait(180)
-        tick()
+        pcall(function()
+            local src = fetch()
+            local remote = parseVersion(src)
+            if remote and remote ~= ECLIPSE.Version and not notified[remote] then
+                notified[remote] = true
+                Library:Notify({
+                    Title = "Eclipse Hub — Update Available",
+                    Description = "New version <b>"..remote.."</b> detected. Rejoin to apply.",
+                    Time = 8,
+                })
+            end
+        end)
+        task.wait(180) -- 3 minutes
     end
 end)
 
