@@ -165,6 +165,10 @@ local function InstallDeviceSpoofer()
                     return ""
                 end
             end
+            -- Tracer bridge: piggyback on this hook so we never stack a
+            -- second __namecall on `game` (BAC Alpha-3B fingerprint).
+            local br = rawget(_G, "EclipseTracerBridge")
+            if br then pcall(br, self, m, ...) end
             return oldNamecall(self, ...)
         end))
     end
@@ -9157,9 +9161,9 @@ do
         ASGB:AddToggle("AS_Enable", { Text = "AUTOSKILL", Default = false,
             Callback = function(v) Config.Misc.AutoSkill = (v and not EX_BLOCK_SILENT) end })
             :AddKeyPicker("AS_Key", { Default = "K", SyncToggleState = true, Mode = "Toggle", Text = "AutoSkill" })
-        ASGB:AddSlider("AS_Speed", { Text = "SPEED", Default = 25, Min = 1, Max = 60, Rounding = 0, Suffix = "",
+        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYL SPEED", Default = 25, Min = 1, Max = 60, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSpeed = v end })
-        ASGB:AddSlider("AS_Smooth", { Text = "SMOOTH", Default = 0.05, Min = 0, Max = 1, Rounding = 2, Suffix = "",
+        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYL SMOOTH", Default = 0.05, Min = 0, Max = 1, Rounding = 2, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSmooth = v end })
         Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 600
         Config.Misc.AutoSkillPart     = Config.Misc.AutoSkillPart or "Head"
@@ -12612,10 +12616,16 @@ end)
         local method = re:IsA("RemoteFunction") and "InvokeServer" or "FireServer"
         local cat    = ITEM_CAT[item] or ""
         local equip  = EQUIPMENT_ITEMS[item] and true or false
-        local path   = (cat ~= "") and ("Loadout.%s.Options.%s"):format(cat, item) or item
-        pcall(function()
-            re[method](re, { Equipment = equip, Path = path, Name = item })
-        end)
+        if cat == "" then
+            pcall(function() re[method](re, { Equipment = equip, Path = item, Name = item }) end)
+            return true
+        end
+        -- Slot index varies per team/loadout arrangement. Try 1..10; server
+        -- accepts only the slot whose item Name matches, ignores the rest.
+        for slot = 1, 10 do
+            local path = ("Loadout.%s.Options.%d"):format(cat, slot)
+            pcall(function() re[method](re, { Equipment = equip, Path = path, Name = item }) end)
+        end
         return true
     end
 
@@ -12784,50 +12794,28 @@ do
         end)
     end
 
-    -- Lazy-install ShootWeapon hook ONLY after the user first enables the
-    -- tracer. Wrapping __namecall globally is a hot path — we must exit as
-    -- fast as possible when disabled (single upvalue read, no getnamecallmethod).
-    local _hookInstalled = false
-    local _tracerActive  = false
-    local function _installHook()
-        if _hookInstalled then return end
-        _hookInstalled = true
-        local ok, mt = pcall(getrawmetatable, game)
-        if not ok or not mt then return end
-        local old = mt.__namecall
-        if not old then return end
-        pcall(function() setreadonly(mt, false) end)
-        mt.__namecall = newcclosure(function(self, ...)
-            -- FAST PATH: single upvalue read; skip everything when disabled.
-            if not _tracerActive then return old(self, ...) end
-            local method = getnamecallmethod and getnamecallmethod() or ""
-            if (method == "FireServer" or method == "InvokeServer")
-               and typeof(self) == "Instance" and self.Name == "ShootWeapon" then
-                local pkt = (select(1, ...))
-                if type(pkt) == "table" and type(pkt.Bullets) == "table" then
-                    -- LP-only: bullet origin must be near LP camera/head.
-                    local camPos = Camera and Camera.CFrame.Position
-                    for _, b in ipairs(pkt.Bullets) do
-                        local hits = b.Hits
-                        local hit = hits and hits[#hits]
-                        if b.Origin and hit and hit.Position and camPos
-                           and (b.Origin - camPos).Magnitude < 12 then
-                            pcall(_spawnTracer, b.Origin, hit.Position)
-                        end
-                    end
-                end
+    -- Register a tracer bridge on the SINGLE existing __namecall hook
+    -- (installed at boot). Never install a second __namecall on `game`:
+    -- stacking is a BAC Alpha-3B fingerprint that produces the
+    -- ReplicatedFirst.LoadingScreen "index nil with 'FireServer'/'Destroy'"
+    -- cascade before a kick.
+    _G.EclipseTracerBridge = function(self, method, ...)
+        if not (Config.Visuals and Config.Visuals.BulletTracer) then return end
+        if method ~= "FireServer" and method ~= "InvokeServer" then return end
+        if typeof(self) ~= "Instance" or self.Name ~= "ShootWeapon" then return end
+        local pkt = (select(1, ...))
+        if type(pkt) ~= "table" or type(pkt.Bullets) ~= "table" then return end
+        local camPos = Camera and Camera.CFrame.Position
+        if not camPos then return end
+        for _, b in ipairs(pkt.Bullets) do
+            local hits = b.Hits
+            local hit = hits and hits[#hits]
+            if b.Origin and hit and hit.Position
+               and (b.Origin - camPos).Magnitude < 12 then
+                pcall(_spawnTracer, b.Origin, hit.Position)
             end
-            return old(self, ...)
-        end)
-        pcall(function() setreadonly(mt, true) end)
-    end
-    task.spawn(function()
-        while scriptRunning do
-            task.wait(0.5)
-            _tracerActive = Config.Visuals.BulletTracer and true or false
-            if _tracerActive and not _hookInstalled then _installHook() end
         end
-    end)
+    end
 end
 
 -- FPS BOOST removed by user request.
