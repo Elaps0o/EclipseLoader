@@ -5765,64 +5765,15 @@ function _EclipseCurrentSkinRealtimeKey()
     return table.concat(parts, "|")
 end
 function _EclipseForceKnifeRealtime()
-    if not (Config.Skins and Config.Skins.SkinChangerEnabled and IsAlive()) then return false end
-    _EclipseRealtimeToken = (_EclipseRealtimeToken or 0) + 1
-    local token = _EclipseRealtimeToken
-    if _EclipseRealtimeBusy then
-        SkinSystem._realtimeQueued = true
-        return false
-    end
-    _EclipseRealtimeBusy = true
-    SkinSystem.scriptRunning = true
-    pcall(_TW_InitSkinChangerHooks)
-
-    local function aliveAndCurrent()
-        return token == _EclipseRealtimeToken and Config.Skins.SkinChangerEnabled and IsAlive()
-    end
-
-    local function rebuildOnce()
-        if not aliveAndCurrent() then return false end
-        local base = _findCameraBaseKnife()
-        -- Never Destroy game-owned camera models here: some have locked Parent.
-        -- Only drop Eclipse's clone, restore hidden vanilla parts, then rebuild
-        -- the selected knife clone immediately so swaps are real-time.
-        pcall(removeViewmodel)
-        SkinSystem.scriptRunning = true
-        SkinSystem.spawned = false
-        SkinSystem.vm = nil
-        pcall(spawnViewmodel, base)
-        pcall(_TW_ApplyAllCameraSkinsNow or _TW_ApplyAllCameraSkins)
-        pcall(_applySelectedGloveSkin)
-        pcall(_applyHUDKnife, true)
-        if SkinSystem.spawned and SkinSystem.vm and SkinSystem.vm.Parent then
-            SkinSystem._lastRealtimeKey = _EclipseCurrentSkinRealtimeKey()
-        end
-        return SkinSystem.spawned and SkinSystem.vm and SkinSystem.vm.Parent
-    end
-
-    local okSpawn = rebuildOnce()
-    for _, delayT in ipairs({0.03, 0.08, 0.16, 0.28, 0.45, 0.7}) do
-        task.delay(delayT, function()
-            if not aliveAndCurrent() then return end
-            if not (SkinSystem.spawned and SkinSystem.vm and SkinSystem.vm.Parent and SkinSystem.vm.Name == Config.Skins.SelectedKnife) then
-                pcall(rebuildOnce)
-            else
-                pcall(_TW_ApplyAllCameraSkinsNow or _TW_ApplyAllCameraSkins)
-                pcall(_applySelectedGloveSkin)
-                pcall(_applyHUDKnife, true)
-                SkinSystem._lastRealtimeKey = _EclipseCurrentSkinRealtimeKey()
-            end
-        end)
-    end
-    task.delay(0.8, function()
-        _EclipseRealtimeBusy = false
-        if SkinSystem._realtimeQueued and Config.Skins.SkinChangerEnabled and IsAlive() then
-            SkinSystem._realtimeQueued = false
-            task.defer(_EclipseForceKnifeRealtime)
-        end
-    end)
-    return okSpawn
+    -- Bankroll-style: knife swap is passive. Bankroll's GetCameraModel /
+    -- GetCharacterModel / Vm.new / GetGloves hooks (installed by
+    -- _TW_InitSkinChangerHooks) already return the selected model on the
+    -- next natural respawn / round start. Forcing a live rebuild here caused
+    -- white / gray / invisible knives and locked-Parent errors, so this is
+    -- now a no-op.
+    return false
 end
+
 
 function _findGloveSkinSource(gsr, side)
     if not gsr then return nil end
@@ -8382,18 +8333,16 @@ task.spawn(function()
     while scriptRunning do
         local living = IsAlive()
         local ck = _findCameraBaseKnife()
+        -- Bankroll-style reconcile: only rebuild when the VM was destroyed
+        -- externally (respawn cleared Camera). Do NOT force a rebuild when
+        -- SelectedKnife changed mid-round; the Bankroll GetCameraModel hook
+        -- returns the new knife on the next natural respawn.
         if SkinSystem.spawned then
             local vm = SkinSystem.vm
             local staleVm = (not vm) or (not vm.Parent)
-            local wrongKnife = vm and vm.Parent and vm.Name ~= Config.Skins.SelectedKnife
-            local currentKey = Config.Skins.SkinChangerEnabled and _EclipseCurrentSkinRealtimeKey() or nil
-            if currentKey and not SkinSystem._lastRealtimeKey then SkinSystem._lastRealtimeKey = currentKey end
-            local changedSkinState = currentKey and SkinSystem._lastRealtimeKey and currentKey ~= SkinSystem._lastRealtimeKey
             if staleVm then
                 SkinSystem.spawned = false
                 SkinSystem.vm = nil
-            elseif (wrongKnife or changedSkinState) and living then
-                pcall(_EclipseForceKnifeRealtime)
             end
         end
         ck = _findCameraBaseKnife()
@@ -8403,11 +8352,14 @@ task.spawn(function()
                 pcall(_TW_ApplyAllCameraSkinsNow or _TW_ApplyAllCameraSkins)
                 pcall(_applySelectedGloveSkin)
                 SkinSystem._lastRealtimeKey = _EclipseCurrentSkinRealtimeKey()
+                -- HUD override fires only AFTER the knife actually exists in Camera.
+                pcall(_applyHUDKnife, true)
             end
         elseif (not SkinSystem.scriptRunning or not ck or not living) and SkinSystem.spawned then removeViewmodel() end
-        task.wait(0.08)
+        task.wait(0.15)
     end
 end)
+
 
 pcall(function()
     LocalPlayer.CharacterRemoving:Connect(function()
@@ -8907,13 +8859,20 @@ SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
             pcall(function() Options.Knife_Select:SetValue(Config.Skins.SelectedKnife) end)
             return
         end
-        -- Bankroll-style: selection only takes effect on next respawn/round.
-        -- Do NOT clear HUDIconOverrideConfirmed here — HUD icon/name should
-        -- stay locked on whatever was already confirmed until the round ends,
-        -- so switching selection mid-round never flickers the HUD.
+        if Config.Skins.SelectedKnife == v then return end
         Config.Skins.SelectedKnife = v
+        -- Bankroll-style: passive swap. HUD stays on the current knife until
+        -- the new knife actually spawns in Camera on the next round.
+        pcall(function()
+            if Library and Library.Notify then
+                Library:Notify("Knife will apply on the next round.", 3)
+            end
+        end)
     end })
-pcall(function() SkinGB:AddLabel("Applies on the next round", true) end)
+pcall(function()
+    SkinGB:AddLabel("Applies on the next round", true)
+end)
+
 
 
 
