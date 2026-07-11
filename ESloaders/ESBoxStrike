@@ -165,7 +165,6 @@ local function InstallDeviceSpoofer()
                     return ""
                 end
             end
-            -- (Bullet tracer bridge removed.)
             return oldNamecall(self, ...)
         end))
     end
@@ -825,7 +824,6 @@ local Config = {
         Global=true, Mode="Global", SelectedWeapon="AK-47", SelectedCategory="Rifles",
         PerWeapon={}, PerCategory={},
         DisableInSmoke=true, DisableInFlash=true, WallBang=false, WallDepth=1.0,
-        Silent=false, SilentColor=Color3.fromRGB(180,120,255),
     },
     TriggerBot = { Enabled=false, Delay=0.01, Mode="HitChance", HitChance=100, Spread=0, AutoWall=false },
     ESP      = {
@@ -854,14 +852,6 @@ local Config = {
         ChamsGlowColor = Color3.fromRGB(255, 180, 180),
         ChamsGlow      = 0.35,
         ChamsIntensity = 1.0,
-        -- ESP Visible: quando ativo, usa cores diferentes para inimigos
-        -- visíveis vs. bloqueados por parede (Box + Chams).
-        VisibleCheck        = false,
-        VisibleBoxColor     = Color3.fromRGB(80, 255, 120),
-        InvisibleBoxColor   = Color3.fromRGB(255, 60, 60),
-        VisibleChamsColor   = Color3.fromRGB(80, 255, 120),
-        InvisibleChamsColor = Color3.fromRGB(255, 60, 60),
-
          Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
          IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90),
         
@@ -869,9 +859,9 @@ local Config = {
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true, PenetrationEnabled=false, PenetrationOkColor=Color3.fromRGB(0,255,0), PenetrationNoColor=Color3.fromRGB(255,60,60), Wallbang=false },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={}, PerCategory={}, Mode="Global", SelectedWeapon="AK-47", SelectedCategory="Rifles" },
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
-    Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, NoFallDamage=false },
+    Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, FreezeOnBuy=false },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=25, AutoSkillSmooth=0.05, AutoSkillDistance=600, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255) },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=8, AutoSkillSmooth=0.15, AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, MuteGameSounds=false },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -882,28 +872,39 @@ local Config = {
 
     Visuals = {
         KillEffect=false, KillEffectType="Eclipse",
+        KillSound=false, KillSoundType="Tick",
         WeaponGlow=false, WeaponGlowColor=Color3.fromRGB(170, 50, 255), WeaponGlowIntensity=1.0, WeaponGlowKnives=true,
         PlayerMaterial=false, PlayerMaterialType="Glass",
         PlayerMaterialColor=Color3.fromRGB(120, 200, 255), PlayerMaterialWeapons=false,
-        KillNameAnim=false, KillNameText="ECLIPSE",
+        KillNameAnim=false, KillNameText="ECLIPSE", KillNameAnimStyle="Rainbow",
     },
     UI = { PanelPositions = {} },
 }
 
 
-function _bindPanelPosition(name, frame)
+_EclipsePanelFrames = _EclipsePanelFrames or {}
+
+function _applyPanelSavedPosition(name, frame)
     if not frame or type(name) ~= "string" then return end
     Config.UI = Config.UI or {}
     Config.UI.PanelPositions = Config.UI.PanelPositions or {}
     local saved = Config.UI.PanelPositions[name]
     if type(saved) == "table"
-        and type(saved.XS)  == "number" and type(saved.XO) == "number"
-        and type(saved.YS)  == "number" and type(saved.YO) == "number" then
+        and type(saved.XS) == "number" and type(saved.XO) == "number"
+        and type(saved.YS) == "number" and type(saved.YO) == "number" then
         pcall(function()
             frame.Position = UDim2.new(saved.XS, saved.XO, saved.YS, saved.YO)
         end)
     end
-    
+end
+
+function _bindPanelPosition(name, frame)
+    if not frame or type(name) ~= "string" then return end
+    Config.UI = Config.UI or {}
+    Config.UI.PanelPositions = Config.UI.PanelPositions or {}
+    _EclipsePanelFrames[name] = frame
+    _applyPanelSavedPosition(name, frame)
+
     pcall(function()
         frame:GetPropertyChangedSignal("Position"):Connect(function()
             local p = frame.Position
@@ -915,12 +916,21 @@ function _bindPanelPosition(name, frame)
     end)
 end
 
+function _reapplyAllPanelPositions()
+    for name, frame in pairs(_EclipsePanelFrames) do
+        if frame and frame.Parent then
+            _applyPanelSavedPosition(name, frame)
+        end
+    end
+end
+
+
 local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
 _ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
-_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v19" .. _ECLIPSE_AUTOCONFIG_EXT
-_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v19" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v20" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v20" .. _ECLIPSE_AUTOCONFIG_EXT
 pcall(function()
     if type(delfile) == "function" and type(isfile) == "function" then
         for _, old in ipairs({
@@ -934,6 +944,7 @@ pcall(function()
             "EclipseHub/autosave_v16.ehcfg",
             "EclipseHub/autosave_v17.ehcfg",
             "EclipseHub/autosave_v18.ehcfg",
+            "EclipseHub/autosave_v19.ehcfg",
         }) do
 
             if isfile(old) then pcall(delfile, old) end
@@ -972,7 +983,7 @@ end)
 if not _ECLIPSE_AUTOCONFIG_PATH then _ECLIPSE_AUTOCONFIG_PATH = "EclipseHub/eclipse.ehcfg" end
 
 
-local _ECLIPSE_TOGGLE_NORESTORE = { Skin_Toggle = true }
+local _ECLIPSE_TOGGLE_NORESTORE = {}
 
 function _ecfgForceSkinChangerInactive(clearRuntime)
     Config.Skins = Config.Skins or {}
@@ -1019,11 +1030,7 @@ function _ecfgSanitizeEncodedPayload(encodedConfig, encodedControls)
         encodedConfig.Skins.HUDIconOverrideConfirmed = false
         encodedConfig.Skins.HUDIconConfirmedKey = nil
     end
-    if type(encodedControls) == "table" then
-        for id in pairs(_ECLIPSE_TOGGLE_NORESTORE) do
-            encodedControls[id] = false
-        end
-    end
+    -- v20: save every user-facing control exactly as selected.
 end
 
 function _ecfgFileApi()
@@ -1106,7 +1113,15 @@ function _ecfgLoadIntoConfig()
     local data = _ecfgReadRaw()
     if type(data) ~= "table" then return end
     _EclipseAutoConfig.loaded = data
+    -- Pre-merge Config.UI so panels created before _ecfgApplyLoadedControls
+    -- (Keybind, C4, Spectator) restore their saved positions on execute.
+    local cfg = _ecfgDecode(data.Config)
+    if type(cfg) == "table" and type(cfg.UI) == "table" then
+        Config.UI = Config.UI or {}
+        _ecfgMerge(Config.UI, cfg.UI)
+    end
 end
+
 
 local function _ecfgIsKeyPicker(opt)
     if not opt then return false end
@@ -1183,7 +1198,6 @@ function _ecfgControlSnapshot()
         for id, opt in pairs(Library.Toggles or {}) do
             local v = opt.Value
             if v == nil and type(opt.GetState) == "function" then v = opt:GetState() end
-            if _ECLIPSE_TOGGLE_NORESTORE[id] then v = false end
             out[id] = v
         end
         for id, opt in pairs(Library.Options or {}) do
@@ -1207,8 +1221,6 @@ function _ecfgApplyLoadedControls()
     if type(cfg) == "table" then
         _ecfgMerge(Config, cfg)
     end
-    -- User request: SkinChanger sempre inicia desativado; user precisa ativar manualmente.
-    if Config.Skins then Config.Skins.SkinChangerEnabled = false end
     local controls = _ecfgDecode(data.Controls)
     _EclipseConfigLoading = true
     local entries = {}
@@ -1222,7 +1234,6 @@ function _ecfgApplyLoadedControls()
         pcall(function()
             local tog = Library.Toggles and Library.Toggles[id]
             if tog then
-                if _ECLIPSE_TOGGLE_NORESTORE[id] then val = false end
                 local bv = val and true or false
                 _ecfgSetObjValue(tog, bv)
                 return
@@ -1266,6 +1277,8 @@ function _ecfgApplyLoadedControls()
     end
     pcall(function() if _updateNoRecoil then _updateNoRecoil() end end)
     pcall(function() if EX and type(EX.rebuildKB) == "function" then EX.rebuildKB() end end)
+    pcall(_reapplyAllPanelPositions)
+
 end
 
 function _ecfgSnapshotJson()
@@ -1917,8 +1930,6 @@ function _renderGrenade3D()
     if not (Config and Config.GlobalEnable and Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning)) then
         _g3dHide(); return
     end
-    -- Prediction: only while charging the throw (GPD.ShowNow), so it disappears
-    -- as soon as the grenade leaves the hand. Warning: reflects enemy grenades.
     local hasPred = Config.Grenade.Prediction and GPD and GPD.ShowNow and GPD.CachedPts and #GPD.CachedPts >= 2
     local warnPts = (Config.Grenade.Warning and ECLIPSE and ECLIPSE._warn3DPts) or nil
     local hasWarn = warnPts and #warnPts >= 2
@@ -2399,16 +2410,7 @@ function _espDrawArrow(data, root)
 end
 
 function _espDrawCornerBox(data, plr, L, R, T, B, cW, cH)
-    local col
-    if Config.ESP.VisibleCheck and not IsAlly(plr) then
-        local ch = plr.Character
-        local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart"))
-        local vis = head and IsVisible(head)
-        col = vis and Config.ESP.VisibleBoxColor or Config.ESP.InvisibleBoxColor
-    else
-        col = IsAlly(plr) and Config.ESP.AllyBoxColor or Config.ESP.BoxColor
-    end
-
+    local col = IsAlly(plr) and Config.ESP.AllyBoxColor or Config.ESP.BoxColor
     local ln = data.CornerLines
     ln[1].From=Vector2.new(L,T); ln[1].To=Vector2.new(L+cW,T); ln[1].Color=col; ln[1].Visible=true
     ln[2].From=Vector2.new(L,T); ln[2].To=Vector2.new(L,T+cH); ln[2].Color=col; ln[2].Visible=true
@@ -3025,10 +3027,6 @@ function _espProcessPlayer(plr, myRoot, center)
 
     
     local vs = Camera.ViewportSize
-    -- When the player is scoped (very low FOV), the projected box can grow much
-    -- larger than the viewport for close targets; using a wide tolerance based
-    -- on the current FOV avoids the flicker where the ESP hides/reappears each
-    -- frame while aiming down the sniper scope.
     local scopedNow = (isScopedIn and isScopedIn()) or (Camera.FieldOfView and Camera.FieldOfView < (OriginalCameraFOV or 70) * 0.6)
     local margin = scopedNow and math.max(vs.X, vs.Y) or 6
     if L < -margin or R > vs.X + margin or T < -margin or B > vs.Y + margin then
@@ -3159,15 +3157,8 @@ function updateChams()
                 ChamsHL[plr] = hl
             end
             if hl.Adornee ~= char then hl.Adornee = char end
-            local chamsCol = Config.ESP.ChamsColor
-            if Config.ESP.VisibleCheck then
-                local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
-                local vis = head and IsVisible(head)
-                chamsCol = vis and Config.ESP.VisibleChamsColor or Config.ESP.InvisibleChamsColor
-            end
-            hl.FillColor           = chamsCol
-            hl.OutlineColor        = chamsCol
-
+            hl.FillColor           = Config.ESP.ChamsColor
+            hl.OutlineColor        = Config.ESP.ChamsColor
             hl.FillTransparency    = baseFillT
             hl.OutlineTransparency = baseOutT
 
@@ -3177,7 +3168,6 @@ function updateChams()
         until true
     end
 
-    -- garbage collect for gone players
     for plr, _ in pairs(ChamsHL) do
         if not plr.Parent then _destroyChamsFor(plr) end
     end
@@ -3575,8 +3565,7 @@ function ensureC4UI()
     stroke.Color = Color3.fromRGB(70, 40, 110); stroke.Thickness = 1; stroke.Transparency = 0.35
     Instance.new("UICorner", f).CornerRadius = UDim.new(0, 5)
     pcall(function()
-        local gr = Instance.new("UIGradient", f)
-        gr.Rotation = 90
+        local gr = Instance.new("UIGradient", f); gr.Rotation = 90
         gr.Color = ColorSequence.new{
             ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 14, 34)),
             ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 6, 14)),
@@ -4256,7 +4245,6 @@ function updateTriggerBot()
     local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
     local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
     if not isNoSpread and (tick() - lastTrigger) < delay then return end
-
     local fire = false
     if isNoSpread then
         fire = true
@@ -4265,66 +4253,6 @@ function updateTriggerBot()
     end
     if not fire then return end
 
-    local function _doClick()
-        -- Sinaliza para o Silent Aim que o disparo veio do TriggerBot,
-        -- para que ele conte como um MB1 real e redirecione a bala.
-        _G.EclipseMB1Virtual = true
-        if isNoSpread then
-            if mouse1press then pcall(mouse1press) end
-            task.delay(0.08, function()
-                if mouse1release then pcall(mouse1release) end
-                task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
-            end)
-        else
-            if mouse1click then pcall(mouse1click) end
-            task.delay(0.25, function() _G.EclipseMB1Virtual = false end)
-        end
-    end
-    local function _tryFireOnPlayer(pl)
-        if not pl or pl == LocalPlayer then return false end
-        if not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl) then return false end
-        local ch = pl.Character; if not ch then return false end
-        local h = ch:FindFirstChildOfClass("Humanoid"); if not h or h.Health <= 0 then return false end
-        lastTrigger = tick()
-        _doClick()
-        return true
-    end
-
-    -- ==============================================================
-    -- INTEGRAÇÃO SILENT + TRIGGER
-    -- Com Silent ativo, o Trigger não exige mirar em parte do corpo:
-    -- basta existir 1 inimigo visível. O click é convertido pelo Silent
-    -- em um hit real na cabeça do inimigo mais próximo/visível.
-    -- ==============================================================
-    if Config.Misc and Config.Misc.SilentAim then
-        local cam = Camera; local origin = cam and cam.CFrame.Position or Vector3.new()
-        local best, bestD
-        for _, pl in ipairs(Players:GetPlayers()) do
-            if pl ~= LocalPlayer and _tryFireOnPlayer == _tryFireOnPlayer then
-                if not (not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl)) then
-                    local ch = pl.Character
-                    local h  = ch and ch:FindFirstChildOfClass("Humanoid")
-                    local hd = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart"))
-                    if h and h.Health > 0 and hd then
-                        local rp = RaycastParams.new()
-                        rp.FilterType = Enum.RaycastFilterType.Exclude
-                        rp.FilterDescendantsInstances = { LocalPlayer.Character, cam }
-                        local dir = (hd.Position - origin)
-                        local res = Workspace:Raycast(origin, dir, rp)
-                        local vis = (not res) or (res.Instance and res.Instance:IsDescendantOf(ch))
-                        if vis then
-                            local d = dir.Magnitude
-                            if not bestD or d < bestD then bestD = d; best = pl end
-                        end
-                    end
-                end
-            end
-        end
-        if best then _tryFireOnPlayer(best) end
-        return
-    end
-
-    -- Fluxo tradicional: raycast pela mira.
     local vp = Camera.ViewportSize
     local sp = isNoSpread and 0 or (tonumber(Config.TriggerBot.Spread) or 0)
     local ap = Vector2.new(vp.X/2, vp.Y/2)
@@ -4334,6 +4262,23 @@ function updateTriggerBot()
     local ig = { Camera }; if LocalPlayer.Character then table.insert(ig, LocalPlayer.Character) end
     rp.FilterDescendantsInstances = ig
     local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
+    local function _doClick()
+        if isNoSpread then
+            if mouse1press then pcall(mouse1press) end
+            task.delay(0.02, function() if mouse1release then pcall(mouse1release) end end)
+        else
+            if mouse1click then pcall(mouse1click) end
+        end
+    end
+    local function _tryFireOnPlayer(pl)
+        if not pl then return false end
+        if pl and not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl) then return false end
+        local ch = pl.Character; if not ch then return false end
+        local h = ch:FindFirstChildOfClass("Humanoid"); if not h or h.Health <= 0 then return false end
+        lastTrigger = tick()
+        _doClick()
+        return true
+    end
     if r and r.Instance then
         local m = r.Instance:FindFirstAncestorOfClass("Model")
         if m and m:FindFirstChildOfClass("Humanoid") then
@@ -4359,8 +4304,6 @@ function updateTriggerBot()
         end
     end
 end
-
-
 
 
 local ControllerCache = {}
@@ -4481,14 +4424,11 @@ function updateMovement()
     local root = char:FindFirstChild("HumanoidRootPart")
     if not hum or not root then return end
 
-    -- Robust ground detection (used by bhop and autostrafer)
     local hstate    = hum:GetState()
     local floorMat  = hum.FloorMaterial
     local stateGrounded = (floorMat ~= nil and floorMat ~= Enum.Material.Air)
                       and hstate ~= Enum.HumanoidStateType.Jumping
                       and hstate ~= Enum.HumanoidStateType.Freefall
-    -- Extra safety: physical downward raycast so landing on top of props
-    -- (crates, boxes) counts as grounded even if humanoid state lags.
     local rayGrounded = false
     do
         _ASF_RAY.FilterDescendantsInstances = { char }
@@ -4504,8 +4444,6 @@ function updateMovement()
         if grounded and tick() - lastBhop > 0.06 then
             hum:ChangeState(Enum.HumanoidStateType.Jumping)
             lastBhop = tick()
-            -- Small horizontal momentum preservation for persistent bhop chains
-            -- (no vertical boost — avoids the "floating character" bug).
             pcall(function()
                 local cv = root.AssemblyLinearVelocity
                 local horiz = Vector3.new(cv.X, 0, cv.Z)
@@ -4517,8 +4455,7 @@ function updateMovement()
         end
     end
 
-    -- AUTO STRAFER: only actives while Space is held AND player is truly in air.
-    -- Skips ascent (Y>0.5) to avoid launching off object edges ("float+shoot" bug).
+    -- AUTO STRAFER: only while Space is held AND truly airborne (fixes float+fire bug).
     do
         if not _ASF then _ASF = { chain = 0, wasAir = false, curSpd = 0 } end
 
@@ -4571,7 +4508,6 @@ function updateMovement()
             end
         end
     end
-
 
 
 
@@ -4870,6 +4806,21 @@ function _TW_InitSkinChangerHooks()
                 return nil
             end
         end
+        -- GetCharacterModel — hook the character/world knife too (Bankroll parity).
+        if type(Sk.GetCharacterModel) == "function" then
+            local oGChM = Sk.GetCharacterModel
+            Sk.GetCharacterModel = function(w, sk, ...)
+                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning
+                    and _TW_LPActive() and _TW_CheckBaseKnife(w) then
+                    local nk = Config.Skins.SelectedKnife
+                    local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
+                    local ok, result = pcall(oGChM, nk, ns, ...)
+                    if ok and result then return result end
+                end
+                local ok, result = pcall(oGChM, w, sk, ...)
+                if ok then return result end
+                return nil
+            end
         if type(Vm) == "table" and type(Vm.new) == "function" then
             local oVN = Vm.new
             Vm.new = function(vc, w, sk, ...)
@@ -4881,6 +4832,29 @@ function _TW_InitSkinChangerHooks()
                     if ok and result then return result end
                 end
                 local ok, result = pcall(oVN, vc, w, sk, ...)
+                if ok then return result end
+                return nil
+            end
+        end
+        end
+        -- GetGloves — real-time glove model/skin swap (Bankroll parity).
+        if type(Sk.GetGloves) == "function" then
+            local oGG = Sk.GetGloves
+            Sk.GetGloves = function(g, sk, ...)
+                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning and _TW_LPActive() then
+                    local gm, gs
+                    for gt in pairs(GLOVES or {}) do
+                        local s = Config.Skins.SelectedSkins[gt]
+                        if s and s ~= "" and s ~= "Vanilla" and s ~= "Default" and s ~= "None" then
+                            gm, gs = gt, s; break
+                        end
+                    end
+                    if gm then
+                        local ok, result = pcall(oGG, gm, gs, ...)
+                        if ok and result then return result end
+                    end
+                end
+                local ok, result = pcall(oGG, g, sk, ...)
                 if ok then return result end
                 return nil
             end
@@ -4992,8 +4966,6 @@ function _restoreOriginalSA(part)
 end
 
 function _purgeEclipseSkinMarks()
-    -- Destroy Eclipse-stamped SurfaceAppearance children and restore the
-    -- original ones we cached at apply-time. Prevents "white weapon" bug.
     local scanRoots = { Camera, LocalPlayer and LocalPlayer.Character }
     for _, root in ipairs(scanRoots) do
         if root then
@@ -5007,13 +4979,10 @@ function _purgeEclipseSkinMarks()
             end)
         end
     end
-    for part, _list in pairs(_EclipseOrigSA) do
-        pcall(_restoreOriginalSA, part)
-    end
+    for part in pairs(_EclipseOrigSA) do pcall(_restoreOriginalSA, part) end
 end
 
 function _cacheSkinTarget(target)
-    -- Save original surface appearance so we can rebuild on cleanup.
     if target and target:IsA("BasePart") then pcall(_saveOriginalSA, target) end
 end
 
@@ -5150,10 +5119,31 @@ function _clearSkinChangerRuntime()
     pcall(restoreOriginalKnife)
 
     
-    for _, d in ipairs({0.1, 0.35, 0.8, 1.6, 2.8}) do
+    for _, d in ipairs({0.1, 0.35, 0.8, 1.6, 2.8, 4.0}) do
         task.delay(d, function()
             if Config.Skins.SkinChangerEnabled then return end
             pcall(_sweep)
+            -- Destroy any fake viewmodel that spawned via late hooks and
+            -- force-show the vanilla knife/glove parts we hid.
+            pcall(function()
+                if SkinSystem and SkinSystem.vm and SkinSystem.vm.Parent then
+                    SkinSystem.vm:Destroy(); SkinSystem.vm = nil
+                end
+                SkinSystem.spawned = false
+            end)
+            pcall(restoreOriginalKnife)
+            pcall(function()
+                for _, obj in ipairs(Camera:GetChildren()) do
+                    local nm = tostring(obj.Name):lower()
+                    if nm == "t knife" or nm == "ct knife" or nm:find("glove") or nm:find("arm") then
+                        for _, p in ipairs(obj:GetDescendants()) do
+                            if (p:IsA("BasePart") or p:IsA("MeshPart")) and p.Transparency >= 1 then
+                                pcall(function() p.Transparency = 0 end)
+                            end
+                        end
+                    end
+                end
+            end)
         end)
     end
 end
@@ -5284,8 +5274,30 @@ function _applySkinSourceToPart(target, source)
     end)
 end
 
--- Resize system removed (tripleware style: native sizes for weapons and knives).
-function _uniformScale() end
+-- Real uniform scale (only used from attachAsset for Butterfly Knife gloves).
+function _uniformScale(inst, factor)
+    if not inst or not factor or factor == 1 then return end
+    local function _scaleBP(bp)
+        local visualMeshes = {}
+        for _, ch in ipairs(bp:GetChildren()) do
+            if ch:IsA("SpecialMesh") or ch:IsA("BlockMesh") or ch:IsA("CylinderMesh") then
+                table.insert(visualMeshes, ch)
+            end
+        end
+        if #visualMeshes > 0 then
+            for _, ch in ipairs(visualMeshes) do pcall(function() ch.Scale = ch.Scale * factor end) end
+        else
+            pcall(function() bp.Size = bp.Size * factor end)
+        end
+    end
+    if inst:IsA("BasePart") then
+        _scaleBP(inst)
+    elseif inst:IsA("Model") or inst:IsA("Folder") then
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d:IsA("BasePart") then _scaleBP(d) end
+        end
+    end
+end
 
 function _findArmPart(root, armName)
     if not root then return nil end
@@ -5411,8 +5423,8 @@ function _copyGloveVisualFrom(src, dest)
     end)
 end
 
--- Tripleware behaviour: straight clone of the T/CT Glove (or Sleeve) template.
--- NO resize, NO fit-to-reference, NO knife boost. Glove keeps its native size.
+-- Old-source style: clone T/CT Glove template. Resize applied ONLY when the
+-- selected knife is the Butterfly Knife (per user request).
 function attachAsset(folder, arm, model, name, offset, ref)
     if not folder or not SkinSystem.vm then return end
     local target = SkinSystem.vm:FindFirstChild(arm); if not target then return end
@@ -5424,7 +5436,14 @@ function attachAsset(folder, arm, model, name, offset, ref)
         mesh:SetAttribute("EclipseSkinSource", nil)
         mesh:SetAttribute("SkinApplied", nil)
     end)
-    if name == "Glove" then SkinSystem.gloveScale = 1.0 end
+    if name == "Glove" then
+        SkinSystem.gloveScale = 1.0
+        if Config.Skins.SelectedKnife == "Butterfly Knife" and target:IsA("BasePart") then
+            local factor = 0.86
+            _uniformScale(mesh, factor)
+            SkinSystem.gloveScale = factor
+        end
+    end
     local motor = Instance.new("Motor6D"); motor.Part0=target; motor.Part1=mesh; motor.C0=offset; motor.Parent=target
 end
 
@@ -5440,8 +5459,8 @@ function playSound(folder, name)
     local ws = sounds and sounds:FindFirstChild(Config.Skins.SelectedKnife)
     
     local variants = { folder }
-    if folder == "Inspect" then variants = { "Inspect", "Inspect1", "FirstInspect", "Inspect_1" }
-    elseif folder == "SecondInspect" then variants = { "SecondInspect", "Inspect2", "SecondInspect_1", "Inspect_2", "InspectAlt", "SecondaryInspect", "Inspect", "Inspect1", "FirstInspect", "Inspect_1" }
+    if folder == "Inspect" then variants = { "Inspect", "Inspect1", "FirstInspect", "Inspect_1", "InspectMain", "FirstInspect_1" }
+    elseif folder == "SecondInspect" then variants = { "SecondInspect", "Inspect2", "SecondInspect_1", "Inspect_2", "InspectAlt", "SecondaryInspect", "Inspect Two", "InspectTwo", "AltInspect", "InspectB", "Inspect_B", "SecondaryInspect_1" }
     elseif folder == "HitOne" then variants = { "HitOne", "Hit1", "Hit_1" }
     elseif folder == "HitTwo" then variants = { "HitTwo", "Hit2", "Hit_2" }
     elseif folder == "HitThree" then variants = { "HitThree", "Hit3", "Hit_3" }
@@ -5453,6 +5472,24 @@ function playSound(folder, name)
         src = sf and (sf:FindFirstChild(name) or sf:FindFirstChild("1") or sf:FindFirstChildOfClass("Sound"))
         if src and src:IsA("Sound") then break end
         src = nil
+    end
+    if not src and folder == "SecondInspect" and ws then
+        local primary = ws:FindFirstChild("Inspect") or ws:FindFirstChild("Inspect1") or ws:FindFirstChild("FirstInspect")
+        for _, child in ipairs(ws:GetChildren()) do
+            local lname = string.lower(child.Name)
+            if string.find(lname, "inspect", 1, true) and child ~= primary then
+                local cand = child:FindFirstChild(name) or child:FindFirstChild("1") or child:FindFirstChildOfClass("Sound")
+                if cand and cand:IsA("Sound") then src = cand; sf = child; break end
+            end
+        end
+    end
+    if not src and folder == "SecondInspect" and ws then
+        for _, vname in ipairs({ "Inspect", "Inspect1", "FirstInspect", "Inspect_1" }) do
+            sf = ws:FindFirstChild(vname)
+            src = sf and (sf:FindFirstChild(name) or sf:FindFirstChild("1") or sf:FindFirstChildOfClass("Sound"))
+            if src and src:IsA("Sound") then break end
+            src = nil
+        end
     end
     if src and src:IsA("Sound") then
         s = src:Clone()
@@ -5602,16 +5639,11 @@ function _spawnViewmodelCore(knife, me)
     local selKnife = Config.Skins.SelectedKnife
     local tpl = weapons:FindFirstChild(selKnife)
     local camTpl = tpl and tpl:FindFirstChild("Camera")
-    -- If the game does not ship a static Assets.Weapons.<Knife>.Camera
-    -- template for the selected knife (e.g. Karambit, M9, Flip, Gut,
-    -- Skeleton, Stiletto), build it live via the Skins library used by
-    -- the game itself. This is what Bankroll/Tripleware do.
     if not camTpl and _TW_Sk and type(_TW_Sk.GetCameraModel) == "function" then
         local sk = (Config.Skins.SelectedSkins and Config.Skins.SelectedSkins[selKnife]) or "Vanilla"
         local ok, mdl = pcall(_TW_Sk.GetCameraModel, selKnife, sk)
         if ok and mdl then camTpl = mdl end
     end
-    -- Last-resort fallback so the loop stops thrashing.
     if not camTpl then
         tpl = weapons:WaitForChild("Butterfly Knife", 5)
         camTpl = tpl and tpl:WaitForChild("Camera", 5)
@@ -5645,8 +5677,6 @@ function _spawnViewmodelCore(knife, me)
     local knifeAnims = animRoot and (animRoot:FindFirstChild(selKnife) or animRoot:FindFirstChild("Butterfly Knife"))
     local af = knifeAnims and knifeAnims:FindFirstChild("CameraAnimations")
     if not af then
-        -- No anims available for this knife; still mark spawned so the
-        -- knife appears in-hand instead of forever retrying.
         if not SkinSystem.vm.PrimaryPart then SkinSystem.vm.PrimaryPart = SkinSystem.vm:FindFirstChildWhichIsA("BasePart") end
         SkinSystem.spawned = true
         return
@@ -5659,9 +5689,21 @@ function _spawnViewmodelCore(knife, me)
         local _hasAlt = (_sel == "Butterfly Knife") or (_sel == "Skeleton Knife") or (_sel == "Stiletto Knife")
         local _alt = nil
         if _hasAlt then
-            for _, n in ipairs({ "Inspect2", "SecondInspect", "Inspect_2", "InspectAlt", "SecondaryInspect" }) do
+            for _, n in ipairs({ "Inspect2", "SecondInspect", "Inspect_2", "InspectAlt", "SecondaryInspect", "InspectTwo", "AltInspect", "Inspect Two", "InspectB", "Inspect_B" }) do
                 _alt = _loadSkinAnimTrack(af, n)
                 if _alt then break end
+            end
+            if not _alt and af then
+                local primary = af:FindFirstChild("Inspect")
+                for _, child in ipairs(af:GetChildren()) do
+                    if child:IsA("Animation") and child ~= primary then
+                        local lname = string.lower(child.Name)
+                        if string.find(lname, "inspect", 1, true) then
+                            _alt = _loadSkinAnimTrack(af, child.Name)
+                            if _alt then break end
+                        end
+                    end
+                end
             end
         end
         SkinSystem.inspectAlt = _alt
@@ -5693,6 +5735,93 @@ function spawnViewmodel(knife)
     local ok, err = pcall(_spawnViewmodelCore, knife, me)
     if not ok then warn("[Eclipse] Custom knife spawn failed: " .. tostring(err)) end
     if not SkinSystem.spawned and SkinSystem.vm then pcall(function() SkinSystem.vm:Destroy() end); SkinSystem.vm=nil; restoreOriginalKnife() end
+end
+
+function _findCameraBaseKnife()
+    local cam = workspace.CurrentCamera or Camera
+    if not cam then return nil end
+    for _, nm in ipairs({"T Knife", "CT Knife", "Knife"}) do
+        local obj = cam:FindFirstChild(nm)
+        if obj and obj:IsA("Model") and obj ~= SkinSystem.vm then return obj end
+    end
+    for _, obj in ipairs(cam:GetChildren()) do
+        if obj:IsA("Model") and obj ~= SkinSystem.vm then
+            local low = tostring(obj.Name):lower()
+            if low:find("knife", 1, true) and not knives[obj.Name] then return obj end
+        end
+    end
+    return nil
+end
+
+_EclipseRealtimeToken = _EclipseRealtimeToken or 0
+_EclipseRealtimeBusy = _EclipseRealtimeBusy or false
+function _EclipseCurrentSkinRealtimeKey()
+    local skins = (Config.Skins and Config.Skins.SelectedSkins) or {}
+    local k = (Config.Skins and Config.Skins.SelectedKnife) or "Butterfly Knife"
+    local parts = { tostring(k), tostring(skins[k] or "Vanilla") }
+    for _, gt in ipairs({"Sports Gloves","Driver Gloves","Hand Wraps","Operator Gloves","Specialist Gloves","Moto Gloves","Bloodhound Gloves","Broken Fang Gloves","Hydra Gloves"}) do
+        table.insert(parts, gt .. "=" .. tostring(skins[gt] or ""))
+    end
+    return table.concat(parts, "|")
+end
+function _EclipseForceKnifeRealtime()
+    if not (Config.Skins and Config.Skins.SkinChangerEnabled and IsAlive()) then return false end
+    _EclipseRealtimeToken = (_EclipseRealtimeToken or 0) + 1
+    local token = _EclipseRealtimeToken
+    if _EclipseRealtimeBusy then
+        SkinSystem._realtimeQueued = true
+        return false
+    end
+    _EclipseRealtimeBusy = true
+    SkinSystem.scriptRunning = true
+    pcall(_TW_InitSkinChangerHooks)
+
+    local function aliveAndCurrent()
+        return token == _EclipseRealtimeToken and Config.Skins.SkinChangerEnabled and IsAlive()
+    end
+
+    local function rebuildOnce()
+        if not aliveAndCurrent() then return false end
+        local base = _findCameraBaseKnife()
+        -- Never Destroy game-owned camera models here: some have locked Parent.
+        -- Only drop Eclipse's clone, restore hidden vanilla parts, then rebuild
+        -- the selected knife clone immediately so swaps are real-time.
+        pcall(removeViewmodel)
+        SkinSystem.scriptRunning = true
+        SkinSystem.spawned = false
+        SkinSystem.vm = nil
+        pcall(spawnViewmodel, base)
+        pcall(_TW_ApplyAllCameraSkinsNow or _TW_ApplyAllCameraSkins)
+        pcall(_applySelectedGloveSkin)
+        pcall(_applyHUDKnife, true)
+        if SkinSystem.spawned and SkinSystem.vm and SkinSystem.vm.Parent then
+            SkinSystem._lastRealtimeKey = _EclipseCurrentSkinRealtimeKey()
+        end
+        return SkinSystem.spawned and SkinSystem.vm and SkinSystem.vm.Parent
+    end
+
+    local okSpawn = rebuildOnce()
+    for _, delayT in ipairs({0.03, 0.08, 0.16, 0.28, 0.45, 0.7}) do
+        task.delay(delayT, function()
+            if not aliveAndCurrent() then return end
+            if not (SkinSystem.spawned and SkinSystem.vm and SkinSystem.vm.Parent and SkinSystem.vm.Name == Config.Skins.SelectedKnife) then
+                pcall(rebuildOnce)
+            else
+                pcall(_TW_ApplyAllCameraSkinsNow or _TW_ApplyAllCameraSkins)
+                pcall(_applySelectedGloveSkin)
+                pcall(_applyHUDKnife, true)
+                SkinSystem._lastRealtimeKey = _EclipseCurrentSkinRealtimeKey()
+            end
+        end)
+    end
+    task.delay(0.8, function()
+        _EclipseRealtimeBusy = false
+        if SkinSystem._realtimeQueued and Config.Skins.SkinChangerEnabled and IsAlive() then
+            SkinSystem._realtimeQueued = false
+            task.defer(_EclipseForceKnifeRealtime)
+        end
+    end)
+    return okSpawn
 end
 
 function _findGloveSkinSource(gsr, side)
@@ -5773,92 +5902,66 @@ function _applyGloveSideDirect(glove, side, gloveSkin, gsr, directSurfaceApps, s
     end
 end
 
--- Tripleware-style glove skin application.
 -- ============================================================
--- FollowHub-style ApplySkin / ApplyGloves (portado 1:1).
--- Só toca em workspace.CurrentCamera (viewmodel do LocalPlayer),
--- então naturalmente não vaza pros outros players.
+-- OLD-SOURCE SKINCHANGER (portado 1:1 do eclipse antigo funcional).
+-- Usa _applySkinSourceToPart (SurfaceAppearance clone name-matched),
+-- sem tocar em outros players (só camera do LocalPlayer).
 -- ============================================================
 function _applyGloveSkinCore(gloveType, gloveSkin)
     if not (Config.Skins and Config.Skins.SkinChangerEnabled) then return end
     if not SkinsFolder then return end
-    local cam = workspace.CurrentCamera
-    if not cam then return end
-
     if not gloveSkin or gloveSkin == "" or gloveSkin == "Vanilla" or gloveSkin == "Default" or gloveSkin == "None" then
         return
     end
-
     local gf = SkinsFolder:FindFirstChild(gloveType); if not gf then return end
     local gs = gf:FindFirstChild(gloveSkin);          if not gs then return end
-    local cf = gs:FindFirstChild("Camera") or gs
-    local fn = cf:FindFirstChild("Factory New")
-        or cf:FindFirstChild("Minimal Wear")
-        or cf:FindFirstChild("Field-Tested")
-        or cf:FindFirstChild("Well-Worn")
-        or cf:FindFirstChild("Battle-Scarred")
-        or cf
-    if not fn then return end
+    local gsr = gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Factory New")
+              or gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Minimal Wear")
+              or gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Field-Tested")
+              or gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Well-Worn")
+              or gs:FindFirstChild("Camera") and gs.Camera:FindFirstChild("Battle-Scarred")
+    if not gsr then return end
 
-    -- Coleta alvos de luva em cam: Arms(.Glove) + T Glove/CT Glove models
-    local targets = {}
-    for _, obj in ipairs(cam:GetChildren()) do
-        if obj:IsA("Model") then
-            local isArms = obj.Name:find("Arms") or obj:FindFirstChild("Right Arm") or obj:FindFirstChild("Left Arm")
-            local isGloveModel = obj.Name == "T Glove" or obj.Name == "CT Glove" or obj.Name:find("Glove")
-            if isArms then
-                for _, side in ipairs({"Left Arm", "Right Arm"}) do
-                    local arm = obj:FindFirstChild(side)
-                    local glove = arm and arm:FindFirstChild("Glove")
-                    if glove then table.insert(targets, glove) end
-                end
-                table.insert(targets, obj)
-            end
-            if isGloveModel then table.insert(targets, obj) end
-        end
+    local directSurfaceApps = {}
+    for _, sa in ipairs(gsr:GetChildren()) do
+        if sa:IsA("SurfaceAppearance") then table.insert(directSurfaceApps, sa) end
     end
-    if #targets == 0 then return end
 
-    -- M4 ApplySkinProps: itera filhos da wearFol, name-match recursivo,
-    -- remove SA/Texture/Decal antigos e clona o novo.
-    for _, target in ipairs(targets) do
-        pcall(_saveOriginalSA, target)
-        for _, texObj in ipairs(fn:GetChildren()) do
-            local tPart
-            if target:IsA("BasePart") and target.Name == texObj.Name then
-                tPart = target
-            elseif target.FindFirstChild then
-                tPart = target:FindFirstChild(texObj.Name, true)
-            end
-            if tPart and tPart:IsA("BasePart") then
-                for _, old in ipairs(tPart:GetChildren()) do
-                    if old:IsA("SurfaceAppearance") or old:IsA("Texture") or old:IsA("Decal") then
-                        old.Parent = nil
-                    end
-                end
-                local c = texObj:Clone()
-                pcall(function() c:SetAttribute("EclipseSkinSurface", true) end)
-                c.Parent = tPart
-                pcall(function() tPart:SetAttribute("EclipseSkinSource", gloveType.."/"..gloveSkin) end)
-            end
+    _forEachCameraGlove(function(glove, side)
+        local sourceKey = tostring(gloveType) .. "/" .. tostring(gloveSkin)
+        if glove:GetAttribute("EclipseSkinSource") == sourceKey and glove:GetAttribute("SkinApplied") == gloveSkin then return end
+        _restoreGloveSurfaceOnly(glove, side)
+        _cacheSkinTarget(glove)
+        for _, old in ipairs(glove:GetChildren()) do
+            if old:IsA("SurfaceAppearance") then old:Destroy() end
         end
-        -- Fallback: wearFol com SA solto (sem name match)
-        if target:IsA("BasePart") then
-            pcall(function() target:SetAttribute("EclipseSkinSource", gloveType.."/"..gloveSkin) end)
-            for _, sa in ipairs(fn:GetChildren()) do
-                if sa:IsA("SurfaceAppearance") and not target:FindFirstChildOfClass("SurfaceAppearance") then
-                    local c = sa:Clone(); c.Parent = target
-                end
+        if #directSurfaceApps > 0 then
+            for _, sa in ipairs(directSurfaceApps) do
+                local c = sa:Clone(); c.Name = "SurfaceAppearance"
+                pcall(function()
+                    c:SetAttribute("EclipseSkinSurface", true)
+                    c:SetAttribute("EclipseSurfaceSource", sourceKey)
+                end)
+                c.Parent = glove
             end
+            glove:SetAttribute("EclipseSkinSource", sourceKey)
+            glove:SetAttribute("SkinApplied", gloveSkin)
+            return
         end
-    end
+        local sideSource = gsr:FindFirstChild(side)
+        if sideSource then
+            _applySkinSourceToPart(glove, sideSource)
+            glove:SetAttribute("SkinApplied", gloveSkin)
+        end
+    end)
     return true
 end
+
 
 function _applySelectedGloveSkin()
     if EX_LIMITED then return end
     if not SkinsFolder or not Config.Skins.SkinChangerEnabled or not IsAlive() then return end
-    local activeType, activeSkin
+    local activeType, activeSkin = nil, nil
     for gt in pairs(GLOVES) do
         local s = Config.Skins.SelectedSkins[gt]
         if s and s ~= "" and s ~= "Vanilla" and s ~= "Default" and s ~= "None" then
@@ -5873,8 +5976,10 @@ function _applySelectedGloveSkin()
     pcall(_applyGloveSkinCore, activeType, activeSkin)
 end
 
--- FollowHub-style: itera SurfaceAppearance da Factory New e para cada um
--- encontra recursivamente a BasePart de mesmo nome. Aplica clone.
+
+-- Weapon skin application (old-source style): itera BaseParts do modelo e
+-- para cada part com nome batendo em Factory New, aplica via
+-- _applySkinSourceToPart (que faz SurfaceAppearance clone + cache).
 function _applyWeaponSkinCore(model, skin)
     if not (model and model:IsA("Model") and SkinsFolder) then return end
     local own = model.Name
@@ -5890,38 +5995,35 @@ function _applyWeaponSkinCore(model, skin)
     if GLOVES[ewn] or not canApply then return end
     local sel = skin or Config.Skins.SelectedSkins[ewn]
     if not sel or sel == "Vanilla" or sel == "Default" or sel == "None" then return end
-
-    local cur = model:GetAttribute("BankrollSkin")
-    if cur == sel then return end
+    if model:GetAttribute("BankrollSkin") == sel then return end
 
     local wsf = SkinsFolder:FindFirstChild(ewn); if not wsf then return end
     local sf  = wsf:FindFirstChild(sel);         if not sf  then return end
     local cf  = sf:FindFirstChild("Camera") or sf
-    local fn  = cf:FindFirstChild("Factory New")
-        or cf:FindFirstChild("Minimal Wear")
-        or cf:FindFirstChild("Field-Tested")
-        or cf:FindFirstChild("Well-Worn")
-        or cf:FindFirstChild("Battle-Scarred")
-        or cf
-    if not fn then return end
+    local src = cf:FindFirstChild("Factory New")
+             or cf:FindFirstChild("Minimal Wear")
+             or cf:FindFirstChild("Field-Tested")
+             or cf:FindFirstChild("Well-Worn")
+             or cf:FindFirstChild("Battle-Scarred")
+    if not src then return end
 
-
-    for _, sa in pairs(fn:GetChildren()) do
-        if sa:IsA("SurfaceAppearance") then
-            local pt = model:FindFirstChild(sa.Name, true)
-            if pt and (pt:IsA("BasePart") or pt:IsA("MeshPart")) then
-                pcall(_saveOriginalSA, pt)
-                for _, old in pairs(pt:GetChildren()) do
-                    if old:IsA("SurfaceAppearance") then old:Destroy() end
-                end
-                sa:Clone().Parent = pt
+    local roots = {}
+    for _, ch in ipairs(model:GetChildren()) do
+        if ch.Name == "Weapon" or ch.Name:find("Weapon") then
+            table.insert(roots, ch)
+        end
+    end
+    if #roots == 0 then table.insert(roots, model) end
+    for _, wf in ipairs(roots) do
+        for _, p in ipairs(wf:GetDescendants()) do
+            if p:IsA("BasePart") then
+                local ns = src:FindFirstChild(p.Name)
+                if ns then _applySkinSourceToPart(p, ns) end
             end
         end
     end
-
-    model:SetAttribute("BankrollSkin", sel)
-    model:SetAttribute("TriplewareSkin", tostring(ewn)..":"..tostring(sel))
     model:SetAttribute("SkinApplied", sel)
+    model:SetAttribute("BankrollSkin", sel)
 end
 
 function applyWeaponSkin(model, forcedSkin)
@@ -5952,9 +6054,14 @@ function _TW_ApplyAllCameraSkins()
                 if cam then
                     for _, obj in ipairs(cam:GetChildren()) do
                         if obj:IsA("Model") then
-                            local sn = Config.Skins.SelectedSkins[obj.Name]
-                            if sn and sn ~= "" and sn ~= "Vanilla" and sn ~= "Default" and sn ~= "None" then
-                                pcall(applyWeaponSkin, obj, sn)
+                            local nm = obj.Name
+                            if nm == "CT Knife" or nm == "T Knife" or nm == "Knife" then
+                                pcall(_applyWeaponSkinCore, obj, nil)
+                            else
+                                local sn = Config.Skins.SelectedSkins[nm]
+                                if sn and sn ~= "" and sn ~= "Vanilla" and sn ~= "Default" and sn ~= "None" then
+                                    pcall(applyWeaponSkin, obj, sn)
+                                end
                             end
                         end
                     end
@@ -7934,25 +8041,12 @@ function _hudKnifeHardCycle()
     end
 end
 
+
 function CleanupScript()
     scriptRunning = false
     sendWebhook("unloaded", "Script unloaded")
     SkinSystem.scriptRunning=false
     pcall(removeViewmodel)
-    pcall(function() if _G.EclipseTPDisable then _G.EclipseTPDisable() end end)
-    pcall(function() if _G.EclipseWHClear then _G.EclipseWHClear() end end)
-    pcall(function()
-        Config.Misc.WeaponHighlight = false
-        for _, gui in ipairs({ game:GetService("CoreGui"), gethui and gethui() or nil }) do
-            if gui then
-                for _, ch in ipairs(gui:GetChildren()) do
-                    if ch.Name == "EclipseWH" and (ch:IsA("Highlight") or ch:IsA("PointLight")) then
-                        pcall(function() ch:Destroy() end)
-                    end
-                end
-            end
-        end
-    end)
     pcall(_clearSkinChangerRuntime)
     pcall(_clearGloveSkinRuntime)
     pcall(_purgeEclipseSkinMarks)
@@ -7998,7 +8092,6 @@ function CleanupScript()
                     end
                 end
             end)
-            -- restore any originals we still have cached (fix white weapons)
             pcall(function()
                 for part in pairs(_EclipseOrigSA) do pcall(_restoreOriginalSA, part) end
             end)
@@ -8277,7 +8370,7 @@ end)
 
 task.spawn(function()
     while scriptRunning do
-        task.wait(1.2)
+        task.wait(0.35)
         if Config.Skins.SkinChangerEnabled and IsAlive() then
             pcall(_applySelectedGloveSkin)
             pcall(_TW_ApplyAllCameraSkins)
@@ -8288,11 +8381,40 @@ end)
 task.spawn(function()
     while scriptRunning do
         local living = IsAlive()
-        local ck = Camera:FindFirstChild("T Knife") or Camera:FindFirstChild("CT Knife")
-        if SkinSystem.scriptRunning and living and ck and not SkinSystem.spawned then spawnViewmodel(ck)
+        local ck = _findCameraBaseKnife()
+        if SkinSystem.spawned then
+            local vm = SkinSystem.vm
+            local staleVm = (not vm) or (not vm.Parent)
+            local wrongKnife = vm and vm.Parent and vm.Name ~= Config.Skins.SelectedKnife
+            local currentKey = Config.Skins.SkinChangerEnabled and _EclipseCurrentSkinRealtimeKey() or nil
+            if currentKey and not SkinSystem._lastRealtimeKey then SkinSystem._lastRealtimeKey = currentKey end
+            local changedSkinState = currentKey and SkinSystem._lastRealtimeKey and currentKey ~= SkinSystem._lastRealtimeKey
+            if staleVm then
+                SkinSystem.spawned = false
+                SkinSystem.vm = nil
+            elseif (wrongKnife or changedSkinState) and living then
+                pcall(_EclipseForceKnifeRealtime)
+            end
+        end
+        ck = _findCameraBaseKnife()
+        if SkinSystem.scriptRunning and living and ck and not SkinSystem.spawned then
+            spawnViewmodel(ck)
+            if SkinSystem.spawned then
+                pcall(_TW_ApplyAllCameraSkinsNow or _TW_ApplyAllCameraSkins)
+                pcall(_applySelectedGloveSkin)
+                SkinSystem._lastRealtimeKey = _EclipseCurrentSkinRealtimeKey()
+            end
         elseif (not SkinSystem.scriptRunning or not ck or not living) and SkinSystem.spawned then removeViewmodel() end
-        task.wait(0.1)
+        task.wait(0.08)
     end
+end)
+
+pcall(function()
+    LocalPlayer.CharacterRemoving:Connect(function()
+        pcall(removeViewmodel)
+        SkinSystem.spawned = false
+        SkinSystem.vm = nil
+    end)
 end)
 
 connectSignal(Camera.ChildAdded:Connect(function(obj)
@@ -8312,7 +8434,6 @@ connectSignal(Camera.DescendantAdded:Connect(function(d)
     if not (Config.Skins.SkinChangerEnabled and IsAlive()) then return end
     if d:IsA("BasePart") then
         pcall(_TW_ApplyAllCameraSkins)
-        -- glove parts often attach late when swapping to a knife; reapply gloves.
         if d.Name == "Glove" or (d.Parent and (d.Parent.Name == "Left Arm" or d.Parent.Name == "Right Arm")) then
             task.spawn(function()
                 for i=1,4 do task.wait(0.08); pcall(_applySelectedGloveSkin) end
@@ -8321,9 +8442,7 @@ connectSignal(Camera.DescendantAdded:Connect(function(d)
     end
 end))
 
--- Persistent glove watchdog: garante que ao pegar uma faca (ou qualquer
--- swap de viewmodel que reanexa Glove), a skin selecionada volte a ser
--- aplicada mesmo se ChildAdded/DescendantAdded escaparem por timing.
+-- Persistent glove watchdog for knife-swap edge cases.
 task.spawn(function()
     while true do
         task.wait(0.4)
@@ -8356,7 +8475,6 @@ task.spawn(function()
         end
     end
 end)
-
 
 
 ;(function() 
@@ -8444,16 +8562,6 @@ AimGB:AddToggle("Pen_CH_Toggle", { Text="PENETRATION CROSSHAIR", Default=false,
     :AddColorPicker("Pen_CH_NoCol", { Default=Config.Crosshair.PenetrationNoColor, Title="Penetration NO color",
         Callback=function(c) Config.Crosshair.PenetrationNoColor=c end })
 
--- SILENT AIM — MB1-gated single-shot on closest visible enemy head.
-Config.Aimbot.Silent   = false
-Config.Misc.SilentAim  = false
-AimGB:AddToggle("SilentAim_Toggle", { Text="SILENT AIM", Default=false,
-    Callback=function(v) Config.Misc.SilentAim = v; Config.Aimbot.Silent = v end })
-    :AddKeyPicker("SilentAim_Key", { Default="MB1", SyncToggleState=false, Mode="Hold", Text="Silent Aim" })
-
-
-
-
 
 
 TrigGB = Tabs.Aim:AddLeftGroupbox("TRIGGER BOT")
@@ -8503,19 +8611,6 @@ EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=f
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
 EspGB:AddSlider("ESP_ChamsIntensity", { Text="INTENSITY", Default=1.0, Min=0.2, Max=3.0, Rounding=2, Compact=true,
     Callback=function(v) Config.ESP.ChamsIntensity = v end })
--- ESP VISIBLE — cor separada para inimigos visíveis vs. bloqueados por parede
-EspGB:AddToggle("ESP_Visible", { Text="ESP VISIBLE", Default=false,
-    Callback=function(v) Config.ESP.VisibleCheck = v end })
-    :AddColorPicker("ESP_VisCol",   { Default=Config.ESP.VisibleChamsColor,   Title="Visible color",   Callback=function(c) Config.ESP.VisibleChamsColor=c; Config.ESP.VisibleBoxColor=c end })
-    :AddColorPicker("ESP_InvisCol", { Default=Config.ESP.InvisibleChamsColor, Title="Invisible color", Callback=function(c) Config.ESP.InvisibleChamsColor=c; Config.ESP.InvisibleBoxColor=c end })
-Config.Misc.WeaponHighlightIntensity = Config.Misc.WeaponHighlightIntensity or 1.0
-EspGB:AddToggle("ESP_WeaponChams", { Text="WEAPON CHAMS", Default=false,
-    Callback=function(v) Config.Misc.WeaponHighlight = v end })
-    :AddColorPicker("ESP_WeaponChamsCol", { Default=Config.Misc.WeaponHighlightColor or Color3.fromRGB(0,170,255),
-        Title="Weapon Chams color",
-        Callback=function(c) Config.Misc.WeaponHighlightColor = c end })
-EspGB:AddSlider("ESP_WeaponChamsIntensity", { Text="INTENSITY", Default=1.0, Min=0.2, Max=3.0, Rounding=2, Compact=true,
-    Callback=function(v) Config.Misc.WeaponHighlightIntensity = v end })
 
 Config.ESP.Footstep = Config.ESP.Footstep or false
 Config.ESP.FootstepColor = Config.ESP.FootstepColor or Color3.fromRGB(150, 95, 255)
@@ -8560,13 +8655,16 @@ SafeAddDropdown(PVGB, "PV_KillEffectType", {
 })
 PVGB:AddToggle("PV_KillNameAnim", { Text="KILL NAME ANIM", Default=false,
     Callback=function(v) Config.Visuals.KillNameAnim=v end })
+SafeAddDropdown(PVGB, "PV_KillNameAnimStyle", {
+    Text="ANIM STYLE", Values={"Rainbow","Reveal","Glitch","Wave","Particles"},
+    Default=Config.Visuals.KillNameAnimStyle or "Rainbow",
+    Callback=function(v) Config.Visuals.KillNameAnimStyle=v end,
+})
 pcall(function()
     PVGB:AddInput("PV_KillNameText", { Text="ANIM TEXT", Default=Config.Visuals.KillNameText, Placeholder="ECLIPSE",
         Callback=function(v) if type(v)=="string" and v~="" then Config.Visuals.KillNameText=v end end })
 end)
-
--- (WEAPON CHAMS moved into ESP groupbox above; no separate WEAPON groupbox.)
-
+-- KILL SOUND removido.
 
 
 
@@ -8584,9 +8682,7 @@ ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=fu
 
 Config.Extras = Config.Extras or {}
 Config.Extras.BulletTracer = false
-Config.Visuals.BulletTracer = false
 function _drawTracer() end
--- BULLET TRACER removed per user request.
 
 
 
@@ -8731,8 +8827,9 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
             pcall(_clearSkinChangerRuntime)
             pcall(_clearGloveSkinRuntime)
             pcall(_purgeEclipseSkinMarks)
-            pcall(_restoreHUDKnife)
             pcall(_nameOverlayRestoreAll)
+            pcall(_purgeAllHUDOverlays)
+            pcall(_restoreHUDKnife)
             pcall(_restoreKnifeModuleOverride)
             Config.Skins.HUDIconOverrideConfirmed = false
             Config.Skins.HUDIconConfirmedKey = nil
@@ -8740,11 +8837,16 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
             pcall(function() if Toggles.Knife_Toggle then Toggles.Knife_Toggle:SetValue(false) end end)
             -- brute-force delayed sweeps so novos viewmodels que spawnam depois
             -- do disable ainda sao limpos (glove + weapon skins + eclipse attached)
-            for _, delayT in ipairs({0.1, 0.35, 0.8, 1.6, 2.8, 4.0}) do
+            for _, delayT in ipairs({0.05, 0.15, 0.35, 0.6, 1.0, 1.6, 2.4, 3.5, 5.0}) do
                 task.delay(delayT, function()
                     if Config.Skins.SkinChangerEnabled then return end
                     pcall(_clearSkinChangerRuntime)
                     pcall(_clearGloveSkinRuntime)
+                    pcall(_purgeEclipseSkinMarks)
+                    pcall(_nameOverlayRestoreAll)
+                    pcall(_purgeAllHUDOverlays)
+                    pcall(_restoreHUDKnife)
+                    pcall(_purgeAllHUDOverlays)
                     pcall(function()
                         for _, obj in ipairs(Camera:GetChildren()) do
                             for _, ch in ipairs(obj:GetDescendants()) do
@@ -8755,6 +8857,9 @@ SkinGB:AddToggle("Skin_Toggle",  { Text="ENABLE SKIN CHANGER", Default=false,
                                 end
                             end
                         end
+                    end)
+                    pcall(function()
+                        for part in pairs(_EclipseOrigSA) do pcall(_restoreOriginalSA, part) end
                     end)
                 end)
             end
@@ -8798,17 +8903,19 @@ SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
     Values={"Butterfly Knife","Karambit","M9 Bayonet","Flip Knife","Gut Knife","Skeleton Knife","Stiletto Knife"},
     Default=Config.Skins.SelectedKnife,
     Callback=function(v)
-        
         if not Config.Skins.SkinChangerEnabled and not _EclipseConfigLoading then
             pcall(function() Options.Knife_Select:SetValue(Config.Skins.SelectedKnife) end)
             return
         end
-        Config.Skins.SelectedKnife=v
-        Config.Skins.HUDIconOverrideConfirmed = false
-        Config.Skins.HUDIconConfirmedKey = nil
-        if SkinSystem.spawned then removeViewmodel() end
-        if IsAlive() then pcall(_applyHUDKnife, true) end
+        -- Bankroll-style: selection only takes effect on next respawn/round.
+        -- Do NOT clear HUDIconOverrideConfirmed here — HUD icon/name should
+        -- stay locked on whatever was already confirmed until the round ends,
+        -- so switching selection mid-round never flickers the HUD.
+        Config.Skins.SelectedKnife = v
     end })
+pcall(function() SkinGB:AddLabel("Applies on the next round", true) end)
+
+
 
 task.defer(_syncKnifeLock)
 
@@ -9215,10 +9322,6 @@ function CreateSkinDropdown(weapon, section)
             end
             if v == "Vanilla" or v == "None" then Config.Skins.SelectedSkins[weapon] = nil else Config.Skins.SelectedSkins[weapon] = v end
 
-            -- Glove mutex: only ONE glove type can have a skin selected at a time.
-            -- Selecting a new glove clears every other glove-type + resets their
-            -- dropdowns back to Vanilla so the runtime doesn't try to apply two
-            -- glove templates on top of each other (visual bug reported).
             if GLOVES[weapon] and v ~= "Vanilla" and v ~= "None" then
                 for gt in pairs(GLOVES) do
                     if gt ~= weapon and Config.Skins.SelectedSkins[gt] then
@@ -9309,18 +9412,7 @@ MoveGB:AddToggle("Strafe_Toggle",{ Text="AUTO STRAFER", Default=false, Callback=
 Config.Movement.StrafeSpeed = 1.5
 MoveGB:AddToggle("Jumpbug_Toggle", { Text="JUMPBUG", Default=false, Callback=function(v) Config.Movement.Jumpbug=v end })
 MoveGB:AddToggle("Edgebug_Toggle", { Text="EDGEBUG", Default=false, Callback=function(v) Config.Movement.Edgebug=v end })
-MoveGB:AddToggle("NoFallDmg_Toggle", { Text="NO FALL DAMAGE", Default=false, Callback=function(v)
-    Config.Movement.NoFallDamage=v; pcall(_installCombatNamecallHooks)
-end })
-MoveGB:AddToggle("TP_Toggle", { Text="THIRD PERSON", Default=false, Callback=function(v)
-    Config.Misc.ThirdPerson = v
-    if v then
-        pcall(function() if _G.EclipseTPEnable then _G.EclipseTPEnable() end end)
-    else
-        pcall(function() if _G.EclipseTPDisable then _G.EclipseTPDisable() end end)
-    end
-end })
-    :AddKeyPicker("TP_Key", { Default="B", SyncToggleState=true, Mode="Toggle", Text="Third Person" })
+-- FREEZE ON BUY PERIOD removido (agora embutido nos cheats).
 
 WorldGB = Tabs.World:AddLeftGroupbox("ENVIRONMENT")
 SafeAddDropdown(WorldGB, "Weather_Select", { Text="WEATHER", Values={"None","Rain","Snow","Aurora"},
@@ -9349,9 +9441,9 @@ if not Config.WorldColor.Color then Config.WorldColor.Color = Color3.fromRGB(120
 if type(Config.WorldColor.Intensity) ~= "number" then Config.WorldColor.Intensity = 0.4 end
 
 -- Intensity is a linear multiplier: 0 = original scene (no tint, no changes),
--- higher = progressively stronger tint + contrast + saturation punch. The tint
--- color is blended from white -> user color by min(intensity,1), so intensity=0
--- guarantees the map looks exactly like vanilla.
+-- higher = progressively stronger tint + contrast + saturation punch. Tint is
+-- blended from white -> user color by min(intensity,1), so intensity=0 leaves
+-- the map exactly like vanilla.
 function _applyWorldColorState()
     local e = _ensureWCEffect()
     local i = tonumber(Config.WorldColor.Intensity) or 0
@@ -9398,278 +9490,9 @@ end)()
 MiscGB = Tabs.Misc:AddLeftGroupbox("MISC")
 
 -- ============================================================
--- AUTOSKILL (Misc) — created here so it shares MiscGB's thread/identity
--- (creating groupboxes later in the file was hitting "lacking capability
--- Plugin" on some executors when the UI thread got downgraded).
+-- AUTOSKILL removed in this build (eclipse-sem-autoskill).
 -- ============================================================
-do
-    local ASGB = Tabs.Misc:AddLeftGroupbox("AUTOSKILL")
-    if EX_BLOCK_SILENT then
-        ASGB:AddLabel("BLOCKED ON " .. ((EX_NAME or "") ~= "" and EX_NAME:upper() or "THIS EXECUTOR"))
-        ASGB:AddLabel("Use Medium, Potassium, Wave or Swift.")
-        Config.Misc.AutoSkill = false
-    else
-        ASGB:AddToggle("AS_Enable", { Text = "AUTOSKILL", Default = false,
-            Callback = function(v) Config.Misc.AutoSkill = (v and not EX_BLOCK_SILENT) end })
-            :AddKeyPicker("AS_Key", { Default = "K", SyncToggleState = true, Mode = "Toggle", Text = "AutoSkill" })
-        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYL SPEED", Default = 25, Min = 1, Max = 60, Rounding = 0, Suffix = "",
-            Callback = function(v) Config.Misc.AutoSkillSpeed = v end })
-        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYL SMOOTH", Default = 0.05, Min = 0, Max = 1, Rounding = 2, Suffix = "",
-            Callback = function(v) Config.Misc.AutoSkillSmooth = v end })
-        Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 600
-        Config.Misc.AutoSkillPart     = Config.Misc.AutoSkillPart or "Head"
-        ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 600, Rounding = 0, Suffix = "",
-            Callback = function(v) Config.Misc.AutoSkillDistance = v end })
-        -- AutoSkill segue o TEAM CHECK global (Config.TeamCheck); sem toggle próprio.
-        -- SILENT AIM lives in Aim tab now; keep config keys here for shared state.
-        Config.Misc.SilentAim         = false
-        Config.Misc.SilentAimTrigger  = false -- deprecated, kept for compat
-        Config.Misc.AutoSkillChangeWeapon = false
-    end
-    Config.Misc.AutoSkillRespectBuy = true
-    Config.Misc.AutoSkillRefill     = true
-end
-
--- ============================================================
--- THIRD PERSON — source-style (RenderStepped drives cam.CFrame,
--- hides viewmodel weapons/knives/gloves/arms via LocalTransparencyModifier).
--- Toggle lives in Movement groupbox (no sliders). Restores on disable/unload.
--- ============================================================
--- Do NOT reset Config.Misc.ThirdPerson here — autoconfig restores the saved
--- toggle state on load; overwriting to false would clobber the user's setting.
-do
-    local RunS = game:GetService("RunService")
-    local UIS  = game:GetService("UserInputService")
-    local _tpConn, _tpOldMax, _tpOldMin, _tpOldMode = nil, nil, nil, nil
-
-    local function _showLocalChar()
-        local ch = LocalPlayer.Character; if not ch then return end
-        for _, p in ipairs(ch:GetDescendants()) do
-            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-                pcall(function() p.LocalTransparencyModifier = 0 end)
-            end
-        end
-    end
-
-    local function _restoreVM()
-        local cam = workspace.CurrentCamera; if not cam then return end
-        for _, v in ipairs(cam:GetChildren()) do
-            if v:IsA("Model") or v:IsA("Folder") then
-                for _, p in ipairs(v:GetDescendants()) do
-                    if p:IsA("BasePart") or p:IsA("Decal") or p:IsA("Texture") then
-                        pcall(function() p.LocalTransparencyModifier = 0 end)
-                    end
-                end
-            end
-        end
-    end
-
-    local function _hideVM()
-        local cam = workspace.CurrentCamera; if not cam then return end
-        for _, v in ipairs(cam:GetChildren()) do
-            if v:IsA("Model") or v:IsA("Folder") then
-                for _, p in ipairs(v:GetDescendants()) do
-                    if p:IsA("BasePart") or p:IsA("Decal") or p:IsA("Texture") then
-                        p.LocalTransparencyModifier = 1
-                    end
-                end
-            end
-        end
-    end
-
-    local function _tpEnable()
-        _tpOldMax  = _tpOldMax  or LocalPlayer.CameraMaxZoomDistance
-        _tpOldMin  = _tpOldMin  or LocalPlayer.CameraMinZoomDistance
-        _tpOldMode = _tpOldMode or LocalPlayer.CameraMode
-        pcall(function()
-            LocalPlayer.CameraMode = Enum.CameraMode.Classic
-            LocalPlayer.CameraMaxZoomDistance = 40
-            LocalPlayer.CameraMinZoomDistance = 0.5
-        end)
-        if _tpConn then pcall(function() _tpConn:Disconnect() end) end
-        -- Third Person (Mur4Scripts source method): override cam.CFrame each frame
-        -- following the HumanoidRootPart with a fixed offset, and hide the
-        -- viewmodel knife/weapon inside the camera.
-        _tpConn = RunS.RenderStepped:Connect(function()
-            if not Config.Misc.ThirdPerson then return end
-            local ch  = LocalPlayer.Character
-            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            if not hrp then return end
-            local cam = workspace.CurrentCamera; if not cam then return end
-            game:GetService("UserInputService").MouseBehavior = Enum.MouseBehavior.LockCenter
-            cam.CFrame = CFrame.new(hrp.Position + (cam.CFrame.LookVector * -10) + Vector3.new(0, 3, 0), hrp.Position)
-            for _, p in ipairs(ch:GetDescendants()) do
-                if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-                    pcall(function() p.LocalTransparencyModifier = 0 end)
-                end
-            end
-            _hideVM()
-        end)
-    end
-
-    local function _tpDisable()
-        Config.Misc.ThirdPerson = false
-        if _tpConn then pcall(function() _tpConn:Disconnect() end); _tpConn = nil end
-        pcall(function()
-            LocalPlayer.CameraMaxZoomDistance = _tpOldMax  or 0.5
-            LocalPlayer.CameraMinZoomDistance = _tpOldMin  or 0.5
-            LocalPlayer.CameraMode            = _tpOldMode or Enum.CameraMode.Classic
-        end)
-        _tpOldMax, _tpOldMin, _tpOldMode = nil, nil, nil
-        pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
-        pcall(_restoreVM)
-        pcall(_showLocalChar)
-        task.delay(0.1, function() pcall(_restoreVM); pcall(_showLocalChar) end)
-        task.delay(0.4, function() pcall(_restoreVM); pcall(_showLocalChar) end)
-    end
-
-
-    _G.EclipseTPEnable  = _tpEnable
-    _G.EclipseTPDisable = _tpDisable
-
-    LocalPlayer.CharacterAdded:Connect(function()
-        if Config.Misc.ThirdPerson then task.wait(0.3); pcall(_tpEnable) end
-    end)
-end
-
-
-
-
--- ============================================================
--- WEAPON HIGHLIGHT — premium glow on viewmodel weapon
--- ============================================================
-do
-    local RunS = game:GetService("RunService")
-    local _wh, _whRim, _whWeapon = nil, nil, nil
-    local function _clear()
-        if _wh    then pcall(function() _wh:Destroy()    end); _wh = nil end
-        if _whRim then pcall(function() _whRim:Destroy() end); _whRim = nil end
-        _whWeapon = nil
-    end
-    _G.EclipseWHClear = _clear
-
-    -- Reset state on respawn so the WH re-applies on the new viewmodel.
-    if LocalPlayer then
-        LocalPlayer.CharacterAdded:Connect(function()
-            _clear()
-            task.wait(0.5)
-            _whWeapon = nil
-        end)
-    end
-
-    local function _findVMWeapon()
-        -- Highlight active viewmodel weapon INCLUDING custom knife viewmodel.
-        if SkinSystem and SkinSystem.spawned and SkinSystem.vm and SkinSystem.vm.Parent then
-            return SkinSystem.vm
-        end
-        local cam = workspace.CurrentCamera; if not cam then return nil end
-        local vm = cam:FindFirstChild("Viewmodel") or cam:FindFirstChild("ViewModel")
-            or cam:FindFirstChildWhichIsA("Model")
-        if not vm then return nil end
-        for _, ch in ipairs(vm:GetChildren()) do
-            local n = ch.Name:lower()
-            if ch:IsA("Model") and n ~= "arms" and n ~= "gloves" and not n:find("hand") then
-                return ch
-            end
-        end
-        return vm
-    end
-
-    local function _ensureHighlight(model, color, inten)
-        if not model or not model.Parent then return end
-        if _wh and _wh.Parent ~= model then pcall(function() _wh:Destroy() end); _wh = nil end
-        if _whRim and _whRim.Parent ~= model then pcall(function() _whRim:Destroy() end); _whRim = nil end
-        -- Rim externo (Occluded) — brilho suave estilo bloom/gaussian atrás.
-        if not _whRim then
-            _whRim = Instance.new("Highlight")
-            _whRim.Name = "EclipseWHRim"
-            _whRim.Adornee = model
-            _whRim.DepthMode = Enum.HighlightDepthMode.Occluded
-            _whRim.Parent = model
-        end
-        -- Outline fino visível (AlwaysOnTop) — sem fill sólido, sem blob roxo.
-        if not _wh then
-            _wh = Instance.new("Highlight")
-            _wh.Name = "EclipseWH"
-            _wh.Adornee = model
-            _wh.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            _wh.Parent = model
-        end
-        local a = math.clamp((inten or 1), 0.2, 2.0)
-        pcall(function()
-            -- AlwaysOnTop layer: fill cobrindo a arma inteira + outline forte.
-            -- FillTransparency escalona com intensity para dar sensação de bloom/glow.
-            _wh.FillColor           = color
-            _wh.OutlineColor        = color
-            _wh.FillTransparency    = math.clamp(0.75 - a * 0.30, 0.20, 0.85)
-            _wh.OutlineTransparency = math.clamp(0.40 - a * 0.30, 0.00, 0.50)
-            -- Occluded rim: halo suave atrás/em volta = depth-of-field glow.
-            _whRim.FillColor           = color
-            _whRim.OutlineColor        = color
-            _whRim.FillTransparency    = math.clamp(0.85 - a * 0.20, 0.55, 0.90)
-            _whRim.OutlineTransparency = math.clamp(0.60 - a * 0.35, 0.10, 0.80)
-        end)
-    end
-
-
-
-    RunS.Heartbeat:Connect(function()
-        if not scriptRunning then return end
-        if not Config.Misc.WeaponHighlight then
-            if _wh or _whRim then _clear() end
-            return
-        end
-        local w = _findVMWeapon()
-        if not w or not w.Parent then _clear(); return end
-        local inten = tonumber(Config.Misc.WeaponHighlightIntensity) or 1.0
-        if inten < 0.2 then inten = 0.2 end
-        local col = Config.Misc.WeaponHighlightColor or Color3.fromRGB(0, 170, 255)
-        if _whWeapon ~= w then _whWeapon = w end
-        _ensureHighlight(w, col, inten)
-    end)
-end
-
-
-
-
--- ============================================================
--- AUTOBUY (Misc) — fires Inventory buy remotes every buy period
--- ============================================================
-do
-    local ABGB = Tabs.Misc:AddRightGroupbox("AUTO SHOP")
-    local AUTOBUY_ITEMS = {
-        -- Equipment
-        "Kevlar","Kevlar + Helmet","Zeus x27","Defuse Kit",
-        -- Pistols
-        "USP-S","Glock-18","R8 Revolver","P250","Five-SeveN","Tec-9",
-        "CZ75-Auto","Desert Eagle","Dual Berettas","P2000",
-        -- SMGs
-        "MP9","MAC-10","MP7","UMP-45","P90","PP-Bizon","MP5-SD",
-        -- Heavy
-        "Nova","Sawed-Off","XM1014","MAG-7","M249","Negev",
-        -- Rifles
-        "FAMAS","Galil AR","M4A4","M4A1-S","AK-47","AWP","SSG 08","AUG","SG 553","SCAR-20","G3SG1",
-        -- Grenades
-        "Flashbang","Smoke Grenade","HE Grenade","Incendiary Grenade","Molotov","Decoy Grenade",
-    }
-    table.sort(AUTOBUY_ITEMS)
-    -- Explicit off on load to avoid stale autosave firing purchases
-    Config.Misc.AutoBuy = false
-    ABGB:AddToggle("AB_Enable", { Text = "AUTO SHOP", Default = false,
-        Callback = function(v) Config.Misc.AutoBuy = v and true or false end })
-    SafeAddDropdown(ABGB, "AB_Items", {
-        Text = "ITEMS", Values = AUTOBUY_ITEMS, Multi = true,
-        Default = Config.Misc.AutoBuyItems or {},
-        Callback = function(v)
-            local out = {}
-            if type(v) == "table" then
-                for k, on in pairs(v) do if on then table.insert(out, k) end end
-            end
-            Config.Misc.AutoBuyItems = out
-        end,
-    })
-end
-
+Config.Misc.AutoSkill = false
 
 
 Config.Misc.Explorer1 = false
@@ -9852,6 +9675,42 @@ MiscGB:AddToggle("AntiSmoke_Toggle",   { Text="ANTI SMOKE",    Default=false, Ca
         end
     end
 end })
+
+MiscGB:AddToggle("MuteGameSounds_Toggle", { Text="MUTE GAME SOUNDS", Default=false, Callback=function(v)
+    Config.Misc.MuteGameSounds = v
+end })
+do
+    local MUTE_KEEP = { "weapon","shoot","fire","gun","rifle","pistol","reload","bullet","silencer","suppress" }
+    task.spawn(function()
+        while true do
+            task.wait(0.5)
+            if Config.GlobalEnable and Config.Misc and Config.Misc.MuteGameSounds then
+                for _, s in ipairs(Workspace:GetDescendants()) do
+                    if s:IsA("Sound") then
+                        local n = string.lower(s.Name or "")
+                        local id = string.lower(tostring(s.SoundId or ""))
+                        local keep = false
+                        for _, kw in ipairs(MUTE_KEEP) do
+                            if n:find(kw, 1, true) or id:find(kw, 1, true) then keep=true; break end
+                        end
+                        if not keep then
+                            if s:GetAttribute("EclipseOrigVol") == nil then s:SetAttribute("EclipseOrigVol", s.Volume) end
+                            pcall(function() s.Volume = 0 end)
+                        end
+                    end
+                end
+            else
+                for _, s in ipairs(Workspace:GetDescendants()) do
+                    if s:IsA("Sound") and s:GetAttribute("EclipseOrigVol") ~= nil then
+                        pcall(function() s.Volume = s:GetAttribute("EclipseOrigVol"); s:SetAttribute("EclipseOrigVol", nil) end)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+
 
 function SchemeColor(name, fallback)
     local ok, v = pcall(function() return Library.Scheme and Library.Scheme[name] end)
@@ -10641,11 +10500,10 @@ end)()
             ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 80, 255)),
         }
     end)
-
     local list = Instance.new("Frame", EX.KBFrame)
     list.BackgroundTransparency = 1
-    list.Position = UDim2.fromOffset(8, 22)
-    list.Size = UDim2.new(1, -16, 1, -28); list.ZIndex = 52
+    list.Position = UDim2.fromOffset(8, 18)
+    list.Size = UDim2.new(1, -16, 1, -22); list.ZIndex = 52
     local lay = Instance.new("UIListLayout", list)
     lay.SortOrder = Enum.SortOrder.LayoutOrder; lay.Padding = UDim.new(0, 2)
     EX.KBList = list
@@ -10672,8 +10530,6 @@ end)()
                             key   = name,
                             label = tostring(opt.Text or name):gsub("_", " "),
                             state = function()
-
-                                local tname = name:gsub("_Key$", "_Toggle"):gsub("_Key$", "_Enabled")
                                 local candidates = {
                                     name:gsub("_Key$", "_Toggle"),
                                     name:gsub("_Key$", "_Enabled"),
@@ -10689,7 +10545,6 @@ end)()
                                 end
                                 return true
                             end,
-
                         })
                     end
                 end
@@ -10702,7 +10557,6 @@ end)()
         for _, r in ipairs(EX.KBRows) do pcall(function() r:Destroy() end) end
         table.clear(EX.KBRows)
         local entries = collectAllKeybinds()
-        -- Calcula largura ideal do painel a partir do label + tecla + status.
         local maxLabelW, maxKeyW = 0, 0
         for _, e in ipairs(entries) do
             local lw = #tostring(e.label) * 6
@@ -10722,9 +10576,8 @@ end)()
 
             local keyStr = string.upper(keyText(e.key))
             local capW = math.max(16, #keyStr * 7 + 6)
-            local reserve = capW + 34  -- espaço da tecla + status ON/OFF
+            local reserve = capW + 34
 
-            -- Label esquerda (reservando espaço à direita para evitar sobreposição)
             local lbl = Instance.new("TextLabel", row)
             lbl.BackgroundTransparency = 1
             lbl.Position = UDim2.fromOffset(0, 0)
@@ -10736,7 +10589,6 @@ end)()
             lbl.Text = e.label
             lbl.ZIndex = 54
 
-            -- Cap da tecla (rosa)
             local keyLbl = Instance.new("TextLabel", row)
             keyLbl.BackgroundTransparency = 1
             keyLbl.Position = UDim2.new(1, -(capW + 30), 0, 0)
@@ -10747,7 +10599,6 @@ end)()
             keyLbl.Text = keyStr
             keyLbl.ZIndex = 54
 
-            -- Status ON/OFF (roxo)
             local stLbl = Instance.new("TextLabel", row)
             stLbl.BackgroundTransparency = 1
             stLbl.Position = UDim2.new(1, -26, 0, 0)
@@ -11152,7 +11003,6 @@ end)()
         ["Kov Fire"]        = { Id="", Volume=1.6, Pitch=1.0 },
     }
     -- Resolve the "Kov Fire" preset from the game dump path
-    -- game:GetChildren()[118]:GetChildren()[14]:GetChildren()[4]:GetChildren()[13]:GetChildren()[1]
     task.spawn(function()
         local function _resolvePath(indices)
             local ok, inst = pcall(function()
@@ -11401,21 +11251,6 @@ end)()
     
 
     
-    RunService.Heartbeat:Connect(function()
-        if not (Config.Movement and Config.Movement.NoFallDamage) then return end
-        local ch = LocalPlayer.Character
-        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-        local root = ch and ch:FindFirstChild("HumanoidRootPart")
-        if not hum or not root then return end
-        if hum:GetState() == Enum.HumanoidStateType.Freefall and root.Velocity.Y < -55 then
-            local rp = RaycastParams.new(); rp.FilterType = Enum.RaycastFilterType.Exclude
-            rp.FilterDescendantsInstances = { ch }
-            local r = Workspace:Raycast(root.Position, Vector3.new(0,-8,0), rp)
-            if r and (root.Position.Y - r.Position.Y) < 6 then
-                root.Velocity = Vector3.new(root.Velocity.X, -30, root.Velocity.Z)
-            end
-        end
-    end)
 
     
 
@@ -11489,10 +11324,7 @@ end)()
         Config.Sounds.Enabled = false
         EX.restoreAllSounds()
     end })
-
     end -- EX_LIMITED gate
-
-
 
     task.delay(2, function() pcall(EX.rebuildKB) end)
 
@@ -11947,7 +11779,6 @@ end)()
         if LocalPlayer.Character then table.insert(ex, LocalPlayer.Character) end
         rp.FilterDescendantsInstances = ex
         rp.IgnoreWater = true
-        -- Check multiple body parts: any minimally visible part counts (head, torso, limbs)
         local candidates = {
             "Head","UpperTorso","LowerTorso","Torso","HumanoidRootPart",
             "LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm",
@@ -11998,7 +11829,7 @@ end)()
         if plr == LocalPlayer then return end
         if plr and IsAlly and IsAlly(plr) then return end
         if not _localIsAlive() then return end
-        -- LP-attribution gate: only fire if we damaged / lethaled this player recently.
+        -- Igual ao eclipse.lua: só aplica quando a kill/dano recente foi do LocalPlayer.
         local lethalAt = plr and (_lastLethalByLP[plr] or _lastLethalByUid[tonumber(plr.UserId)])
         local dmgAt    = plr and _lastDamagedByLP[plr]
         local ok = (lethalAt and (tick()-lethalAt) < 5.0) or (dmgAt and (tick()-dmgAt) < 1.5)
@@ -12020,50 +11851,88 @@ end)()
             local finishAt  = startedAt + DURATION
             local lpName = LocalPlayer and LocalPlayer.Name or ""
             if lpName == "" then return end
-            local seen = {}
-            local originals = {}
-            local function scanAndPatch()
-                local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-                if not pg then return end
+            local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            if not pg then return end
+            local seen, originals = {}, {}
+            local function collect()
                 for _, d in ipairs(pg:GetDescendants()) do
                     if (d:IsA("TextLabel") or d:IsA("TextButton")) and not seen[d] then
                         local txt = d.Text
                         if type(txt) == "string" and txt:find(lpName, 1, true) then
                             seen[d] = true
-                            originals[d] = { Text=txt, RichText=d.RichText, Color=d.TextColor3 }
+                            originals[d] = { Text=txt, RichText=d.RichText }
                             pcall(function() d.RichText = true end)
                         end
                     end
                 end
             end
-            scanAndPatch()
+            collect()
+            local lastScan = tick()
             local target = tostring(Config.Visuals.KillNameText or "ECLIPSE")
+            local style  = tostring(Config.Visuals.KillNameAnimStyle or "Rainbow")
             while tick() < finishAt do
-                scanAndPatch()
                 local t = tick()
-                local hue = (t * 0.6) % 1
-                local col = Color3.fromHSV(hue, 1, 1)
-                local hex = string.format("#%02X%02X%02X", math.floor(col.R*255), math.floor(col.G*255), math.floor(col.B*255))
+                if t - lastScan > 1.0 then collect(); lastScan = t end
                 local elapsed = t - startedAt
-                local revealChars = math.max(1, math.min(#target, math.floor(elapsed * (#target/1.2))))
-                local shown = target:sub(1, revealChars)
-                local pad = target:sub(revealChars+1):gsub(".", "_")
-                local rich = string.format('<b><font color="%s">%s</font></b><font color="#333333">%s</font>', hex, shown, pad)
+                local rich
+                if style == "Reveal" then
+                    local reveal = math.max(1, math.min(#target, math.floor(elapsed * (#target/1.2))))
+                    local shown  = target:sub(1, reveal)
+                    local pad    = target:sub(reveal+1):gsub(".", "_")
+                    rich = string.format('<b><font color="#ffffff">%s</font><font color="#444444">%s</font></b>', shown, pad)
+                elseif style == "Glitch" then
+                    local hex = ({"#ff00aa","#00ffee","#ffee00","#ffffff"})[((math.floor(t*10))%4)+1]
+                    local buf = {}
+                    for i=1,#target do
+                        local c = target:sub(i,i)
+                        if math.random() < 0.15 then c = string.char(math.random(33,126)) end
+                        buf[#buf+1] = c
+                    end
+                    rich = string.format('<b><font color="%s">%s</font></b>', hex, table.concat(buf))
+                elseif style == "Wave" then
+                    local buf = {}
+                    for i=1,#target do
+                        local h = ((t*0.8) + i*0.08) % 1
+                        local c = Color3.fromHSV(h, 1, 1)
+                        buf[#buf+1] = string.format('<font color="#%02X%02X%02X">%s</font>',
+                            math.floor(c.R*255), math.floor(c.G*255), math.floor(c.B*255), target:sub(i,i))
+                    end
+                    rich = "<b>"..table.concat(buf).."</b>"
+                elseif style == "Particles" then
+                    local sparks = ({"✦","✧","★","✩","·","•"})[((math.floor(t*8))%6)+1]
+                    local h = (t*0.6) % 1
+                    local c = Color3.fromHSV(h, 1, 1)
+                    local hex = string.format("#%02X%02X%02X", math.floor(c.R*255), math.floor(c.G*255), math.floor(c.B*255))
+                    rich = string.format('<b><font color="%s">%s %s %s</font></b>', hex, sparks, target, sparks)
+                else
+                    local h = (t*0.6) % 1
+                    local c = Color3.fromHSV(h, 1, 1)
+                    local hex = string.format("#%02X%02X%02X", math.floor(c.R*255), math.floor(c.G*255), math.floor(c.B*255))
+                    rich = string.format('<b><font color="%s">%s</font></b>', hex, target)
+                end
                 for d, orig in pairs(originals) do
-                    if type(d) == "userdata" and d.Parent and orig then
-                        local newText = orig.Text:gsub(lpName, rich)
-                        pcall(function() d.Text = newText end)
+                    if d.Parent and orig then
+                        pcall(function() d.Text = (orig.Text:gsub(lpName, rich)) end)
                     end
                 end
-                task.wait(0.05)
+                task.wait(0.10)
             end
             for d, orig in pairs(originals) do
-                if type(d) == "userdata" and d.Parent and orig then
+                if d.Parent and orig then
                     pcall(function() d.Text = orig.Text; d.RichText = orig.RichText end)
                 end
             end
         end)
     end
+
+    local KILL_SOUND_IDS = {
+        ["Tick"]     = "rbxassetid://421058925",
+        ["Bubble"]   = "rbxassetid://131625067",
+        ["KOV Fire"] = "rbxassetid://131961136",
+        ["Bell"]     = "rbxassetid://12222030",
+        ["Pop"]      = "rbxassetid://5852261334",
+    }
+    local function _playKillSound() end -- removido
 
 
     pcall(function()
@@ -12077,6 +11946,7 @@ end)()
                 if killerId == myId or victimId == myId then
                     task.defer(_animateLocalKillName)
                 end
+                if killerId == myId then task.defer(_playKillSound) end
                 if not _killFeedKillerIsLocal(info) then return end
                 local vplr = _killFeedVictim(info)
                 if not vplr or vplr == LocalPlayer then return end
@@ -12089,9 +11959,6 @@ end)()
         end
     end)
 
-    -- Raw fallback hook using the exact NetworkRemotes path the user provided,
-    -- in case Security.Remotes wrapper is unavailable. Fires anim when the
-    -- LocalPlayer is either the Killer or the Victim of the UIPlayerKilled event.
     pcall(function()
         local rs = game:GetService("ReplicatedStorage")
         local nr = rs:FindFirstChild("NetworkRemotes")
@@ -12100,13 +11967,14 @@ end)()
         if ev and ev.OnClientEvent then
             local conn = ev.OnClientEvent:Connect(function(info)
                 if type(info) ~= "table" then return end
-                if not Config.GlobalEnable or not Config.Visuals.KillNameAnim then return end
+                if not Config.GlobalEnable then return end
                 local myId = tostring(LocalPlayer.UserId)
                 local killerId = tostring(info.Killer or "")
                 local victimId = tostring(info.Victim or "")
-                if killerId == myId or victimId == myId then
+                if Config.Visuals.KillNameAnim and (killerId == myId or victimId == myId) then
                     task.defer(_animateLocalKillName)
                 end
+                if killerId == myId then task.defer(_playKillSound) end
             end)
             if conn then table.insert(UnloadConnections, conn) end
         end
@@ -12400,8 +12268,6 @@ task.spawn(function()
 end)
 
 
-
-
 pcall(function()
     task.defer(function()
         local function readyCount()
@@ -12422,426 +12288,44 @@ pcall(function()
     end)
 end)
 
--- AUTOSKILL groupbox UI is created earlier (right after MiscGB at line ~8592)
--- to guarantee it runs under the same thread/identity as the rest of the tab.
+-- AUTOSKILL logic removed in this build (eclipse-sem-autoskill).
 
-
+-- =====================================================================
+-- AUTO SHOP (portado do eclipse.lua) — compra por Nome + Slot do time.
+-- Mapa T/CT extraído do print da BuyMenu enviado pelo usuário.
+-- =====================================================================
 ;(function()
-    if EX_BLOCK_SILENT then return end
+    local ABGB = Tabs.Misc:AddRightGroupbox("AUTO SHOP")
 
-    ------------------------------------------------------------------
-    -- KOV-style discovery
-    -- Holder table has field "ShootWeapon" which is a table with .Send
-    -- Weapon table has "IsEquipped" AND Properties.FireRate + Properties.Rounds
-    ------------------------------------------------------------------
-    local _remoteHolder
-    local _weaponTable
+    Config.Misc = Config.Misc or {}
+    Config.Misc.AutoBuy      = Config.Misc.AutoBuy or false
+    Config.Misc.AutoBuyItems = Config.Misc.AutoBuyItems or {}
 
-    local function _findRemote()
-        if _remoteHolder and rawget(_remoteHolder, "ShootWeapon") then return _remoteHolder end
-        if type(getgc) ~= "function" then return nil end
-        for _, t in pairs(getgc(true)) do
-            if type(t) == "table" then
-                local ok, sw = pcall(rawget, t, "ShootWeapon")
-                if ok and type(sw) == "table" then
-                    local ok2, send = pcall(rawget, sw, "Send")
-                    if ok2 and type(send) == "function" then
-                        _remoteHolder = t
-                        return t
-                    end
-                end
-            end
-        end
-        return nil
-    end
+    ABGB:AddToggle("AB_Enable", {
+        Text = "AUTO SHOP", Default = false,
+        Callback = function(v) Config.Misc.AutoBuy = v end,
+    })
 
-    local function _isWeaponTable(t)
-        if type(t) ~= "table" then return false end
-        local ok, props = pcall(rawget, t, "Properties")
-        if not ok or type(props) ~= "table" then return false end
-        local okA, fr = pcall(rawget, props, "FireRate")
-        local okB, rd = pcall(rawget, props, "Rounds")
-        return okA and okB and fr ~= nil and rd ~= nil
-    end
-
-    local function _findEquippedWeapon()
-        if _weaponTable then
-            local ok, eq = pcall(rawget, _weaponTable, "IsEquipped")
-            if ok and eq and _isWeaponTable(_weaponTable) then return _weaponTable end
-        end
-        if type(getgc) ~= "function" then return nil end
-        for _, t in pairs(getgc(true)) do
-            if type(t) == "table" then
-                local ok, eq = pcall(rawget, t, "IsEquipped")
-                if ok and eq and _isWeaponTable(t) then
-                    _weaponTable = t
-                    return t
-                end
-            end
-        end
-        return nil
-    end
-
-    ------------------------------------------------------------------
-    -- Gates
-    ------------------------------------------------------------------
-    local function _isBuyPeriod()
-        local ok, res = pcall(function()
-            local gs = workspace:GetAttribute("GameState")
-            if gs and tostring(gs):lower():find("buy") then return true end
-            return false
-        end)
-        return ok and res or false
-    end
-
-    local function _alive()
-        local ch = LocalPlayer.Character
-        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-        return hum and hum.Health > 0
-    end
-
-    local function _headOf(pl)
-        local c = pl.Character; if not c then return nil end
-        local hum = c:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then return nil end
-        return c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart")
-    end
-
-    ------------------------------------------------------------------
-    -- Refill (KOV r57)
-    ------------------------------------------------------------------
-    local _refilling = false
-    local function _tryRefill(w)
-        if _refilling or not w then return end
-        local props = rawget(w, "Properties"); if not props then return end
-        local maxRounds = rawget(props, "Rounds"); if not maxRounds then return end
-        local cur = rawget(w, "Rounds") or 0
-        local cap = rawget(w, "Capacity") or 0
-        if cur < maxRounds and cap > 0 then
-            _refilling = true
-            local take = math.min(maxRounds - cur, cap)
-            pcall(function()
-                w.Rounds   = cur + take
-                w.Capacity = cap - take
-            end)
-            task.wait(0.05)
-            _refilling = false
-        end
-    end
-
-    ------------------------------------------------------------------
-    -- Melee/knife filter — AutoSkill must NOT run when a knife is equipped
-    ------------------------------------------------------------------
-    local function _isMeleeWeapon(w)
-        if type(w) ~= "table" then return true end
-        local ok, name = pcall(rawget, w, "Name")
-        local n = ok and tostring(name or ""):lower() or ""
-        if n:find("knife") or n:find("melee") or n:find("bayonet") or n:find("karambit")
-           or n:find("butterfly") or n:find("gut") or n:find("flip")
-           or n:find("stiletto") or n:find("skeleton") or n:find("huntsman") or n:find("falchion") then
-            return true
-        end
-        local ok2, props = pcall(rawget, w, "Properties")
-        if ok2 and type(props) == "table" then
-            local okT, typ = pcall(rawget, props, "Type")
-            if okT and typ and tostring(typ):lower():find("mele") then return true end
-            local okC, cat = pcall(rawget, props, "Category")
-            if okC and cat and tostring(cat):lower():find("mele") then return true end
-            local okR, rd = pcall(rawget, props, "Rounds")
-            if okR and (not rd or tonumber(rd) == nil or tonumber(rd) <= 0) then return true end
-        end
-        return false
-    end
-
-    ------------------------------------------------------------------
-    -- Blood sound — resolved from dump path, cached and cloned per shot
-    -- Path: game:GetChildren()[118]:GetChildren()[14]:GetChildren()[2]:GetChildren()[2]:GetChildren()[4]
-    ------------------------------------------------------------------
-    local _bloodTemplate
-    local function _resolveByChildPath(indices)
-        local ok, inst = pcall(function()
-            local cur = game:GetChildren()[indices[1]]
-            for i = 2, #indices do
-                if not cur then return nil end
-                cur = cur:GetChildren()[indices[i]]
-            end
-            return cur
-        end)
-        return ok and inst or nil
-    end
-    local function _resolveBloodSound()
-        if _bloodTemplate and _bloodTemplate:IsA("Sound") then return _bloodTemplate end
-        local paths = {
-            {118,14,2,2,4},
-            {119,14,2,2,4},
-            {117,14,2,2,4},
-        }
-        for _, p in ipairs(paths) do
-            local inst = _resolveByChildPath(p)
-            if inst and inst:IsA("Sound") then _bloodTemplate = inst; return inst end
-        end
-        return nil
-    end
-    local function _playBlood()
-        local src = _resolveBloodSound(); if not src then return end
-        local ok, clone = pcall(function() return src:Clone() end)
-        if not ok or not clone then return end
-        pcall(function()
-            clone.Parent = Camera or Workspace
-            clone.Volume = math.min(1.5, (src.Volume or 1) * 1.1)
-            clone:Play()
-        end)
-        task.delay(3, function() if clone then pcall(function() clone:Destroy() end) end end)
-    end
-
-    ------------------------------------------------------------------
-    -- Fire ShootWeapon packet — NEW STRUCTURE (matches live dump)
-    --
-    -- ReplicatedStorage.NetworkRemotes.Inventory.ShootWeapon:FireServer({
-    --   Identifier, ShootingHand, Bullets = {{Direction, Origin, Hits}},
-    --   Seq, IsSniperScoped
-    -- })
-    --
-    -- Hits are just {Normal, Position, Instance, Distance, Material, Exit}
-    -- — no AttackerUserId / Ricochet / SuppressVisuals / IsWallbang.
-    -- We simulate realistic penetration: entry+exit through a limb, then
-    -- entry+exit through the torso, then a terminal wall impact. That
-    -- shape matches what the client normally sends and passes server
-    -- validation cleanly.
-    ------------------------------------------------------------------
-    local _shootRE          -- cached RemoteEvent (new path)
-    local _seq = 0
-
-    local function _findShootRE()
-        if typeof(_shootRE) == "Instance" and _shootRE.Parent then return _shootRE end
-        local ok, re = pcall(function()
-            local rs = game:GetService("ReplicatedStorage")
-            local nr = rs:FindFirstChild("NetworkRemotes")
-            local inv = nr and nr:FindFirstChild("Inventory")
-            return inv and inv:FindFirstChild("ShootWeapon")
-        end)
-        if ok and typeof(re) == "Instance" then _shootRE = re; return re end
-        return nil
-    end
-
-    local function _partOf(pl, name)
-        local c = pl.Character; if not c then return nil end
-        return c:FindFirstChild(name)
-    end
-
-    -- Resolves a target BasePart in the character based on Config.Misc.AutoSkillPart
-    local _PART_MAP = {
-        Head  = { "Head" },
-        Neck  = { "Neck", "Head" },
-        Chest = { "UpperTorso", "Torso" },
-        Torso = { "LowerTorso", "UpperTorso", "Torso", "HumanoidRootPart" },
-        Legs  = { "LeftUpperLeg", "RightUpperLeg", "LeftLowerLeg", "RightLowerLeg", "Left Leg", "Right Leg" },
+    local ALL_ITEMS = {
+        "Kevlar","Kevlar + Helmet","Defuse Kit","Zeus x27",
+        "USP-S","P2000","Glock-18","P250","Five-SeveN","Tec-9","CZ75-Auto","Dual Berettas","Desert Eagle","R8 Revolver",
+        "MP9","MAC-10","MP7","MP5-SD","UMP-45","P90","PP-Bizon",
+        "Nova","Sawed-Off","MAG-7","XM1014","M249","Negev",
+        "FAMAS","Galil AR","M4A4","M4A1-S","AK-47","AUG","SG 553","SSG 08","AWP","SCAR-20","G3SG1",
+        "Flashbang","HE Grenade","Smoke Grenade","Molotov","Incendiary Grenade","Decoy Grenade",
     }
-    local function _resolveHitPart(pl)
-        local c = pl.Character; if not c then return nil end
-        local key = Config.Misc.AutoSkillPart or "Head"
-        local list = _PART_MAP[key] or _PART_MAP.Head
-        for _, name in ipairs(list) do
-            local p = c:FindFirstChild(name)
-            if p and p:IsA("BasePart") then return p, name end
-        end
-        return c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart"), "Head"
-    end
-
-    local function _sendKill(pl, w)
-        local target, partName = _resolveHitPart(pl); if not target then return end
-
-        local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
-        local hitPos = target.Position
-        local delta  = (hitPos - origin)
-        if delta.Magnitude < 0.01 then return end
-        local dist = delta.Magnitude
-        local dir  = delta.Unit
-
-        pcall(function()
-            local r = rawget(w, "Rounds") or 0
-            if r > 0 then w.Rounds = r - 1 end
-        end)
-
-        local function mkHit(inst, offset, exit, normal)
-            local pos = (inst and inst.Position) or hitPos
-            return {
-                Normal   = normal or (-dir),
-                Position = pos + (offset or Vector3.new()),
-                Instance = inst or target,
-                Distance = math.max(0.05, (pos - origin).Magnitude),
-                Material = "Plastic",
-                Exit     = exit and true or false,
-            }
-        end
-
-        local hits = {
-            mkHit(target, Vector3.new(0, 0.02, 0), false),
-        }
-
-        _seq = _seq + 1
-        local packet = {
-            Identifier     = rawget(w, "Identifier"),
-            ShootingHand   = "Right",
-            Bullets = {
-                {
-                    Direction = dir,
-                    Origin    = origin,
-                    Hits      = hits,
-                },
-            },
-            Seq            = _seq,
-            IsSniperScoped = false,
-        }
-
-        local sent = false
-        local re = _findShootRE()
-        if re then
-            sent = pcall(function() re:FireServer(packet) end)
-        end
-        if not sent then
-            local holder = _findRemote()
-            if holder then
-                local sw = rawget(holder, "ShootWeapon")
-                if type(sw) == "table" then
-                    local send = rawget(sw, "Send")
-                    if type(send) == "function" then
-                        sent = pcall(send, packet)
-                    end
-                end
+    ABGB:AddDropdown("AB_Items", {
+        Values = ALL_ITEMS, Multi = true, Default = {},
+        Text = "ITEMS", Tooltip = "Selecione o que comprar no buy period.",
+        Callback = function(v)
+            local list = {}
+            if type(v) == "table" then
+                for k, on in pairs(v) do if on then list[#list+1] = k end end
             end
-        end
-        if sent then
-            pcall(_playBlood)
-        end
-    end
+            Config.Misc.AutoBuyItems = list
+        end,
+    })
 
-
-    ------------------------------------------------------------------
-    -- (Auto weapon switch removed)
-    ------------------------------------------------------------------
-
-    ------------------------------------------------------------------
-    -- Respawn reset — clears cached weapon / gates so AutoSkill doesn't
-    -- carry over a stale "buy period" or dead weapon table across lives.
-    ------------------------------------------------------------------
-    local _lastTarget = nil
-    local function _resetASState()
-        _weaponTable = nil
-        _refilling   = false
-        _lastTarget  = nil
-        _seq         = 0
-    end
-
-    LocalPlayer.CharacterAdded:Connect(function(_)
-        _resetASState()
-        task.delay(0.35, _resetASState)
-    end)
-    LocalPlayer.CharacterRemoving:Connect(_resetASState)
-
-    ------------------------------------------------------------------
-    -- Dedicated refill loop (KOV background) — cheap gates first
-    ------------------------------------------------------------------
-    task.spawn(function()
-        while scriptRunning do
-            task.wait(0.15)
-            repeat
-                if not (Config.Misc.AutoSkill and Config.Misc.AutoSkillRefill) then break end
-                if not _alive() then break end
-                if _isBuyPeriod() then break end
-                local w = _findEquippedWeapon()
-                if w and not _isMeleeWeapon(w) then pcall(_tryRefill, w) end
-            until true
-        end
-    end)
-
-    ------------------------------------------------------------------
-    -- Main KILL loop
-    --   Speed  = shots per second   (higher = faster)
-    --   Smooth = extra delay (sec)  (higher = slower / smoother)
-    ------------------------------------------------------------------
-    -- Strict team check: player.Team/TeamColor OR character parent folder
-    -- (Terrorists / CounterTerrorists). If we can't confirm the enemy team,
-    -- we DO NOT fire — better to skip than to hit an ally.
-    local function _asTeamKey(plr)
-        if not plr then return nil end
-        local k = _hudTeamKeyForPlayer and _hudTeamKeyForPlayer(plr) or nil
-        if k then return k end
-        local ch = plr.Character
-        local parent = ch and ch.Parent and ch.Parent.Name
-        if parent == "Terrorists" then return "Terrorists" end
-        if parent == "CounterTerrorists" or parent == "Counter-Terrorists" then return "Counter-Terrorists" end
-        return nil
-    end
-
-    task.spawn(function()
-        while scriptRunning do
-            local spd    = math.clamp(tonumber(Config.Misc.AutoSkillSpeed)  or 25, 1, 60)
-            local smooth = math.max(0, tonumber(Config.Misc.AutoSkillSmooth) or 0)
-            local dt     = (1 / spd) + smooth
-            task.wait(dt)
-
-            repeat
-                if not Config.Misc.AutoSkill then break end
-                if not _alive() then break end
-                if _isBuyPeriod() then
-                    _weaponTable = nil
-                    break
-                end
-
-                local w = _findEquippedWeapon()
-                if not w then break end
-                if _isMeleeWeapon(w) then
-                    -- Knife equipped: back off HARD so we don't spin the loop
-                    _weaponTable = nil
-                    _lastTarget  = nil
-                    task.wait(0.5)
-                    break
-                end
-                local rounds = rawget(w, "Rounds") or 0
-                if rounds <= 0 then pcall(_tryRefill, w); break end
-
-                local myKey  = _asTeamKey(LocalPlayer)
-                local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 600
-                local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
-                local killed = 0
-                local skipTeam = _IS_DEATHMATCH or (not Config.TeamCheck)
-                for _, pl in ipairs(Players:GetPlayers()) do
-                    repeat
-                        if pl == LocalPlayer then break end
-                        if not skipTeam then
-                            local pKey = _asTeamKey(pl)
-                            if myKey and pKey and pKey == myKey then break end
-                            if myKey and not pKey then break end
-                        end
-                        local c  = pl.Character
-                        local h  = c and c:FindFirstChildOfClass("Humanoid")
-                        local hp = h and h.Health or 0
-                        if hp <= 0 then break end
-                        if maxD > 0 then
-                            local hd = _headOf(pl); if not hd then break end
-                            if (hd.Position - origin).Magnitude > maxD then break end
-                        end
-                        _sendKill(pl, w)
-                        killed = killed + 1
-                        task.wait() -- yield between kills to avoid frame spikes
-                    until true
-
-                end
-                if killed == 0 then _lastTarget = nil end
-            until true
-        end
-    end)
-
-    ------------------------------------------------------------------
-    -- AUTO SHOP — fires BuyMenuPurchase with the display Name.
-    -- The user can rearrange their loadout slots, so we don't hardcode
-    -- paths anymore. We send the Name (and category-guessed Paths as
-    -- fallback), letting the server resolve the actual slot.
-    ------------------------------------------------------------------
-    local _buyRE, _boughtThisPeriod, _wasBuy = nil, {}, false
-
-    -- Categoria (para montar Loadout.<Category>.Options.<Slot>)
     local ITEM_CAT = {
         ["Kevlar"]="Equipment",["Kevlar + Helmet"]="Equipment",["Zeus x27"]="Equipment",["Defuse Kit"]="Equipment",["Taser"]="Equipment",
         ["USP-S"]="Pistols",["Glock-18"]="Pistols",["R8 Revolver"]="Pistols",["P250"]="Pistols",
@@ -12857,39 +12341,26 @@ end)
     local EQUIPMENT_ITEMS = {
         ["Kevlar"]=true,["Kevlar + Helmet"]=true,["Zeus x27"]=true,["Taser"]=true,["Defuse Kit"]=true,
     }
-
-    -- =========================================================
-    -- SLOT MAP por TIME (extraído do print da BuyMenu T e CT).
-    -- Categoria + Slot no shop. Se time desconhecido, tenta ambos.
-    -- =========================================================
     local T_SLOTS = {
-        -- Pistols (T)
         ["Glock-18"]=1,["P2000"]=1,["USP-S"]=1,["P250"]=2,["Five-SeveN"]=3,["Tec-9"]=3,
         ["CZ75-Auto"]=4,["Dual Berettas"]=5,["Desert Eagle"]=6,["R8 Revolver"]=6,
-        -- SMGs
         ["MAC-10"]=1,["MP9"]=1,["MP7"]=2,["MP5-SD"]=2,["UMP-45"]=3,["P90"]=4,["PP-Bizon"]=5,
-        -- Heavy
         ["Nova"]=1,["Sawed-Off"]=2,["XM1014"]=3,["MAG-7"]=3,["M249"]=4,["Negev"]=5,
-        -- Rifles
         ["Galil AR"]=1,["FAMAS"]=1,["AK-47"]=2,["M4A4"]=2,["M4A1-S"]=2,["SG 553"]=3,["AUG"]=3,
         ["SSG 08"]=4,["AWP"]=5,["G3SG1"]=6,["SCAR-20"]=6,
-        -- Grenades
         ["Flashbang"]=1,["HE Grenade"]=2,["Smoke Grenade"]=3,["Molotov"]=4,["Incendiary Grenade"]=4,["Decoy Grenade"]=5,
     }
     local CT_SLOTS = {
-        -- Pistols (CT)
         ["USP-S"]=1,["P2000"]=1,["Glock-18"]=1,["P250"]=2,["Five-SeveN"]=3,["Tec-9"]=3,
         ["CZ75-Auto"]=4,["Dual Berettas"]=5,["Desert Eagle"]=6,["R8 Revolver"]=6,
-        -- SMGs
         ["MP9"]=1,["MAC-10"]=1,["MP7"]=2,["MP5-SD"]=2,["UMP-45"]=3,["P90"]=4,["PP-Bizon"]=5,
-        -- Heavy
         ["Nova"]=1,["MAG-7"]=2,["Sawed-Off"]=2,["XM1014"]=3,["M249"]=4,["Negev"]=5,
-        -- Rifles
         ["FAMAS"]=1,["Galil AR"]=1,["M4A4"]=2,["M4A1-S"]=2,["AK-47"]=2,["AUG"]=3,["SG 553"]=3,
         ["SSG 08"]=4,["AWP"]=5,["SCAR-20"]=6,["G3SG1"]=6,
-        -- Grenades
         ["Flashbang"]=1,["HE Grenade"]=2,["Smoke Grenade"]=3,["Incendiary Grenade"]=4,["Molotov"]=4,["Decoy Grenade"]=5,
     }
+
+    local _buyRE, _boughtThisPeriod, _wasBuy = nil, {}, false
 
     local function _localTeamKey()
         local t = LocalPlayer and LocalPlayer.Team
@@ -12899,7 +12370,6 @@ end)
         if n:find("counter") or n == "ct" then return "CT" end
         return nil
     end
-
     local function _findBuyRemote()
         if typeof(_buyRE) == "Instance" and _buyRE.Parent then return _buyRE end
         local ok, re = pcall(function()
@@ -12911,7 +12381,15 @@ end)
         if ok and typeof(re) == "Instance" then _buyRE = re; return re end
         return nil
     end
-
+    local function _isBuyPeriod()
+        local ok, v = pcall(function() return LocalPlayer:GetAttribute("BuyMenu") end)
+        return ok and v == true
+    end
+    local function _alive()
+        local ch = LocalPlayer and LocalPlayer.Character
+        local h  = ch and ch:FindFirstChildOfClass("Humanoid")
+        return h and h.Health > 0
+    end
     local function _fireBuy(item)
         if not Config.Misc.AutoBuy then return false end
         local re = _findBuyRemote(); if not re then return false end
@@ -12919,7 +12397,6 @@ end)
         local cat    = ITEM_CAT[item] or ""
         local equip  = EQUIPMENT_ITEMS[item] and true or false
 
-        -- Equipment (Kevlar/Helmet/Kit/Zeus): Equipment=true + Name.
         if equip then
             pcall(function() re[method](re, { Equipment = true, Path = item, Name = item }) end)
             for slot = 1, 6 do
@@ -12929,13 +12406,10 @@ end)
             end
             return true
         end
-
         if cat == "" then
             pcall(function() re[method](re, { Equipment = false, Path = item, Name = item }) end)
             return true
         end
-
-        -- Path preferencial pelo slot do time atual (mapa extraído do shop T/CT).
         local team    = _localTeamKey()
         local primary = (team == "T" and T_SLOTS[item]) or (team == "CT" and CT_SLOTS[item]) or nil
         if primary then
@@ -12943,8 +12417,6 @@ end)
             pcall(function() re[method](re, { Equipment = false, Path = path, Name = item }) end)
             return true
         end
-
-        -- Fallback: se time desconhecido, tenta os slots conhecidos de AMBOS.
         local tried = {}
         for _, tbl in ipairs({ T_SLOTS, CT_SLOTS }) do
             local s = tbl[item]
@@ -12954,12 +12426,9 @@ end)
                 pcall(function() re[method](re, { Equipment = false, Path = path, Name = item }) end)
             end
         end
-        -- Último recurso: só Name.
         pcall(function() re[method](re, { Equipment = false, Name = item }) end)
         return true
     end
-
-
 
     task.spawn(function()
         while scriptRunning do
@@ -12982,99 +12451,7 @@ end)
             until true
         end
     end)
-
-    ------------------------------------------------------------------
-    -- SILENT AIM — mesma mecânica do AutoSkill (usa _sendKill/_tryRefill/
-    -- _findEquippedWeapon), porém só dispara ENQUANTO MB1 está segurado,
-    -- e sempre no inimigo visível mais próximo.
-    ------------------------------------------------------------------
-    do
-        local UIS = game:GetService("UserInputService")
-        local _mb1Held = false
-        UIS.InputBegan:Connect(function(inp, gp)
-            if gp then return end
-            if inp.UserInputType == Enum.UserInputType.MouseButton1 then _mb1Held = true end
-        end)
-        UIS.InputEnded:Connect(function(inp)
-            if inp.UserInputType == Enum.UserInputType.MouseButton1 then _mb1Held = false end
-        end)
-
-        local function _visibleHead(pl)
-            local c = pl.Character; if not c then return nil end
-            local hd = c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart")
-            if not hd then return nil end
-            local cam = workspace.CurrentCamera; if not cam then return hd end
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = { LocalPlayer.Character, cam }
-            local origin = cam.CFrame.Position
-            local dir    = (hd.Position - origin)
-            local res    = workspace:Raycast(origin, dir, params)
-            if not res then return hd end
-            if res.Instance and res.Instance:IsDescendantOf(c) then return hd end
-            return nil
-        end
-
-        local function _pickTarget()
-            local myKey    = _asTeamKey(LocalPlayer)
-            local origin   = (Camera and Camera.CFrame.Position) or Vector3.new()
-            local skipTeam = _IS_DEATHMATCH or (not Config.TeamCheck)
-            local best, bestD = nil, math.huge
-            for _, pl in ipairs(Players:GetPlayers()) do
-                repeat
-                    if pl == LocalPlayer then break end
-                    if not skipTeam then
-                        local pKey = _asTeamKey(pl)
-                        if myKey and pKey and pKey == myKey then break end
-                        if myKey and not pKey then break end
-                    end
-                    local c = pl.Character
-                    local h = c and c:FindFirstChildOfClass("Humanoid")
-                    if not h or h.Health <= 0 then break end
-                    local hd = _visibleHead(pl); if not hd then break end
-                    local d = (hd.Position - origin).Magnitude
-                    if d < bestD then bestD = d; best = pl end
-                until true
-            end
-            return best
-        end
-
-        task.spawn(function()
-            while scriptRunning do
-                local spd    = math.clamp(tonumber(Config.Misc.AutoSkillSpeed)  or 25, 1, 60)
-                local smooth = math.max(0, tonumber(Config.Misc.AutoSkillSmooth) or 0)
-                task.wait((1 / spd) + smooth)
-
-                repeat
-                    if not Config.Misc.SilentAim then break end
-                    local pressed = _mb1Held
-                        or (UIS.IsMouseButtonPressed and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1))
-                        or _G.EclipseMB1Virtual
-                    if not pressed then break end
-                    if not _alive() then break end
-                    if _isBuyPeriod() then break end
-                    local w = _findEquippedWeapon(); if not w then break end
-                    if _isMeleeWeapon(w) then break end
-                    local rounds = rawget(w, "Rounds") or 0
-                    if rounds <= 0 then pcall(_tryRefill, w); break end
-                    local best = _pickTarget(); if not best then break end
-                    pcall(_sendKill, best, w)
-                until true
-            end
-        end)
-    end
-    _G.EclipseSilent = true
-
-
 end)()
-
--- ============================================================
--- BULLET TRACER removed per user request.
--- ============================================================
-_G.EclipseTracerBridge = nil
-
--- FPS BOOST removed by user request.
-
 
 
 
