@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "2.2.0 [OFFICIAL]",
+    Version       = "2.0.0 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -5138,7 +5138,7 @@ function attachAsset(folder, arm, model, name, offset, ref)
 
     
     
-    if name == "Glove" and target:IsA("BasePart") and Config.Skins.SelectedKnife ~= "Gut Knife" and Config.Skins.SelectedKnife ~= "Flip Knife" then
+    if name == "Glove" and target:IsA("BasePart") and Config.Skins.SelectedKnife ~= "Gut Knife" and Config.Skins.SelectedKnife ~= "Flip Knife" and Config.Skins.SelectedKnife ~= "Skeleton Knife" then
         local factor = 0.86
         _uniformScale(mesh, factor)
         local prev = SkinSystem.gloveScale or 1.0
