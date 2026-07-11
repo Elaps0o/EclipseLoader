@@ -919,8 +919,8 @@ local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
 _ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
-_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v18" .. _ECLIPSE_AUTOCONFIG_EXT
-_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v18" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v19" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v19" .. _ECLIPSE_AUTOCONFIG_EXT
 pcall(function()
     if type(delfile) == "function" and type(isfile) == "function" then
         for _, old in ipairs({
@@ -933,7 +933,9 @@ pcall(function()
             "EclipseHub/autosave_v15.ehcfg",
             "EclipseHub/autosave_v16.ehcfg",
             "EclipseHub/autosave_v17.ehcfg",
+            "EclipseHub/autosave_v18.ehcfg",
         }) do
+
             if isfile(old) then pcall(delfile, old) end
         end
     end
@@ -3541,10 +3543,10 @@ function ensureC4UI()
     f.Name = "C4Frame"
     f.AnchorPoint = Vector2.new(0, 0.5)
     f.Position = UDim2.new(0, 14, 0.5, 0)
-    f.BackgroundColor3 = Color3.new(0, 0, 0)
-    f.BackgroundTransparency = 0.4
+    f.BackgroundColor3 = Color3.fromRGB(8, 6, 12)
+    f.BackgroundTransparency = 0.15
     f.BorderSizePixel = 0
-    f.Size = UDim2.fromOffset(10, 30)                     
+    f.Size = UDim2.fromOffset(10, 26)
     f.AutomaticSize = Enum.AutomaticSize.X
     f.Visible = false; f.Active = true; f.ZIndex = 60
     f.Parent = parent
@@ -3570,8 +3572,9 @@ function ensureC4UI()
     end)
     pcall(_bindPanelPosition, "C4Panel", f)
     local stroke = Instance.new("UIStroke", f)
-    stroke.Color = Color3.new(1, 1, 1); stroke.Thickness = 1; stroke.Transparency = 0.6
-    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 4)
+    stroke.Color = Color3.fromRGB(70, 40, 110); stroke.Thickness = 1; stroke.Transparency = 0.35
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 3)
+
 
     local pad = Instance.new("UIPadding", f)
     pad.PaddingLeft = UDim.new(0, 10); pad.PaddingRight = UDim.new(0, 10)
@@ -3654,14 +3657,14 @@ function C4Hide()
     local tw = TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
         { BackgroundTransparency = 1 })
     tw:Play()
-    tw.Completed:Once(function() if not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 0.4 end end)
+    tw.Completed:Once(function() if not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 0.15 end end)
 end
 
 function C4Show(status, timeText, sub, color)
     ensureC4UI()
     if not C4UI.frame then return end
 
-    local caret = "<font color='rgb(180,110,255)'>▾</font>  "
+    local caret = "<font color='rgb(180,110,255)'>&gt;</font>  "
     local function head(t) return caret .. "<font color='rgb(210,140,255)'><b>" .. t .. "</b></font>" end
     local rich
     if status == "PLANTED" then
@@ -3695,7 +3698,7 @@ function C4Show(status, timeText, sub, color)
         C4UI.frame.Visible = true
         C4UI.frame.BackgroundTransparency = 1
         TweenService:Create(C4UI.frame, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            { BackgroundTransparency = 0.4 }):Play()
+            { BackgroundTransparency = 0.15 }):Play()
     end
 end
 
@@ -8248,17 +8251,65 @@ end)
 connectSignal(Camera.ChildAdded:Connect(function(obj)
     if not scriptRunning then return end
     if Config.Skins.SkinChangerEnabled and IsAlive() then
-        task.wait(0.1)
-        pcall(_applySelectedGloveSkin)
-        pcall(_TW_ApplyAllCameraSkins)
+        task.spawn(function()
+            for i=1,6 do
+                task.wait(0.1)
+                pcall(_applySelectedGloveSkin)
+                pcall(_TW_ApplyAllCameraSkins)
+            end
+        end)
     end
 end))
 connectSignal(Camera.DescendantAdded:Connect(function(d)
     if not scriptRunning then return end
-    if d:IsA("BasePart") and Config.Skins.SkinChangerEnabled and IsAlive() then
+    if not (Config.Skins.SkinChangerEnabled and IsAlive()) then return end
+    if d:IsA("BasePart") then
         pcall(_TW_ApplyAllCameraSkins)
+        -- glove parts often attach late when swapping to a knife; reapply gloves.
+        if d.Name == "Glove" or (d.Parent and (d.Parent.Name == "Left Arm" or d.Parent.Name == "Right Arm")) then
+            task.spawn(function()
+                for i=1,4 do task.wait(0.08); pcall(_applySelectedGloveSkin) end
+            end)
+        end
     end
 end))
+
+-- Persistent glove watchdog: garante que ao pegar uma faca (ou qualquer
+-- swap de viewmodel que reanexa Glove), a skin selecionada volte a ser
+-- aplicada mesmo se ChildAdded/DescendantAdded escaparem por timing.
+task.spawn(function()
+    while true do
+        task.wait(0.4)
+        if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() then
+            local expected
+            for gt in pairs(GLOVES) do
+                local s = Config.Skins.SelectedSkins[gt]
+                if s and s ~= "" and s ~= "Vanilla" and s ~= "Default" and s ~= "None" then
+                    expected = gt.."/"..s; break
+                end
+            end
+            if expected then
+                local cam = workspace.CurrentCamera
+                if cam then
+                    for _, ch in ipairs(cam:GetChildren()) do
+                        if ch:IsA("Model") and (ch.Name:match("Arms") or ch:FindFirstChild("Right Arm")) then
+                            local ra = ch:FindFirstChild("Right Arm")
+                            local la = ch:FindFirstChild("Left Arm")
+                            local rg = ra and ra:FindFirstChild("Glove")
+                            local lg = la and la:FindFirstChild("Glove")
+                            if (rg and rg:GetAttribute("EclipseSkinSource") ~= expected)
+                               or (lg and lg:GetAttribute("EclipseSkinSource") ~= expected) then
+                                pcall(_applySelectedGloveSkin)
+                            end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
 
 
 ;(function() 
@@ -9497,20 +9548,22 @@ do
             _wh.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             _wh.Parent = model
         end
-        local a = math.clamp((inten or 1), 0.2, 1.5)
+        local a = math.clamp((inten or 1), 0.2, 2.0)
         pcall(function()
-            -- Sem fill, so contorno brilhante — evita a mancha roxa cobrindo a arma.
-            _wh.FillTransparency    = 1
+            -- AlwaysOnTop layer: fill cobrindo a arma inteira + outline forte.
+            -- FillTransparency escalona com intensity para dar sensação de bloom/glow.
             _wh.FillColor           = color
             _wh.OutlineColor        = color
-            _wh.OutlineTransparency = math.clamp(0.55 - a * 0.35, 0, 0.60)
-            -- Camada bloom: fill quase transparente + outline suave dá a sensação de blur/glow.
+            _wh.FillTransparency    = math.clamp(0.75 - a * 0.30, 0.20, 0.85)
+            _wh.OutlineTransparency = math.clamp(0.40 - a * 0.30, 0.00, 0.50)
+            -- Occluded rim: halo suave atrás/em volta = depth-of-field glow.
             _whRim.FillColor           = color
             _whRim.OutlineColor        = color
-            _whRim.FillTransparency    = math.clamp(0.90 - a * 0.10, 0.70, 0.95)
-            _whRim.OutlineTransparency = math.clamp(0.75 - a * 0.25, 0.30, 0.90)
+            _whRim.FillTransparency    = math.clamp(0.85 - a * 0.20, 0.55, 0.90)
+            _whRim.OutlineTransparency = math.clamp(0.60 - a * 0.35, 0.10, 0.80)
         end)
     end
+
 
 
     RunS.Heartbeat:Connect(function()
@@ -9782,16 +9835,17 @@ SpecFrame.Name = "SpecFrame"
 SpecFrame.Size = UDim2.fromOffset(150, 24)
 SpecFrame.AnchorPoint = Vector2.new(1, 0)
 SpecFrame.Position = UDim2.new(1, -12, 0, 12)
-SpecFrame.BackgroundColor3 = Color3.new(0, 0, 0)
-SpecFrame.BackgroundTransparency = 0.4
+SpecFrame.BackgroundColor3 = Color3.fromRGB(8, 6, 12)
+SpecFrame.BackgroundTransparency = 0.15
 SpecFrame.BorderSizePixel = 0
 SpecFrame.Visible = false
 SpecFrame.Active = true
 SpecFrame.ZIndex = 50
 SpecFrame.Parent = SpecParent
 sfStroke = Instance.new("UIStroke", SpecFrame)
-sfStroke.Color = Color3.new(1, 1, 1); sfStroke.Thickness = 1; sfStroke.Transparency = 0.6
-Instance.new("UICorner", SpecFrame).CornerRadius = UDim.new(0, 4)
+sfStroke.Color = Color3.fromRGB(70, 40, 110); sfStroke.Thickness = 1; sfStroke.Transparency = 0.35
+Instance.new("UICorner", SpecFrame).CornerRadius = UDim.new(0, 3)
+
 
 Header = Instance.new("Frame", SpecFrame)
 Header.BackgroundTransparency = 1
@@ -9808,7 +9862,7 @@ TitleLbl.TextColor3 = Color3.new(1, 1, 1)
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 TitleLbl.TextYAlignment = Enum.TextYAlignment.Center
 TitleLbl.RichText = true
-TitleLbl.Text = '<font color="rgb(180,110,255)">▾</font>  <font color="rgb(210,140,255)"><b>SPECTATORS: 0</b></font>'
+TitleLbl.Text = '<font color="rgb(180,110,255)">&gt;</font>  <font color="rgb(210,140,255)"><b>SPECTATORS: 0</b></font>'
 TitleLbl.ZIndex = 52
 
 Divider = Instance.new("Frame", SpecFrame)
@@ -9994,7 +10048,7 @@ task.spawn(function()
             local attrCount
             pcall(function() attrCount = LocalPlayer:GetAttribute("Spectators") end)
             local count = math.max(#names, tonumber(attrCount) or 0)
-            TitleLbl.Text = string.format('<font color="rgb(180,110,255)">▾</font>  <font color="rgb(210,140,255)"><b>SPECTATORS: %d</b></font>', count)
+            TitleLbl.Text = string.format('<font color="rgb(180,110,255)">&gt;</font>  <font color="rgb(210,140,255)"><b>SPECTATORS: %d</b></font>', count)
             specRebuild(names)
             SpecFrame.Size = UDim2.fromOffset(150, 23 + math.max(0, #names) * 16)
             local shouldShow = isGuiOpen() or (count > 0)
@@ -10476,21 +10530,21 @@ end)()
     pcall(_bindPanelPosition, "KeybindList", EX.KBFrame)
 
     pcall(function()
-        EX.KBFrame.BackgroundColor3 = Color3.new(0, 0, 0)
-        EX.KBFrame.BackgroundTransparency = 0.4
+        EX.KBFrame.BackgroundColor3 = Color3.fromRGB(8, 6, 12)
+        EX.KBFrame.BackgroundTransparency = 0.15
         for _, ch in ipairs(EX.KBFrame:GetChildren()) do
             if ch:IsA("UIStroke") then
-                ch.Color = Color3.new(1, 1, 1); ch.Transparency = 0.6; ch.Thickness = 1
+                ch.Color = Color3.fromRGB(70, 40, 110); ch.Transparency = 0.35; ch.Thickness = 1
             elseif ch:IsA("UICorner") then
-                ch.CornerRadius = UDim.new(0, 4)
+                ch.CornerRadius = UDim.new(0, 3)
             elseif ch:IsA("Frame") and ch:FindFirstChildOfClass("TextLabel") then
-                
+                ch.Size = UDim2.new(1, 0, 0, 16)
                 local tl = ch:FindFirstChildOfClass("TextLabel")
                 if tl then
-                    tl.Font = Enum.Font.GothamBold; tl.TextSize = 11
+                    tl.Font = Enum.Font.GothamBold; tl.TextSize = 10
                     tl.TextColor3 = Color3.fromRGB(210, 140, 255)
                     tl.RichText = true
-                    tl.Text = '<font color="rgb(180,110,255)">▾</font>  <b>KEYBINDS</b>'
+                    tl.Text = '<font color="rgb(180,110,255)">&gt;</font>  <b>KEYBINDS</b>'
                     tl.TextXAlignment = Enum.TextXAlignment.Left
                     tl.Position = UDim2.fromOffset(8, 0)
                     tl.Size = UDim2.new(1, -16, 1, 0)
@@ -10498,6 +10552,7 @@ end)()
             end
         end
     end)
+
     local list = Instance.new("Frame", EX.KBFrame)
     list.BackgroundTransparency = 1
     list.Position = UDim2.fromOffset(8, 22)
@@ -10558,35 +10613,46 @@ end)()
         for _, r in ipairs(EX.KBRows) do pcall(function() r:Destroy() end) end
         table.clear(EX.KBRows)
         local entries = collectAllKeybinds()
+        -- Calcula largura ideal do painel a partir do label + tecla + status.
+        local maxLabelW, maxKeyW = 0, 0
+        for _, e in ipairs(entries) do
+            local lw = #tostring(e.label) * 6
+            local kw = math.max(16, #string.upper(keyText(e.key)) * 7 + 6)
+            if lw > maxLabelW then maxLabelW = lw end
+            if kw > maxKeyW then maxKeyW = kw end
+        end
+        local panelW = math.clamp(maxLabelW + maxKeyW + 60, 190, 320)
         for i, e in ipairs(entries) do
             local on = true; pcall(function() on = e.state() end)
 
             local row = Instance.new("Frame")
             row.BackgroundTransparency = 1
-            row.Size = UDim2.new(1, 0, 0, 20)
+            row.Size = UDim2.new(1, 0, 0, 16)
             row.LayoutOrder = i; row.Parent = EX.KBList
             row.ZIndex = 53
 
-            -- Label esquerda
+            local keyStr = string.upper(keyText(e.key))
+            local capW = math.max(16, #keyStr * 7 + 6)
+            local reserve = capW + 34  -- espaço da tecla + status ON/OFF
+
+            -- Label esquerda (reservando espaço à direita para evitar sobreposição)
             local lbl = Instance.new("TextLabel", row)
             lbl.BackgroundTransparency = 1
             lbl.Position = UDim2.fromOffset(0, 0)
-            lbl.Size = UDim2.new(1, -70, 1, 0)
-            lbl.Font = Enum.Font.GothamSemibold; lbl.TextSize = 11
-            lbl.TextColor3 = on and Color3.fromRGB(230,230,235) or Color3.fromRGB(140,140,145)
+            lbl.Size = UDim2.new(1, -reserve, 1, 0)
+            lbl.Font = Enum.Font.GothamSemibold; lbl.TextSize = 10
+            lbl.TextColor3 = on and Color3.fromRGB(225,225,230) or Color3.fromRGB(130,130,138)
             lbl.TextXAlignment = Enum.TextXAlignment.Left
             lbl.TextTruncate = Enum.TextTruncate.AtEnd
             lbl.Text = e.label
             lbl.ZIndex = 54
 
-            -- Cap da tecla (vermelho/rosa)
-            local keyStr = string.upper(keyText(e.key))
-            local capW = math.max(16, #keyStr * 7 + 8)
+            -- Cap da tecla (rosa)
             local keyLbl = Instance.new("TextLabel", row)
             keyLbl.BackgroundTransparency = 1
-            keyLbl.Position = UDim2.new(1, -(capW + 32), 0, 0)
-            keyLbl.Size = UDim2.fromOffset(capW, 20)
-            keyLbl.Font = Enum.Font.GothamBold; keyLbl.TextSize = 11
+            keyLbl.Position = UDim2.new(1, -(capW + 30), 0, 0)
+            keyLbl.Size = UDim2.fromOffset(capW, 16)
+            keyLbl.Font = Enum.Font.GothamBold; keyLbl.TextSize = 10
             keyLbl.TextColor3 = Color3.fromRGB(255, 70, 90)
             keyLbl.TextXAlignment = Enum.TextXAlignment.Right
             keyLbl.Text = keyStr
@@ -10595,9 +10661,9 @@ end)()
             -- Status ON/OFF (roxo)
             local stLbl = Instance.new("TextLabel", row)
             stLbl.BackgroundTransparency = 1
-            stLbl.Position = UDim2.new(1, -28, 0, 0)
-            stLbl.Size = UDim2.fromOffset(28, 20)
-            stLbl.Font = Enum.Font.GothamBold; stLbl.TextSize = 11
+            stLbl.Position = UDim2.new(1, -26, 0, 0)
+            stLbl.Size = UDim2.fromOffset(26, 16)
+            stLbl.Font = Enum.Font.GothamBold; stLbl.TextSize = 10
             stLbl.TextXAlignment = Enum.TextXAlignment.Right
             stLbl.TextColor3 = on and Color3.fromRGB(210,140,255) or Color3.fromRGB(110,110,115)
             stLbl.Text = on and "ON" or "OFF"
@@ -10613,13 +10679,14 @@ end)()
 
             table.insert(EX.KBRows, row)
         end
-        
+
         if #entries == 0 then
             EX.KBFrame.Visible = false
         else
-            EX.KBFrame.Size = UDim2.fromOffset(210, 26 + #entries * 22)
+            EX.KBFrame.Size = UDim2.fromOffset(panelW, 22 + #entries * 18)
         end
     end
+
 
     EX._kbHooked = {}
     local function hookOption(opt)
@@ -11854,14 +11921,16 @@ end)()
         end
     end
 
-    local _killNameAnimBusy = false
+    -- Each invocation spawns its OWN independent coroutine (no shared busy
+    -- gate) so multiple simultaneous kills each get their own 20s animation.
     local function _animateLocalKillName()
-        if _killNameAnimBusy then return end
         if not Config.GlobalEnable or not Config.Visuals.KillNameAnim then return end
-        _killNameAnimBusy = true
         task.spawn(function()
-            local finishAt = tick() + 2.5
+            local DURATION = 20.0
+            local startedAt = tick()
+            local finishAt  = startedAt + DURATION
             local lpName = LocalPlayer and LocalPlayer.Name or ""
+            if lpName == "" then return end
             local seen = {}
             local originals = {}
             local function scanAndPatch()
@@ -11870,27 +11939,24 @@ end)()
                 for _, d in ipairs(pg:GetDescendants()) do
                     if (d:IsA("TextLabel") or d:IsA("TextButton")) and not seen[d] then
                         local txt = d.Text
-                        if type(txt) == "string" and lpName ~= "" and txt:find(lpName, 1, true) then
+                        if type(txt) == "string" and txt:find(lpName, 1, true) then
                             seen[d] = true
                             originals[d] = { Text=txt, RichText=d.RichText, Color=d.TextColor3 }
                             pcall(function() d.RichText = true end)
-                            table.insert(originals, d)
                         end
                     end
                 end
             end
             scanAndPatch()
             local target = tostring(Config.Visuals.KillNameText or "ECLIPSE")
-            local frame = 0
             while tick() < finishAt do
                 scanAndPatch()
-                frame = frame + 1
                 local t = tick()
                 local hue = (t * 0.6) % 1
                 local col = Color3.fromHSV(hue, 1, 1)
                 local hex = string.format("#%02X%02X%02X", math.floor(col.R*255), math.floor(col.G*255), math.floor(col.B*255))
-                local revealChars = math.min(#target, math.floor((finishAt - tick() > 1.5) and ((tick() - (finishAt-2.5)) * (#target/1.0)) or #target))
-                if revealChars < 1 then revealChars = 1 end
+                local elapsed = t - startedAt
+                local revealChars = math.max(1, math.min(#target, math.floor(elapsed * (#target/1.2))))
                 local shown = target:sub(1, revealChars)
                 local pad = target:sub(revealChars+1):gsub(".", "_")
                 local rich = string.format('<b><font color="%s">%s</font></b><font color="#333333">%s</font>', hex, shown, pad)
@@ -11907,9 +11973,9 @@ end)()
                     pcall(function() d.Text = orig.Text; d.RichText = orig.RichText end)
                 end
             end
-            _killNameAnimBusy = false
         end)
     end
+
 
     pcall(function()
         local Rem = require(ReplicatedSt.Database.Security.Remotes)
