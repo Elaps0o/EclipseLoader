@@ -4247,17 +4247,23 @@ function updateTriggerBot()
     local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
     local function _doClick()
         -- Sinaliza para o Silent Aim que o disparo veio do TriggerBot.
+        -- Mantemos o flag ligado por 250ms para o loop do silent (que roda a
+        -- ~1/spd s) sempre pegar a janela — antes eram 50ms e o silent perdia.
         _G.EclipseMB1Virtual = true
+        _G.EclipseMB1VirtualUntil = tick() + 0.25
         if isNoSpread then
             if mouse1press then pcall(mouse1press) end
             task.delay(0.05, function()
                 if mouse1release then pcall(mouse1release) end
-                _G.EclipseMB1Virtual = false
             end)
         else
             if mouse1click then pcall(mouse1click) end
-            task.delay(0.05, function() _G.EclipseMB1Virtual = false end)
         end
+        task.delay(0.25, function()
+            if tick() >= (_G.EclipseMB1VirtualUntil or 0) then
+                _G.EclipseMB1Virtual = false
+            end
+        end)
     end
     local function _tryFireOnPlayer(pl)
         if not pl then return false end
@@ -12588,15 +12594,15 @@ end)
         local method = re:IsA("RemoteFunction") and "InvokeServer" or "FireServer"
         local cat    = ITEM_CAT[item] or ""
         local equip  = EQUIPMENT_ITEMS[item] and true or false
-        if cat == "" then
-            pcall(function() re[method](re, { Equipment = equip, Path = item, Name = item }) end)
-            return true
-        end
-        -- Slot index varies per team/loadout arrangement. Try 1..10; server
-        -- accepts only the slot whose item Name matches, ignores the rest.
-        for slot = 1, 10 do
-            local path = ("Loadout.%s.Options.%d"):format(cat, slot)
-            pcall(function() re[method](re, { Equipment = equip, Path = path, Name = item }) end)
+        -- Envio primário: apenas Name + Equipment. O servidor resolve o slot
+        -- correto a partir do Name — sem precisar iterar 1..10 (o que só gera
+        -- 10 pcalls falhando por item). Se falhar, tentamos variantes.
+        pcall(function() re[method](re, { Equipment = equip, Name = item }) end)
+        pcall(function() re[method](re, { Equipment = equip, Path = item, Name = item }) end)
+        if cat ~= "" then
+            pcall(function()
+                re[method](re, { Equipment = equip, Path = "Loadout."..cat, Name = item })
+            end)
         end
         return true
     end
@@ -12657,19 +12663,24 @@ end)
             if inp.UserInputType == Enum.UserInputType.MouseButton1 then _mb1Held = false end
         end)
 
-        local function _visibleHead(pl)
+        local function _anyBodyVisible(pl)
             local c = pl.Character; if not c then return nil end
-            local hd = c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart")
-            if not hd then return nil end
-            local cam = workspace.CurrentCamera; if not cam then return hd end
+            local cam = workspace.CurrentCamera; if not cam then return nil end
+            local origin = cam.CFrame.Position
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
             params.FilterDescendantsInstances = { LocalPlayer.Character, cam }
-            local origin = cam.CFrame.Position
-            local dir    = (hd.Position - origin)
-            local res    = workspace:Raycast(origin, dir, params)
-            if not res then return hd end
-            if res.Instance and res.Instance:IsDescendantOf(c) then return hd end
+            -- Tenta várias partes: se qualquer uma tiver linha de visão, o alvo é válido.
+            local candidates = { "Head", "HumanoidRootPart", "UpperTorso", "Torso", "LowerTorso" }
+            for _, nm in ipairs(candidates) do
+                local part = c:FindFirstChild(nm)
+                if part then
+                    local dir = (part.Position - origin)
+                    local res = workspace:Raycast(origin, dir, params)
+                    if not res then return part end
+                    if res.Instance and res.Instance:IsDescendantOf(c) then return part end
+                end
+            end
             return nil
         end
 
@@ -12689,8 +12700,8 @@ end)
                     local c = pl.Character
                     local h = c and c:FindFirstChildOfClass("Humanoid")
                     if not h or h.Health <= 0 then break end
-                    local hd = _visibleHead(pl); if not hd then break end
-                    local d = (hd.Position - origin).Magnitude
+                    local part = _anyBodyVisible(pl); if not part then break end
+                    local d = (part.Position - origin).Magnitude
                     if d < bestD then bestD = d; best = pl end
                 until true
             end
@@ -12705,9 +12716,12 @@ end)
 
                 repeat
                     if not Config.Misc.SilentAim then break end
+                    -- Aceita MB1 real OU sinal virtual do TriggerBot (janela de 250ms).
+                    local virtualLive = _G.EclipseMB1Virtual
+                        and (tick() < (_G.EclipseMB1VirtualUntil or 0))
                     local pressed = _mb1Held
                         or (UIS.IsMouseButtonPressed and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1))
-                        or _G.EclipseMB1Virtual
+                        or virtualLive
                     if not pressed then break end
                     if not _alive() then break end
                     if _isBuyPeriod() then break end
