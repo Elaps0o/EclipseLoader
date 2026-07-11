@@ -919,8 +919,8 @@ local _EclipseConfigLoading = false
 
 _ECLIPSE_AUTOCONFIG_DIR  = "EclipseHub"
 _ECLIPSE_AUTOCONFIG_EXT  = ".ehcfg"
-_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v17" .. _ECLIPSE_AUTOCONFIG_EXT
-_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v17" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_PATH = _ECLIPSE_AUTOCONFIG_DIR .. "/autosave_v18" .. _ECLIPSE_AUTOCONFIG_EXT
+_ECLIPSE_AUTOCONFIG_BASENAME = "autosave_v18" .. _ECLIPSE_AUTOCONFIG_EXT
 pcall(function()
     if type(delfile) == "function" and type(isfile) == "function" then
         for _, old in ipairs({
@@ -932,6 +932,7 @@ pcall(function()
             "EclipseHub/autosave_v14.ehcfg",
             "EclipseHub/autosave_v15.ehcfg",
             "EclipseHub/autosave_v16.ehcfg",
+            "EclipseHub/autosave_v17.ehcfg",
         }) do
             if isfile(old) then pcall(delfile, old) end
         end
@@ -3589,7 +3590,8 @@ function ensureC4UI()
     dot.Font = Enum.Font.Code; dot.TextSize = 13
     dot.TextColor3 = Color3.fromRGB(255, 90, 60)
     dot.TextXAlignment = Enum.TextXAlignment.Left
-    dot.Text = "●"
+    dot.Text = ""
+    dot.Visible = false
     dot.ZIndex = 61
 
     local text = Instance.new("TextLabel", f)
@@ -3659,18 +3661,20 @@ function C4Show(status, timeText, sub, color)
     ensureC4UI()
     if not C4UI.frame then return end
 
+    local caret = "<font color='rgb(180,110,255)'>▾</font>  "
+    local function head(t) return caret .. "<font color='rgb(210,140,255)'><b>" .. t .. "</b></font>" end
     local rich
     if status == "PLANTED" then
-        rich = string.format("<b>C4</b>  %s", tostring(timeText or ""))
+        rich = head("C4") .. "   " .. tostring(timeText or "")
     elseif status == "DEFUSING" then
         local who = (sub and sub ~= "" and (" · " .. sub)) or ""
-        rich = string.format("<b>DEFUSING</b>  %s%s", tostring(timeText or ""), who)
-    elseif status == "BOMB DEFUSED"   then rich = "<b>BOMB DEFUSED</b>"
-    elseif status == "BOMB DETONATED" then rich = "<b>BOMB DETONATED</b>"
-    elseif status == "BOMB LOST"      then rich = "<b>BOMB LOST</b>  signal lost"
-    elseif status == "TIME UP"        then rich = "<b>TIME UP</b>  fuse ended"
+        rich = head("DEFUSING") .. "   " .. tostring(timeText or "") .. who
+    elseif status == "BOMB DEFUSED"   then rich = head("BOMB DEFUSED")
+    elseif status == "BOMB DETONATED" then rich = head("BOMB DETONATED")
+    elseif status == "BOMB LOST"      then rich = head("BOMB LOST") .. "   signal lost"
+    elseif status == "TIME UP"        then rich = head("TIME UP") .. "   fuse ended"
     else
-        rich = string.format("<b>C4</b>  %s", tostring(timeText or ""))
+        rich = head("C4") .. "   " .. tostring(timeText or "")
     end
 
     C4UI.text.Text = rich
@@ -5775,8 +5779,15 @@ function _applyGloveSkinCore(gloveType, gloveSkin)
 
     local gf = SkinsFolder:FindFirstChild(gloveType); if not gf then return end
     local gs = gf:FindFirstChild(gloveSkin);          if not gs then return end
-    local cf = gs:FindFirstChild("Camera");           if not cf then return end
-    local fn = cf:FindFirstChild("Factory New");      if not fn then return end
+    local cf = gs:FindFirstChild("Camera") or gs
+    local fn = cf:FindFirstChild("Factory New")
+        or cf:FindFirstChild("Minimal Wear")
+        or cf:FindFirstChild("Field-Tested")
+        or cf:FindFirstChild("Well-Worn")
+        or cf:FindFirstChild("Battle-Scarred")
+        or cf
+    if not fn then return end
+
 
     pcall(_saveOriginalSA, lg); pcall(_saveOriginalSA, rg)
     for _, old in pairs(lg:GetChildren()) do if old:IsA("SurfaceAppearance") then old:Destroy() end end
@@ -5835,8 +5846,15 @@ function _applyWeaponSkinCore(model, skin)
 
     local wsf = SkinsFolder:FindFirstChild(ewn); if not wsf then return end
     local sf  = wsf:FindFirstChild(sel);         if not sf  then return end
-    local cf  = sf:FindFirstChild("Camera");     if not cf  then return end
-    local fn  = cf:FindFirstChild("Factory New");if not fn  then return end
+    local cf  = sf:FindFirstChild("Camera") or sf
+    local fn  = cf:FindFirstChild("Factory New")
+        or cf:FindFirstChild("Minimal Wear")
+        or cf:FindFirstChild("Field-Tested")
+        or cf:FindFirstChild("Well-Worn")
+        or cf:FindFirstChild("Battle-Scarred")
+        or cf
+    if not fn then return end
+
 
     for _, sa in pairs(fn:GetChildren()) do
         if sa:IsA("SurfaceAppearance") then
@@ -9319,7 +9337,8 @@ end
 -- hides viewmodel weapons/knives/gloves/arms via LocalTransparencyModifier).
 -- Toggle lives in Movement groupbox (no sliders). Restores on disable/unload.
 -- ============================================================
-Config.Misc.ThirdPerson = false
+-- Do NOT reset Config.Misc.ThirdPerson here — autoconfig restores the saved
+-- toggle state on load; overwriting to false would clobber the user's setting.
 do
     local RunS = game:GetService("RunService")
     local UIS  = game:GetService("UserInputService")
@@ -9462,15 +9481,7 @@ do
         if not model or not model.Parent then return end
         if _wh and _wh.Parent ~= model then pcall(function() _wh:Destroy() end); _wh = nil end
         if _whRim and _whRim.Parent ~= model then pcall(function() _whRim:Destroy() end); _whRim = nil end
-        -- Main fill (AlwaysOnTop) — cobre a arma inteira com fill sólido bonito.
-        if not _wh then
-            _wh = Instance.new("Highlight")
-            _wh.Name = "EclipseWH"
-            _wh.Adornee = model
-            _wh.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            _wh.Parent = model
-        end
-        -- Second highlight = extra glow layer (Occluded) for depth.
+        -- Rim externo (Occluded) — brilho suave estilo bloom/gaussian atrás.
         if not _whRim then
             _whRim = Instance.new("Highlight")
             _whRim.Name = "EclipseWHRim"
@@ -9478,20 +9489,29 @@ do
             _whRim.DepthMode = Enum.HighlightDepthMode.Occluded
             _whRim.Parent = model
         end
+        -- Outline fino visível (AlwaysOnTop) — sem fill sólido, sem blob roxo.
+        if not _wh then
+            _wh = Instance.new("Highlight")
+            _wh.Name = "EclipseWH"
+            _wh.Adornee = model
+            _wh.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            _wh.Parent = model
+        end
         local a = math.clamp((inten or 1), 0.2, 1.5)
         pcall(function()
-            -- Fill principal preenche a arma toda (transparência baixa = mais sólido).
+            -- Sem fill, so contorno brilhante — evita a mancha roxa cobrindo a arma.
+            _wh.FillTransparency    = 1
             _wh.FillColor           = color
             _wh.OutlineColor        = color
-            _wh.FillTransparency    = math.clamp(0.55 - a * 0.30, 0.10, 0.75)
-            _wh.OutlineTransparency = math.clamp(0.30 - a * 0.20, 0,    0.40)
-            -- Camada extra dá o brilho suave por trás de paredes.
+            _wh.OutlineTransparency = math.clamp(0.55 - a * 0.35, 0, 0.60)
+            -- Camada bloom: fill quase transparente + outline suave dá a sensação de blur/glow.
             _whRim.FillColor           = color
             _whRim.OutlineColor        = color
-            _whRim.FillTransparency    = math.clamp(0.80 - a * 0.25, 0.40, 0.95)
-            _whRim.OutlineTransparency = math.clamp(0.60 - a * 0.30, 0.10, 0.85)
+            _whRim.FillTransparency    = math.clamp(0.90 - a * 0.10, 0.70, 0.95)
+            _whRim.OutlineTransparency = math.clamp(0.75 - a * 0.25, 0.30, 0.90)
         end)
     end
+
 
     RunS.Heartbeat:Connect(function()
         if not scriptRunning then return end
@@ -9788,7 +9808,7 @@ TitleLbl.TextColor3 = Color3.new(1, 1, 1)
 TitleLbl.TextXAlignment = Enum.TextXAlignment.Left
 TitleLbl.TextYAlignment = Enum.TextYAlignment.Center
 TitleLbl.RichText = true
-TitleLbl.Text = '<font color="rgb(140,95,255)">●</font> <b>Spectators</b>'
+TitleLbl.Text = '<font color="rgb(180,110,255)">▾</font>  <font color="rgb(210,140,255)"><b>SPECTATORS: 0</b></font>'
 TitleLbl.ZIndex = 52
 
 Divider = Instance.new("Frame", SpecFrame)
@@ -9974,7 +9994,7 @@ task.spawn(function()
             local attrCount
             pcall(function() attrCount = LocalPlayer:GetAttribute("Spectators") end)
             local count = math.max(#names, tonumber(attrCount) or 0)
-            TitleLbl.Text = string.format("<b>Spectators</b>  <font color='rgb(180,180,180)'>%d</font>", count)
+            TitleLbl.Text = string.format('<font color="rgb(180,110,255)">▾</font>  <font color="rgb(210,140,255)"><b>SPECTATORS: %d</b></font>', count)
             specRebuild(names)
             SpecFrame.Size = UDim2.fromOffset(150, 23 + math.max(0, #names) * 16)
             local shouldShow = isGuiOpen() or (count > 0)
@@ -10468,8 +10488,10 @@ end)()
                 local tl = ch:FindFirstChildOfClass("TextLabel")
                 if tl then
                     tl.Font = Enum.Font.GothamBold; tl.TextSize = 11
-                    tl.TextColor3 = Color3.new(1, 1, 1)
-                    tl.Text = "Keybinds"; tl.TextXAlignment = Enum.TextXAlignment.Left
+                    tl.TextColor3 = Color3.fromRGB(210, 140, 255)
+                    tl.RichText = true
+                    tl.Text = '<font color="rgb(180,110,255)">▾</font>  <b>KEYBINDS</b>'
+                    tl.TextXAlignment = Enum.TextXAlignment.Left
                     tl.Position = UDim2.fromOffset(8, 0)
                     tl.Size = UDim2.new(1, -16, 1, 0)
                 end
@@ -10545,58 +10567,49 @@ end)()
             row.LayoutOrder = i; row.Parent = EX.KBList
             row.ZIndex = 53
 
-            local cap = Instance.new("Frame", row)
-            cap.BackgroundColor3 = Color3.fromRGB(38, 38, 42)
-            cap.BackgroundTransparency = 0.15
-            cap.BorderSizePixel = 0
-            cap.Position = UDim2.fromOffset(0, 2)
-            cap.Size = UDim2.fromOffset(0, 16) 
-            cap.ZIndex = 54
-            Instance.new("UICorner", cap).CornerRadius = UDim.new(0, 3)
-            local capStroke = Instance.new("UIStroke", cap)
-            capStroke.Color = Color3.fromRGB(70,70,78); capStroke.Thickness = 1; capStroke.Transparency = 0.35
-
-            local keyLbl = Instance.new("TextLabel", cap)
-            keyLbl.BackgroundTransparency = 1
-            keyLbl.Size = UDim2.new(1, 0, 1, 0)
-            keyLbl.Font = Enum.Font.GothamBold; keyLbl.TextSize = 10
-            keyLbl.TextColor3 = Color3.fromRGB(235,235,240)
-            keyLbl.Text = string.upper(keyText(e.key))
-            keyLbl.ZIndex = 55
-            local keyStr = keyLbl.Text
-            local capW = math.max(20, #keyStr * 7 + 10)
-            cap.Size = UDim2.fromOffset(capW, 16)
-
-            
-            local dot = Instance.new("TextLabel", row)
-            dot.BackgroundTransparency = 1
-            dot.Position = UDim2.fromOffset(capW + 4, 0)
-            dot.Size = UDim2.fromOffset(10, 20)
-            dot.Font = Enum.Font.GothamSemibold; dot.TextSize = 11
-            dot.TextColor3 = on and Color3.fromRGB(140, 95, 255) or Color3.fromRGB(210,210,215)
-            dot.TextTransparency = on and 0 or 0.4
-            dot.TextXAlignment = Enum.TextXAlignment.Center
-            dot.Text = "●"
-            dot.ZIndex = 54
-
+            -- Label esquerda
             local lbl = Instance.new("TextLabel", row)
             lbl.BackgroundTransparency = 1
-            lbl.Position = UDim2.fromOffset(capW + 14, 0)
-            lbl.Size = UDim2.new(1, -(capW + 14), 1, 0)
+            lbl.Position = UDim2.fromOffset(0, 0)
+            lbl.Size = UDim2.new(1, -70, 1, 0)
             lbl.Font = Enum.Font.GothamSemibold; lbl.TextSize = 11
-            lbl.TextColor3 = on and Color3.new(1,1,1) or Color3.fromRGB(150,150,155)
+            lbl.TextColor3 = on and Color3.fromRGB(230,230,235) or Color3.fromRGB(140,140,145)
             lbl.TextXAlignment = Enum.TextXAlignment.Left
+            lbl.TextTruncate = Enum.TextTruncate.AtEnd
             lbl.Text = e.label
             lbl.ZIndex = 54
 
+            -- Cap da tecla (vermelho/rosa)
+            local keyStr = string.upper(keyText(e.key))
+            local capW = math.max(16, #keyStr * 7 + 8)
+            local keyLbl = Instance.new("TextLabel", row)
+            keyLbl.BackgroundTransparency = 1
+            keyLbl.Position = UDim2.new(1, -(capW + 32), 0, 0)
+            keyLbl.Size = UDim2.fromOffset(capW, 20)
+            keyLbl.Font = Enum.Font.GothamBold; keyLbl.TextSize = 11
+            keyLbl.TextColor3 = Color3.fromRGB(255, 70, 90)
+            keyLbl.TextXAlignment = Enum.TextXAlignment.Right
+            keyLbl.Text = keyStr
+            keyLbl.ZIndex = 54
+
+            -- Status ON/OFF (roxo)
+            local stLbl = Instance.new("TextLabel", row)
+            stLbl.BackgroundTransparency = 1
+            stLbl.Position = UDim2.new(1, -28, 0, 0)
+            stLbl.Size = UDim2.fromOffset(28, 20)
+            stLbl.Font = Enum.Font.GothamBold; stLbl.TextSize = 11
+            stLbl.TextXAlignment = Enum.TextXAlignment.Right
+            stLbl.TextColor3 = on and Color3.fromRGB(210,140,255) or Color3.fromRGB(110,110,115)
+            stLbl.Text = on and "ON" or "OFF"
+            stLbl.ZIndex = 54
+
             row.Position = UDim2.fromOffset(-10, 0)
-            lbl.TextTransparency = 1; keyLbl.TextTransparency = 1
-            cap.BackgroundTransparency = 1
+            lbl.TextTransparency = 1; keyLbl.TextTransparency = 1; stLbl.TextTransparency = 1
             TweenService:Create(row, TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
                 { Position = UDim2.fromOffset(0, 0) }):Play()
-            TweenService:Create(cap, TweenInfo.new(0.18), { BackgroundTransparency = 0.15 }):Play()
-            TweenService:Create(lbl, TweenInfo.new(0.18), { TextTransparency = (on and 0 or 0.3) }):Play()
+            TweenService:Create(lbl, TweenInfo.new(0.18), { TextTransparency = 0 }):Play()
             TweenService:Create(keyLbl, TweenInfo.new(0.18), { TextTransparency = 0 }):Play()
+            TweenService:Create(stLbl, TweenInfo.new(0.18), { TextTransparency = 0 }):Play()
 
             table.insert(EX.KBRows, row)
         end
@@ -11902,16 +11915,45 @@ end)()
         local Rem = require(ReplicatedSt.Database.Security.Remotes)
         if Rem and Rem.UI and Rem.UI.UIPlayerKilled and Rem.UI.UIPlayerKilled.Listen then
             local conn = Rem.UI.UIPlayerKilled.Listen(function(info)
-                if type(info) ~= "table" or not _killFeedKillerIsLocal(info) then return end
+                if type(info) ~= "table" then return end
+                local myId = tostring(LocalPlayer.UserId)
+                local killerId = tostring(info.Killer or "")
+                local victimId = tostring(info.Victim or "")
+                if killerId == myId or victimId == myId then
+                    task.defer(_animateLocalKillName)
+                end
+                if not _killFeedKillerIsLocal(info) then return end
                 local vplr = _killFeedVictim(info)
                 if not vplr or vplr == LocalPlayer then return end
                 if IsAlly and IsAlly(vplr) then return end
                 _markLocalLethal(vplr)
                 local vchar = vplr.Character
                 if vchar then task.defer(function() pcall(_triggerLocalKillEffect, vplr, vchar) end) end
-                task.defer(_animateLocalKillName)
             end)
             if conn and typeof(conn)=="RBXScriptConnection" then table.insert(UnloadConnections, conn) end
+        end
+    end)
+
+    -- Raw fallback hook using the exact NetworkRemotes path the user provided,
+    -- in case Security.Remotes wrapper is unavailable. Fires anim when the
+    -- LocalPlayer is either the Killer or the Victim of the UIPlayerKilled event.
+    pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local nr = rs:FindFirstChild("NetworkRemotes")
+        local ui = nr and nr:FindFirstChild("UI")
+        local ev = ui and ui:FindFirstChild("UIPlayerKilled")
+        if ev and ev.OnClientEvent then
+            local conn = ev.OnClientEvent:Connect(function(info)
+                if type(info) ~= "table" then return end
+                if not Config.GlobalEnable or not Config.Visuals.KillNameAnim then return end
+                local myId = tostring(LocalPlayer.UserId)
+                local killerId = tostring(info.Killer or "")
+                local victimId = tostring(info.Victim or "")
+                if killerId == myId or victimId == myId then
+                    task.defer(_animateLocalKillName)
+                end
+            end)
+            if conn then table.insert(UnloadConnections, conn) end
         end
     end)
 
