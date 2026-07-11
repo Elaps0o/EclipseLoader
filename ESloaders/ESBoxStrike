@@ -4216,18 +4216,24 @@ local lastTrigger = 0
 function updateTriggerBot()
     if not Config.GlobalEnable or not Config.TriggerBot.Enabled or not IsAlive() then return end
     if tick() - lastTrigger < Config.TriggerBot.Delay then return end
-    -- If SilentAim is on, TriggerBot auto-fires silent shots at any visible
-    -- enemy (no aim required, no manual click).
+
+    -- When SilentAim is alive, TriggerBot only fires if there IS a visible
+    -- enemy the silent hook can deliver a bullet to. Prevents clicking on
+    -- empty air / walls.
     if Config.Misc and Config.Misc.SilentAim and _G.EclipseSilent then
         local S = _G.EclipseSilent
         if S.alive and not S.alive() then return end
-        local w = S.findWeapon and S.findWeapon()
-        if w and not (S.isMelee and S.isMelee(w)) and (rawget(w, "Rounds") or 0) > 0 then
-            local tgt = S.pick and S.pick()
-            if tgt then lastTrigger = tick(); pcall(S.send, tgt, w) end
-        end
+        local w = S.findWeapon and S.findWeapon() or nil
+        if not w then return end
+        if S.isMelee and S.isMelee(w) then return end
+        if (rawget(w, "Rounds") or 0) <= 0 then return end
+        local target = S.pick and S.pick() or nil
+        if not target then return end
+        lastTrigger = tick()
+        pcall(S.send, target, w)
         return
     end
+
     local fire = false
     if Config.TriggerBot.Mode == "HitChance" then
         if math.random(1,100) <= Config.TriggerBot.HitChance then fire = true end
@@ -4277,6 +4283,7 @@ function updateTriggerBot()
         end
     end
 end
+
 
 
 local ControllerCache = {}
@@ -8239,12 +8246,14 @@ EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=f
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
 EspGB:AddSlider("ESP_ChamsIntensity", { Text="INTENSITY", Default=1.0, Min=0.2, Max=3.0, Rounding=2, Compact=true,
     Callback=function(v) Config.ESP.ChamsIntensity = v end })
-Config.Misc.WeaponHighlightIntensity = 3.0 -- built-in max
+Config.Misc.WeaponHighlightIntensity = Config.Misc.WeaponHighlightIntensity or 1.0
 EspGB:AddToggle("ESP_WeaponChams", { Text="WEAPON CHAMS", Default=false,
     Callback=function(v) Config.Misc.WeaponHighlight = v end })
     :AddColorPicker("ESP_WeaponChamsCol", { Default=Config.Misc.WeaponHighlightColor or Color3.fromRGB(0,170,255),
         Title="Weapon Chams color",
         Callback=function(c) Config.Misc.WeaponHighlightColor = c end })
+EspGB:AddSlider("ESP_WeaponChamsIntensity", { Text="INTENSITY", Default=1.0, Min=0.2, Max=3.0, Rounding=2, Compact=true,
+    Callback=function(v) Config.Misc.WeaponHighlightIntensity = v end })
 
 Config.ESP.Footstep = Config.ESP.Footstep or false
 Config.ESP.FootstepColor = Config.ESP.FootstepColor or Color3.fromRGB(150, 95, 255)
@@ -8308,6 +8317,15 @@ ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=fu
 Config.Extras = Config.Extras or {}
 Config.Extras.BulletTracer = false
 function _drawTracer() end
+
+-- BULLET TRACER groupbox (logic wired later; groupbox created here so UI shows even if later block errors)
+Config.Visuals.BulletTracer = false
+Config.Visuals.BulletTracerColor = Color3.fromRGB(0, 200, 255)
+local BTGB = Tabs.Visuals:AddRightGroupbox("BULLET TRACER")
+BTGB:AddToggle("BT_Enable", { Text = "BULLET TRACER", Default = false,
+    Callback = function(v) Config.Visuals.BulletTracer = v end })
+    :AddColorPicker("BT_Color", { Default = Config.Visuals.BulletTracerColor, Title = "Tracer color",
+        Callback = function(c) Config.Visuals.BulletTracerColor = c end })
 
 
 
@@ -9138,20 +9156,13 @@ do
     else
         ASGB:AddToggle("AS_Enable", { Text = "AUTOSKILL", Default = false,
             Callback = function(v) Config.Misc.AutoSkill = (v and not EX_BLOCK_SILENT) end })
-            :AddKeyPicker("AS_Key", { Default = "J", SyncToggleState = true, Mode = "Toggle", Text = "AutoSkill" })
-        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYLL SPEED", Default = 25, Min = 1, Max = 60, Rounding = 0, Suffix = "",
+            :AddKeyPicker("AS_Key", { Default = "K", SyncToggleState = true, Mode = "Toggle", Text = "AutoSkill" })
+        ASGB:AddSlider("AS_Speed", { Text = "SPEED", Default = 25, Min = 1, Max = 60, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSpeed = v end })
-        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYLL SMOOTH", Default = 0.05, Min = 0, Max = 1, Rounding = 2, Suffix = "",
+        ASGB:AddSlider("AS_Smooth", { Text = "SMOOTH", Default = 0.05, Min = 0, Max = 1, Rounding = 2, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSmooth = v end })
-        ASGB:AddLabel("CHERNOBYL PART")
         Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 600
         Config.Misc.AutoSkillPart     = Config.Misc.AutoSkillPart or "Head"
-        SafeAddDropdown(ASGB, "AS_Part", {
-            Text = "",
-            Values = { "Head", "Neck", "Chest", "Torso", "Legs" },
-            Default = Config.Misc.AutoSkillPart,
-            Callback = function(v) Config.Misc.AutoSkillPart = v end,
-        })
         ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 600, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillDistance = v end })
         -- AutoSkill segue o TEAM CHECK global (Config.TeamCheck); sem toggle próprio.
@@ -9172,7 +9183,7 @@ do
     local TPGB = Tabs.Misc:AddLeftGroupbox("THIRD PERSON")
     TPGB:AddToggle("TP_Enable", { Text = "THIRD PERSON", Default = false,
         Callback = function(v) Config.Misc.ThirdPerson = v end })
-        :AddKeyPicker("TP_Key", { Default = "T", SyncToggleState = true, Mode = "Toggle", Text = "Third Person" })
+        :AddKeyPicker("TP_Key", { Default = "B", SyncToggleState = true, Mode = "Toggle", Text = "Third Person" })
 
     local _RS = game:GetService("ReplicatedStorage")
     local _CamCtrl = nil
@@ -9183,31 +9194,238 @@ do
         end
     end)
 
-    local _appliedTP = nil
+    -- Persistent third-person via a floating anchored Part used as
+    -- CameraSubject. This survives the game forcing first-person because
+    -- Roblox re-derives the camera from the subject every frame.
+    local RunSvc = game:GetService("RunService")
+    local TweenSvc = game:GetService("TweenService")
+    local _tpPart, _tpConn, _appliedTP = nil, nil, nil
+
+    -- Viewmodel hide state (non-destructive: transparencies + LocalTransparencyModifier).
+    -- Also tracks a cloned weapon welded to the character's right hand so the
+    -- third-person body actually shows the gun/knife/gloves.
+    local _hidden = {}          -- [Instance] = { field=old, ... }
+    local _tpClone = nil        -- Model cloned from viewmodel weapon
+    local _tpCloneWeld = nil
+
+    local function _saveAndHide(inst)
+        if _hidden[inst] then return end
+        if inst:IsA("BasePart") then
+            _hidden[inst] = { Transparency = inst.Transparency, LTM = inst.LocalTransparencyModifier }
+            pcall(function() inst.LocalTransparencyModifier = 1 end)
+            pcall(function() inst.Transparency = 1 end)
+        elseif inst:IsA("Decal") or inst:IsA("Texture") then
+            _hidden[inst] = { Transparency = inst.Transparency }
+            pcall(function() inst.Transparency = 1 end)
+        elseif inst:IsA("SurfaceAppearance") then
+            _hidden[inst] = { AlphaMode = inst.AlphaMode }
+            pcall(function() inst.AlphaMode = Enum.AlphaMode.Overlay end)
+        end
+    end
+
+    local function _restoreOne(inst, saved)
+        if not inst or not inst.Parent then return end
+        if inst:IsA("BasePart") then
+            pcall(function() inst.LocalTransparencyModifier = saved.LTM or 0 end)
+            pcall(function() inst.Transparency = saved.Transparency or 0 end)
+        elseif inst:IsA("Decal") or inst:IsA("Texture") then
+            pcall(function() inst.Transparency = saved.Transparency or 0 end)
+        elseif inst:IsA("SurfaceAppearance") then
+            pcall(function() inst.AlphaMode = saved.AlphaMode end)
+        end
+    end
+
+    local function _restoreAll()
+        for inst, saved in pairs(_hidden) do _restoreOne(inst, saved) end
+        _hidden = {}
+    end
+
+    -- Find every viewmodel candidate under the camera (Viewmodel, ViewModel,
+    -- Arms, Gloves, Hands, Knife, weapon models). We DO NOT destroy anything;
+    -- just make them invisible while third person is on.
+    local function _viewmodelRoots()
+        local out = {}
+        local cam = workspace.CurrentCamera; if not cam then return out end
+        for _, ch in ipairs(cam:GetChildren()) do
+            if ch:IsA("Model") or ch:IsA("Folder") then
+                out[#out+1] = ch
+            end
+        end
+        return out
+    end
+
+    local function _hideViewmodel()
+        for _, root in ipairs(_viewmodelRoots()) do
+            for _, d in ipairs(root:GetDescendants()) do
+                _saveAndHide(d)
+            end
+        end
+    end
+
+    local function _findVMWeaponModel()
+        local cam = workspace.CurrentCamera; if not cam then return nil end
+        for _, root in ipairs(cam:GetChildren()) do
+            -- viewmodel root that CONTAINS a weapon model as child
+            for _, sub in ipairs(root:GetChildren()) do
+                if sub:IsA("Model") then
+                    local n = (sub.Name or ""):lower()
+                    if n ~= "arms" and n ~= "gloves" and not n:find("hand") then
+                        return sub
+                    end
+                end
+            end
+            -- root itself could be the weapon
+            if root:IsA("Model") then
+                local n = (root.Name or ""):lower()
+                if n:find("knife") or n:find("gun") or n:find("rifle")
+                   or n:find("pistol") or n:find("smg") or n:find("weapon") then
+                    return root
+                end
+            end
+        end
+        return nil
+    end
+
+    local function _clearClone()
+        if _tpCloneWeld then pcall(function() _tpCloneWeld:Destroy() end); _tpCloneWeld = nil end
+        if _tpClone then pcall(function() _tpClone:Destroy() end); _tpClone = nil end
+    end
+
+    local function _spawnCloneOnHand()
+        _clearClone()
+        local ch = LocalPlayer.Character; if not ch then return end
+        local hand = ch:FindFirstChild("RightHand") or ch:FindFirstChild("Right Arm")
+        if not hand then return end
+        local vmw = _findVMWeaponModel(); if not vmw then return end
+        local ok, clone = pcall(function() return vmw:Clone() end)
+        if not ok or not clone then return end
+        clone.Name = "EclipseTPClone"
+        -- fully visible clone; unhide anything the source had hidden
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.Transparency = 0
+                d.LocalTransparencyModifier = 0
+                d.CanCollide = false
+                d.CanQuery = false
+                d.CanTouch = false
+                d.Massless = true
+                d.Anchored = false
+            elseif d:IsA("Decal") or d:IsA("Texture") then
+                d.Transparency = 0
+            end
+        end
+        local prim = clone.PrimaryPart or clone:FindFirstChildWhichIsA("BasePart", true)
+        if not prim then clone:Destroy(); return end
+        clone.PrimaryPart = prim
+        clone.Parent = ch
+        pcall(function()
+            clone:PivotTo(hand.CFrame * CFrame.new(0, -0.3, -0.5))
+        end)
+        local weld = Instance.new("Weld")
+        weld.Part0 = hand
+        weld.Part1 = prim
+        weld.C0 = CFrame.new(0, -0.3, -0.5)
+        weld.Parent = prim
+        _tpCloneWeld = weld
+        _tpClone = clone
+    end
+
+    local function _stopTP()
+        if _tpConn then _tpConn:Disconnect(); _tpConn = nil end
+        if _tpPart then pcall(function() _tpPart:Destroy() end); _tpPart = nil end
+        _clearClone()
+        _restoreAll()
+        pcall(function()
+            LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+            LocalPlayer.CameraMaxZoomDistance = 0.5
+            LocalPlayer.CameraMinZoomDistance = 0.5
+            local cam = workspace.CurrentCamera
+            if cam and LocalPlayer.Character then
+                cam.CameraSubject = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+            end
+            if _CamCtrl and _CamCtrl.setPerspective then _CamCtrl.setPerspective(true, false) end
+        end)
+    end
+
+    local function _startTP()
+        local ch = LocalPlayer.Character; if not ch then return end
+        local hrp = ch:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+        _stopTP()
+        _tpPart = Instance.new("Part")
+        _tpPart.Name = "EclipseTPAnchor"
+        _tpPart.Transparency = 1
+        _tpPart.Anchored = true
+        _tpPart.CanCollide = false
+        _tpPart.CanQuery = false
+        _tpPart.CanTouch = false
+        _tpPart.Size = Vector3.new(0.1,0.1,0.1)
+        _tpPart.CFrame = hrp.CFrame * CFrame.new(0,2,0)
+        _tpPart.Parent = ch
+        pcall(function()
+            if _CamCtrl and _CamCtrl.setPerspective then _CamCtrl.setPerspective(false, false) end
+            LocalPlayer.CameraMode = Enum.CameraMode.Classic
+            LocalPlayer.CameraMaxZoomDistance = 60
+            LocalPlayer.CameraMinZoomDistance = 60
+        end)
+        local cam = workspace.CurrentCamera
+        if cam then cam.CameraSubject = _tpPart end
+        _spawnCloneOnHand()
+        _hideViewmodel()
+        local reapplyN = 0
+        _tpConn = RunSvc.RenderStepped:Connect(function()
+            if not Config.Misc.ThirdPerson then return end
+            local c = LocalPlayer.Character
+            local r = c and c:FindFirstChild("HumanoidRootPart")
+            if not r or not _tpPart or not _tpPart.Parent then return end
+            _tpPart.CFrame = r.CFrame * CFrame.new(0,2,0)
+            local cm = workspace.CurrentCamera
+            if cm and cm.CameraSubject ~= _tpPart then cm.CameraSubject = _tpPart end
+            if LocalPlayer.CameraMaxZoomDistance < 60 then
+                LocalPlayer.CameraMode = Enum.CameraMode.Classic
+                LocalPlayer.CameraMaxZoomDistance = 60
+                LocalPlayer.CameraMinZoomDistance = 60
+            end
+            -- Re-hide viewmodel every ~6 frames (swaps repopulate it) and
+            -- refresh weapon clone if it disappeared or the equipped gun changed.
+            reapplyN = reapplyN + 1
+            if reapplyN % 6 == 0 then
+                _hideViewmodel()
+                if not _tpClone or not _tpClone.Parent then
+                    _spawnCloneOnHand()
+                else
+                    -- rebuild if the underlying viewmodel weapon changed name
+                    local vmw = _findVMWeaponModel()
+                    if vmw and vmw.Name ~= (_tpClone.Name:gsub("^EclipseTPClone$", vmw.Name)) then
+                        -- compare against stored source name via attribute
+                        local srcName = _tpClone:GetAttribute("SrcName")
+                        if srcName and srcName ~= vmw.Name then
+                            _spawnCloneOnHand()
+                            if _tpClone then _tpClone:SetAttribute("SrcName", vmw.Name) end
+                        elseif not srcName then
+                            _tpClone:SetAttribute("SrcName", vmw.Name)
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
     task.spawn(function()
         while scriptRunning do
-            task.wait(0.5)
+            task.wait(0.4)
             local want = Config.Misc.ThirdPerson and true or false
             if want ~= _appliedTP then
                 _appliedTP = want
-                pcall(function()
-                    if _CamCtrl and _CamCtrl.setPerspective then
-                        _CamCtrl.setPerspective(not want, false)
-                    end
-                    if want then
-                        LocalPlayer.CameraMode = Enum.CameraMode.Classic
-                        LocalPlayer.CameraMaxZoomDistance = 10
-                        LocalPlayer.CameraMinZoomDistance = 8
-                    else
-                        LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
-                        LocalPlayer.CameraMaxZoomDistance = 0.5
-                        LocalPlayer.CameraMinZoomDistance = 0.5
-                    end
-                end)
+                if want then _startTP() else _stopTP() end
             end
         end
     end)
+    LocalPlayer.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        if Config.Misc.ThirdPerson then _startTP() end
+    end)
 end
+
 
 -- ============================================================
 -- WEAPON HIGHLIGHT — premium glow on viewmodel weapon
@@ -9219,6 +9437,16 @@ do
         if _wh then pcall(function() _wh:Destroy() end); _wh = nil end
         if _whLight then pcall(function() _whLight:Destroy() end); _whLight = nil end
     end
+    local function _isKnifeName(n)
+        n = tostring(n or ""):lower()
+        return n:find("knife") ~= nil or n:find("bayonet") ~= nil
+            or n:find("karambit") ~= nil or n:find("butterfly") ~= nil
+            or n:find("stiletto") ~= nil or n:find("skeleton") ~= nil
+            or n:find("flip") ~= nil or n:find("gut") ~= nil or n:find("huntsman") ~= nil
+            or n:find("navaja") ~= nil or n:find("shadow") ~= nil or n:find("ursus") ~= nil
+            or n:find("talon") ~= nil or n:find("classic") ~= nil or n:find("paracord") ~= nil
+            or n:find("nomad") ~= nil or n:find("survival") ~= nil or n:find("m9") ~= nil
+    end
     local function _findVMWeapon()
         local cam = workspace.CurrentCamera; if not cam then return nil end
         local vm = cam:FindFirstChild("Viewmodel") or cam:FindFirstChild("ViewModel")
@@ -9227,6 +9455,7 @@ do
         for _, ch in ipairs(vm:GetChildren()) do
             local n = ch.Name:lower()
             if ch:IsA("Model") and n ~= "arms" and n ~= "gloves" and not n:find("hand") then
+                if _isKnifeName(ch.Name) then return nil end
                 return ch
             end
         end
@@ -9240,36 +9469,36 @@ do
         end
         local w = _findVMWeapon()
         if not w or not w.Parent then _clear(); return end
-        -- skip melee
-        local wn = (w.Name or ""):lower()
-        if wn:find("knife") or wn:find("bayonet") or wn:find("karambit") then _clear(); return end
         local col = Config.Misc.WeaponHighlightColor or Color3.fromRGB(0,170,255)
-        local inten = Config.Misc.WeaponHighlightIntensity or 1.0
+        local inten = tonumber(Config.Misc.WeaponHighlightIntensity) or 1.0
+        if inten < 0.2 then inten = 0.2 end
         if not _wh or _wh.Adornee ~= w then
             _clear()
             _wh = Instance.new("Highlight")
             _wh.Name = "EclipseWH"
             _wh.Adornee = w
-            _wh.FillTransparency = 0.6
-            _wh.OutlineTransparency = 0
             _wh.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             _wh.Parent = game:GetService("CoreGui")
             local anchor = w:FindFirstChildWhichIsA("BasePart", true)
             if anchor then
                 _whLight = Instance.new("PointLight")
                 _whLight.Name = "EclipseWHLight"
-                _whLight.Range = 6
                 _whLight.Parent = anchor
             end
         end
-        _wh.FillColor = col
-        _wh.OutlineColor = col
-        _wh.FillTransparency = math.clamp(0.8 - inten * 0.25, 0.15, 0.85)
+        -- Match ESP CHAMS visual style: solid fill + strong outline scaled by intensity.
+        local fillT = math.clamp(1 - (0.35 * inten), 0, 1)
+        local outT  = math.clamp(1 - (0.85 * inten), 0, 1)
+        _wh.FillColor        = col
+        _wh.OutlineColor     = col
+        _wh.FillTransparency    = fillT
+        _wh.OutlineTransparency = outT
         if _whLight then
             _whLight.Color = col
-            _whLight.Brightness = inten * 2.5
-            _whLight.Range = 4 + inten * 6
+            _whLight.Brightness = 2.5 * inten
+            _whLight.Range = 6 + 4 * inten
         end
+
     end)
 end
 
@@ -11082,43 +11311,6 @@ end)()
         EX.restoreAllSounds()
     end })
 
-    -- CUSTOM KILL SOUND — plays when LocalPlayer confirms a kill.
-    Config.Sounds.KillSoundEnabled = false
-    Config.Sounds.KillSoundPreset  = "Bell"
-    Config.Sounds.KillSoundVolume  = 1.0
-    local KILL_PRESETS = {
-        ["Bell"]     = "rbxassetid://3120909354",
-        ["Headshot"] = "rbxassetid://5153845714",
-        ["Boom"]     = "rbxassetid://6091847368",
-        ["Anime Hit"]= "rbxassetid://5153734734",
-        ["Kov Fire"] = "",
-    }
-    local KillGB = Tabs.Misc:AddRightGroupbox("CUSTOM KILL SOUND")
-    KillGB:AddToggle("KS_Enable", { Text="KILL SOUND", Default=false,
-        Callback=function(v) Config.Sounds.KillSoundEnabled = v end })
-    SafeAddDropdown(KillGB, "KS_Preset", {
-        Text="Preset", Values={"Bell","Headshot","Boom","Anime Hit","Kov Fire"},
-        Default=Config.Sounds.KillSoundPreset,
-        Callback=function(v) Config.Sounds.KillSoundPreset = v end,
-    })
-    KillGB:AddSlider("KS_Vol", { Text="Volume", Default=1.0, Min=0, Max=3, Rounding=2,
-        Callback=function(v) Config.Sounds.KillSoundVolume = v end })
-
-    _G.EclipsePlayKillSound = function()
-        if not Config.Sounds.KillSoundEnabled then return end
-        local id = KILL_PRESETS[Config.Sounds.KillSoundPreset]
-        if Config.Sounds.KillSoundPreset == "Kov Fire" then
-            local kf = EX and EX.SoundPresets and EX.SoundPresets["Kov Fire"]
-            if kf and kf.Id and kf.Id ~= "" then id = kf.Id end
-        end
-        if not id or id == "" then return end
-        local s = Instance.new("Sound")
-        s.SoundId = id
-        s.Volume = Config.Sounds.KillSoundVolume or 1.0
-        s.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or workspace
-        s:Play()
-        game:GetService("Debris"):AddItem(s, 5)
-    end
     end -- EX_LIMITED gate
 
 
@@ -11648,7 +11840,6 @@ end)()
                 if not vplr or vplr == LocalPlayer then return end
                 if IsAlly and IsAlly(vplr) then return end
                 _markLocalLethal(vplr)
-                if _G.EclipsePlayKillSound then pcall(_G.EclipsePlayKillSound) end
                 local vchar = vplr.Character
                 if vchar then task.defer(function() pcall(_triggerLocalKillEffect, vplr, vchar) end) end
 
@@ -12367,7 +12558,9 @@ end)
                         end
                         _sendKill(pl, w)
                         killed = killed + 1
+                        task.wait() -- yield between kills to avoid frame spikes
                     until true
+
                 end
                 if killed == 0 then _lastTarget = nil end
             until true
@@ -12495,6 +12688,30 @@ end)
         end
         return best
     end
+    -- Anti double-kill: if the crosshair is already on an enemy the natural
+    -- shot handles them; skip the silent redirect. Only fire silent when the
+    -- user shoots into empty space or geometry.
+    local function _crosshairOnEnemy()
+        local cam = workspace.CurrentCamera; if not cam then return false end
+        local origin = cam.CFrame.Position
+        local dir    = cam.CFrame.LookVector * 1500
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.FilterDescendantsInstances = { LocalPlayer.Character, cam }
+        local r = workspace:Raycast(origin, dir, rp)
+        if not r or not r.Instance then return false end
+        local m = r.Instance:FindFirstAncestorOfClass("Model")
+        if not m then return false end
+        local plr = Players:GetPlayerFromCharacter(m)
+        if not plr or plr == LocalPlayer then return false end
+        if not _IS_DEATHMATCH and Config.TeamCheck then
+            local mk, pk = _asTeamKey(LocalPlayer), _asTeamKey(plr)
+            if mk and pk and mk == pk then return false end
+        end
+        local h = m:FindFirstChildOfClass("Humanoid")
+        return h and h.Health > 0
+    end
+
     UIS.InputBegan:Connect(function(input, gpe)
         if gpe then return end
         if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
@@ -12503,9 +12720,12 @@ end)
         local w = _findEquippedWeapon(); if not w then return end
         if _isMeleeWeapon(w) then return end
         if (rawget(w, "Rounds") or 0) <= 0 then return end
+        -- Fires whether or not the crosshair is on an enemy: silent picks
+        -- the closest visible enemy and delivers the bullet.
         local target = _pickSilentTarget()
         if target then _sendKill(target, w) end
     end)
+
 
     -- Expose for TriggerBot integration: when SilentAim + TriggerBot are both
     -- on, TriggerBot auto-fires silent shots at any visible enemy (no aim).
@@ -12524,13 +12744,7 @@ end)()
 do
     local RunS = game:GetService("RunService")
     Config.Visuals = Config.Visuals or {}
-    Config.Visuals.BulletTracer = false
-    Config.Visuals.BulletTracerColor = Color3.fromRGB(0, 200, 255)
-    local TrGB = Tabs.Visuals:AddLeftGroupbox("BULLET TRACER", "zap")
-    TrGB:AddToggle("BT_Enable", { Text = "BULLET TRACER", Default = false,
-        Callback = function(v) Config.Visuals.BulletTracer = v end })
-        :AddColorPicker("BT_Color", { Default = Config.Visuals.BulletTracerColor, Title = "Tracer color",
-            Callback = function(c) Config.Visuals.BulletTracerColor = c end })
+    -- Groupbox + toggle already created at top-level (see BULLET TRACER groupbox above).
 
     local Debris = game:GetService("Debris")
     local function _spawnTracer(fromPos, toPos)
