@@ -5147,16 +5147,35 @@ function attachAsset(folder, arm, model, name, offset, ref)
     
     
     if name == "Glove" and target:IsA("BasePart") then
-        -- Calibrate glove to arm reference (Battle-Scarred Left Arm / Right Arm sizing)
-        local ref = _gloveReferenceFrom(SkinSystem.vm, arm) or _gloveReferenceFrom(Camera, arm)
-        local factor = 0.86
-        if ref and ref.Size and mesh.Size.X > 0 and mesh.Size.Y > 0 and mesh.Size.Z > 0 then
-            local calc = math.min(
-                (ref.Size.X * 0.94) / mesh.Size.X,
-                (ref.Size.Y * 0.94) / mesh.Size.Y,
-                (ref.Size.Z * 0.94) / mesh.Size.Z
-            )
-            if calc > 0.55 and calc < 1 then factor = calc end
+        -- Calibrate glove to arm reference. Cache per-arm so the factor is
+        -- STABLE across weapon swaps (knife viewmodels frequently lack a
+        -- native Glove child, which used to leave gloves oversized).
+        SkinSystem._gloveFactorCache = SkinSystem._gloveFactorCache or {}
+        local factor = SkinSystem._gloveFactorCache[arm]
+        if not factor then
+            local ref = _gloveReferenceFrom(SkinSystem.vm, arm)
+            if not (ref and ref.Size) then
+                pcall(function()
+                    for _, obj in ipairs(Camera:GetChildren()) do
+                        if obj ~= SkinSystem.vm then
+                            ref = _gloveReferenceFrom(obj, arm)
+                            if ref and ref.Size then break end
+                        end
+                    end
+                end)
+            end
+            if ref and ref.Size and mesh.Size.X > 0 and mesh.Size.Y > 0 and mesh.Size.Z > 0 then
+                local calc = math.min(
+                    (ref.Size.X * 0.94) / mesh.Size.X,
+                    (ref.Size.Y * 0.94) / mesh.Size.Y,
+                    (ref.Size.Z * 0.94) / mesh.Size.Z
+                )
+                if calc > 0.55 and calc < 1 then
+                    factor = calc
+                    SkinSystem._gloveFactorCache[arm] = factor
+                end
+            end
+            factor = factor or 0.86
         end
         _uniformScale(mesh, factor)
         local prev = SkinSystem.gloveScale or 1.0
