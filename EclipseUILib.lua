@@ -1019,7 +1019,13 @@ function Library:CreateWindow(cfg)
     cfg = cfg or {}
     local title = cfg.Title or "Eclipse"
     local sub = cfg.Subtitle or ""
-    local w, h = cfg.Size and cfg.Size.X or 780, cfg.Size and cfg.Size.Y or 520
+    local function _dim(v, d) if type(v) == "number" then return v elseif typeof(v) == "UDim" then return v.Offset elseif typeof(v) == "Vector2" then return v end return d end
+    local sz = cfg.Size
+    local w = (typeof(sz) == "UDim2" and sz.X.Offset) or (typeof(sz) == "Vector2" and sz.X) or (type(sz) == "table" and sz.X) or 780
+    local h = (typeof(sz) == "UDim2" and sz.Y.Offset) or (typeof(sz) == "Vector2" and sz.Y) or (type(sz) == "table" and sz.Y) or 520
+    if type(w) ~= "number" then w = 780 end
+    if type(h) ~= "number" then h = 520 end
+
 
     -- splash
     local splash = createSplash()
