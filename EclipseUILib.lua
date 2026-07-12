@@ -233,6 +233,22 @@ local function createSplash()
 end
 
 -- ============================================================================
+-- MARKDOWN -> RICHTEXT
+-- ============================================================================
+local function mdToRich(s)
+    s = tostring(s or "")
+    s = s:gsub("%*%*(.-)%*%*", "<b>%1</b>")
+    s = s:gsub("__(.-)__",     "<b>%1</b>")
+    s = s:gsub("%*(.-)%*",     "<i>%1</i>")
+    s = s:gsub("_(.-)_",       "<i>%1</i>")
+    s = s:gsub("~~(.-)~~",     "<s>%1</s>")
+    s = s:gsub("`([^`]+)`",    '<font face="RobotoMono"><b>%1</b></font>')
+    s = s:gsub("%[([^%]]+)%]%(([^%)]+)%)", "<u>%1</u>")
+    return s
+end
+Library._mdToRich = mdToRich
+
+-- ============================================================================
 -- NOTIFICATIONS
 -- ============================================================================
 local NotifyRoot
@@ -306,7 +322,8 @@ function Library:Notify(a, b)
         Position = UDim2.new(0, 20, 0, 8),
         Size = UDim2.new(1, -28, 0, 18),
         Font = THEME.FontFamilyBold,
-        Text = title,
+        RichText = true,
+        Text = mdToRich(title),
         TextColor3 = THEME.Text,
         TextSize = 13,
         TextXAlignment = Enum.TextXAlignment.Left,
@@ -319,7 +336,8 @@ function Library:Notify(a, b)
         Position = UDim2.new(0, 20, 0, 28),
         Size = UDim2.new(1, -28, 0, 30),
         Font = THEME.FontFamily,
-        Text = desc,
+        RichText = true,
+        Text = mdToRich(desc),
         TextColor3 = THEME.TextDim,
         TextSize = 12,
         TextXAlignment = Enum.TextXAlignment.Left,
@@ -328,6 +346,7 @@ function Library:Notify(a, b)
         TextTransparency = 1,
         Parent = card,
     })
+
 
     -- progress line (bottom)
     local prog = new("Frame", {
@@ -502,19 +521,28 @@ local function buildButton(gb, opts)
     return ctrl
 end
 
+
 local function buildLabel(gb, textOrOpts, maybeOpts)
     local text, opts
     if typeof(textOrOpts) == "table" then
         opts = textOrOpts; text = opts.Text or ""
     else
-        text = tostring(textOrOpts or ""); opts = maybeOpts or {}
+        text = tostring(textOrOpts or "")
+        if typeof(maybeOpts) == "table" then
+            opts = maybeOpts
+        elseif typeof(maybeOpts) == "boolean" then
+            opts = { DoesWrap = maybeOpts }
+        else
+            opts = {}
+        end
     end
 
     local lbl = new("TextLabel", {
         BackgroundTransparency = 1,
         Size = UDim2.new(1, 0, 0, 18),
         Font = THEME.FontFamily,
-        Text = text,
+        RichText = true,
+        Text = mdToRich(text),
         TextColor3 = THEME.TextDim,
         TextSize = 12,
         TextXAlignment = Enum.TextXAlignment.Left,
@@ -527,12 +555,13 @@ local function buildLabel(gb, textOrOpts, maybeOpts)
     end
 
     local ctrl = { Type = "Label", Instance = lbl, Value = text }
-    function ctrl:SetText(t) lbl.Text = t; self.Value = t; return self end
+    function ctrl:SetText(t) lbl.Text = mdToRich(t); self.Value = t; return self end
     function ctrl:SetVisible(v) lbl.Visible = v end
     function ctrl:AddColorPicker(idx, o) local cp = makeStubControl("ColorPicker", (o or {}).Default or Color3.new(1,1,1)); Library.Options[idx] = cp; return cp end
     function ctrl:AddKeyPicker(idx, o) local kp = makeStubControl("KeyPicker", (o or {}).Default or "None"); Library.Options[idx] = kp; return kp end
     return ctrl
 end
+
 
 local function buildDivider(gb)
     local line = new("Frame", {
