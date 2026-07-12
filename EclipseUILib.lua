@@ -152,64 +152,65 @@ local function createSplash()
 
     local card = new("Frame", {
         BackgroundColor3 = THEME.Panel,
-        Size = UDim2.fromOffset(340, 380),
+        Size = UDim2.fromOffset(240, 260),
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
         Parent = dim,
     })
-    corner(card, 14)
+    corner(card, 12)
     stroke(card, THEME.Stroke, 1)
 
     local logo = new("ImageLabel", {
         BackgroundTransparency = 1,
-        Size = UDim2.fromOffset(220, 220),
-        Position = UDim2.new(0.5, 0, 0, 30),
+        Size = UDim2.fromOffset(140, 140),
+        Position = UDim2.new(0.5, 0, 0, 20),
         AnchorPoint = Vector2.new(0.5, 0),
         Image = LOGO_URL,
         ScaleType = Enum.ScaleType.Fit,
         ImageTransparency = 1,
         Parent = card,
     })
-    corner(logo, 12)
+    corner(logo, 10)
     tween(logo, 0.4, nil, nil, { ImageTransparency = 0 })
 
     local title = new("TextLabel", {
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, -20, 0, 22),
-        Position = UDim2.new(0, 10, 0, 260),
+        Size = UDim2.new(1, -20, 0, 18),
+        Position = UDim2.new(0, 10, 0, 172),
         Font = THEME.FontFamilyBold,
         Text = "ECLIPSE HUB",
         TextColor3 = THEME.Text,
-        TextSize = 18,
+        TextSize = 15,
         Parent = card,
     })
 
     local sub = new("TextLabel", {
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, -20, 0, 16),
-        Position = UDim2.new(0, 10, 0, 284),
+        Size = UDim2.new(1, -20, 0, 14),
+        Position = UDim2.new(0, 10, 0, 192),
         Font = THEME.FontFamily,
         Text = "Loading...",
         TextColor3 = THEME.TextDim,
-        TextSize = 13,
+        TextSize = 11,
         Parent = card,
     })
 
     -- progress bar
     local barBg = new("Frame", {
         BackgroundColor3 = THEME.PanelAlt,
-        Size = UDim2.new(1, -40, 0, 4),
-        Position = UDim2.new(0, 20, 1, -32),
+        Size = UDim2.new(1, -32, 0, 3),
+        Position = UDim2.new(0, 16, 1, -24),
         Parent = card,
     })
-    corner(barBg, 4)
+    corner(barBg, 3)
     local bar = new("Frame", {
         BackgroundColor3 = THEME.AccentA,
         Size = UDim2.fromScale(0, 1),
         Parent = barBg,
     })
-    corner(bar, 4)
+    corner(bar, 3)
     purpleGradient(bar, 0)
+
 
     -- animate bar
     task.spawn(function()
@@ -223,7 +224,7 @@ local function createSplash()
     local function close()
         if not gui.Parent then return end
         tween(dim, 0.3, nil, nil, { BackgroundTransparency = 1 })
-        tween(card, 0.3, nil, nil, { Size = UDim2.fromOffset(340, 300) })
+        tween(card, 0.3, nil, nil, { Size = UDim2.fromOffset(240, 200) })
         tween(logo, 0.25, nil, nil, { ImageTransparency = 1 })
         task.wait(0.35)
         gui:Destroy()
@@ -919,10 +920,26 @@ end
 local Groupbox = {}
 Groupbox.__index = Groupbox
 
-function Groupbox:AddToggle(idx, opts)   return buildToggle(self, idx, opts) end
-function Groupbox:AddSlider(idx, opts)   return buildSlider(self, idx, opts) end
-function Groupbox:AddDropdown(idx, opts) return buildDropdown(self, idx, opts) end
-function Groupbox:AddInput(idx, opts)    return buildInput(self, idx, opts) end
+local function _injectSetDisabled(ctrl)
+    if not ctrl or type(ctrl) ~= "table" then return ctrl end
+    if type(ctrl.SetDisabled) ~= "function" then
+        function ctrl:SetDisabled(v)
+            self.Disabled = v and true or false
+            if self.Row then self.Row.Active = not self.Disabled end
+            if self.Instance and self.Instance:IsA("GuiObject") then self.Instance.Active = not self.Disabled end
+            return self
+        end
+    end
+    if type(ctrl.SetVisible) ~= "function" then
+        function ctrl:SetVisible(v) if self.Row then self.Row.Visible = v end; if self.Instance then self.Instance.Visible = v end end
+    end
+    return ctrl
+end
+function Groupbox:AddToggle(idx, opts)   return _injectSetDisabled(buildToggle(self, idx, opts)) end
+function Groupbox:AddSlider(idx, opts)   return _injectSetDisabled(buildSlider(self, idx, opts)) end
+function Groupbox:AddDropdown(idx, opts) return _injectSetDisabled(buildDropdown(self, idx, opts)) end
+function Groupbox:AddInput(idx, opts)    return _injectSetDisabled(buildInput(self, idx, opts)) end
+
 function Groupbox:AddButton(opts, cb)
     if typeof(opts) == "string" then opts = { Text = opts, Func = cb } end
     return buildButton(self, opts)
