@@ -21,25 +21,26 @@ local LP = Players.LocalPlayer
 -- THEME  (heavy purple + black)
 -- ============================================================================
 local THEME = {
-    Background      = Color3.fromRGB(10, 8, 16),
-    BackgroundAlt   = Color3.fromRGB(14, 11, 22),
-    Panel           = Color3.fromRGB(18, 14, 28),
-    PanelAlt        = Color3.fromRGB(24, 19, 38),
-    PanelHi         = Color3.fromRGB(32, 24, 50),
-    Stroke          = Color3.fromRGB(60, 40, 100),
-    StrokeSoft      = Color3.fromRGB(40, 28, 70),
-    Text            = Color3.fromRGB(235, 232, 245),
-    TextDim         = Color3.fromRGB(165, 155, 190),
-    TextMuted       = Color3.fromRGB(110, 100, 135),
-    AccentA         = Color3.fromRGB(139, 60, 255),   -- deep purple
-    AccentB         = Color3.fromRGB(196, 102, 255),  -- bright violet
-    AccentC         = Color3.fromRGB(89, 30, 200),    -- dark purple
+    Background      = Color3.fromRGB(22, 22, 26),
+    BackgroundAlt   = Color3.fromRGB(28, 28, 34),
+    Panel           = Color3.fromRGB(34, 34, 40),
+    PanelAlt        = Color3.fromRGB(42, 42, 50),
+    PanelHi         = Color3.fromRGB(54, 54, 64),
+    Stroke          = Color3.fromRGB(70, 70, 82),
+    StrokeSoft      = Color3.fromRGB(48, 48, 58),
+    Text            = Color3.fromRGB(236, 236, 240),
+    TextDim         = Color3.fromRGB(170, 170, 180),
+    TextMuted       = Color3.fromRGB(120, 120, 130),
+    AccentA         = Color3.fromRGB(155, 92, 255),   -- purple accent
+    AccentB         = Color3.fromRGB(196, 130, 255),  -- lighter violet
+    AccentC         = Color3.fromRGB(115, 60, 220),   -- deep purple
     Danger          = Color3.fromRGB(239, 68, 68),
     Success         = Color3.fromRGB(94, 220, 130),
     FontFamily      = Enum.Font.Gotham,
     FontFamilyBold  = Enum.Font.GothamBold,
     FontFamilyMed   = Enum.Font.GothamMedium,
 }
+
 
 local LOGO_URL = "rbxassetid://118820133561219"
 -- Fallback: original ChatGPT image URL as ImageLabel Image string
@@ -1120,16 +1121,40 @@ function Library:CreateWindow(cfg)
 
     local win = { Root = root, Tabs = tabs, ScreenGui = ROOT_GUI }
 
-    function win:AddTab(name)
+    function win:AddTab(name, iconName)
         local tabBtn = new("TextButton", {
-            Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = THEME.BackgroundAlt,
+            Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = THEME.BackgroundAlt,
             BorderSizePixel = 0, AutoButtonColor = false, Font = THEME.FontFamilyMed, TextSize = 12,
-            Text = name, TextColor3 = THEME.TextDim, TextXAlignment = Enum.TextXAlignment.Left, Parent = side,
+            Text = "", TextColor3 = THEME.TextDim, Parent = side,
         })
-        pad(tabBtn, 12, 6, 0, 0); corner(tabBtn, 5)
+        corner(tabBtn, 6)
         local ind = new("Frame", { Size = UDim2.new(0, 3, 0, 0), Position = UDim2.new(0, 2, 0.5, 0),
             AnchorPoint = Vector2.new(0, 0.5), BorderSizePixel = 0, Parent = tabBtn })
         corner(ind, 2); gradient(ind, ColorSequence.new(THEME.AccentA, THEME.AccentB), 90)
+
+        -- lucide icon
+        local iconImg
+        if iconName then
+            iconImg = new("ImageLabel", { Size = UDim2.fromOffset(16, 16), Position = UDim2.fromOffset(12, 8),
+                BackgroundTransparency = 1, ImageColor3 = THEME.TextDim,
+                ScaleType = Enum.ScaleType.Fit, Parent = tabBtn })
+            task.spawn(function()
+                local a = Library:Lucide(iconName, 48)
+                if a and iconImg and iconImg.Parent then
+                    iconImg.Image = a.Url
+                    if a.ImageRectSize then iconImg.ImageRectSize = a.ImageRectSize end
+                    if a.ImageRectOffset then iconImg.ImageRectOffset = a.ImageRectOffset end
+                end
+            end)
+        end
+        local textOffset = iconName and 34 or 12
+        local label = new("TextLabel", {
+            Size = UDim2.new(1, -textOffset - 6, 1, 0), Position = UDim2.fromOffset(textOffset, 0),
+            BackgroundTransparency = 1, Font = THEME.FontFamilyMed, TextSize = 12,
+            Text = name, TextColor3 = THEME.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = tabBtn,
+        })
+
 
         local page = new("ScrollingFrame", {
             Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
@@ -1147,7 +1172,7 @@ function Library:CreateWindow(cfg)
         new("UIListLayout", { Padding = UDim.new(0, 10), Parent = left, SortOrder = Enum.SortOrder.LayoutOrder })
         new("UIListLayout", { Padding = UDim.new(0, 10), Parent = right, SortOrder = Enum.SortOrder.LayoutOrder })
 
-        local tab = { Name = name, Btn = tabBtn, Page = page }
+        local tab = { Name = name, Btn = tabBtn, Page = page, Label = label, Icon = iconImg, Indicator = ind }
         function tab:AddLeftGroupbox(title) return makeGroupbox(left, title) end
         function tab:AddRightGroupbox(title) return makeGroupbox(right, title) end
         function tab:AddLeftTabbox() return { AddTab = function(_, n) return tab:AddLeftGroupbox(n) end } end
@@ -1170,27 +1195,23 @@ function Library:CreateWindow(cfg)
         if activeTab == tab then return end
         if activeTab then
             activeTab.Page.Visible = false
-            tween(activeTab.Btn, 0.15, nil, nil, { BackgroundColor3 = THEME.BackgroundAlt, TextColor3 = THEME.TextDim })
-            local oldInd = activeTab.Btn:FindFirstChildOfClass("Frame")
-            if oldInd then tween(oldInd, 0.15, nil, nil, { Size = UDim2.new(0, 3, 0, 0) }) end
+            tween(activeTab.Btn, 0.15, nil, nil, { BackgroundColor3 = THEME.BackgroundAlt })
+            if activeTab.Label then tween(activeTab.Label, 0.15, nil, nil, { TextColor3 = THEME.TextDim }) end
+            if activeTab.Icon then tween(activeTab.Icon, 0.15, nil, nil, { ImageColor3 = THEME.TextDim }) end
+            if activeTab.Indicator then tween(activeTab.Indicator, 0.15, nil, nil, { Size = UDim2.new(0, 3, 0, 0) }) end
         end
         activeTab = tab
         tab.Page.Visible = true
-        tween(tab.Btn, 0.15, nil, nil, { BackgroundColor3 = THEME.Panel, TextColor3 = THEME.Text })
-        local ind = tab.Btn:FindFirstChildOfClass("Frame")
-        if ind then tween(ind, 0.2, nil, nil, { Size = UDim2.new(0, 3, 0, 20) }) end
+        tween(tab.Btn, 0.15, nil, nil, { BackgroundColor3 = THEME.Panel })
+        if tab.Label then tween(tab.Label, 0.15, nil, nil, { TextColor3 = THEME.Text }) end
+        if tab.Icon then tween(tab.Icon, 0.15, nil, nil, { ImageColor3 = THEME.AccentB }) end
+        if tab.Indicator then tween(tab.Indicator, 0.2, nil, nil, { Size = UDim2.new(0, 3, 0, 20) }) end
         -- content slide-in animation
         tab.Page.Position = UDim2.new(0, 0, 0, 12)
         tab.Page.CanvasPosition = Vector2.new(0, 0)
-        for _, d in ipairs(tab.Page:GetDescendants()) do
-            if d:IsA("Frame") and d.BackgroundTransparency < 1 then
-                local orig = d.BackgroundTransparency
-                d.BackgroundTransparency = 1
-                tween(d, 0.35, nil, nil, { BackgroundTransparency = orig })
-            end
-        end
         tween(tab.Page, 0.25, Enum.EasingStyle.Quart, nil, { Position = UDim2.fromScale(0, 0) })
     end
+
 
     function win:Unload() Library:Unload() end
     function win:OnUnload(cb) table.insert(Library._Unloads, cb) end
