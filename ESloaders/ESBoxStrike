@@ -4795,7 +4795,7 @@ function _TW_InitSkinChangerHooks()
             local oGCM = Sk.GetCameraModel
             Sk.GetCameraModel = function(w, sk, ...)
                 if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning
-                    and _TW_LPActive() and _TW_CheckBaseKnife(w) then
+                    and w and _TW_CheckBaseKnife(w) then
                     local nk = Config.Skins.SelectedKnife
                     local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
                     local ok, result = pcall(oGCM, nk, ns, ...)
@@ -4806,12 +4806,11 @@ function _TW_InitSkinChangerHooks()
                 return nil
             end
         end
-        -- GetCharacterModel — hook the character/world knife too (Bankroll parity).
         if type(Sk.GetCharacterModel) == "function" then
             local oGChM = Sk.GetCharacterModel
             Sk.GetCharacterModel = function(w, sk, ...)
                 if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning
-                    and _TW_LPActive() and _TW_CheckBaseKnife(w) then
+                    and w and _TW_CheckBaseKnife(w) then
                     local nk = Config.Skins.SelectedKnife
                     local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
                     local ok, result = pcall(oGChM, nk, ns, ...)
@@ -4821,11 +4820,12 @@ function _TW_InitSkinChangerHooks()
                 if ok then return result end
                 return nil
             end
+        end
         if type(Vm) == "table" and type(Vm.new) == "function" then
             local oVN = Vm.new
             Vm.new = function(vc, w, sk, ...)
                 if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning
-                    and _TW_LPActive() and _TW_CheckBaseKnife(w) then
+                    and w and _TW_CheckBaseKnife(w) then
                     local nk = Config.Skins.SelectedKnife
                     local ns = Config.Skins.SelectedSkins[nk] or "Vanilla"
                     local ok, result = pcall(oVN, vc, nk, ns, ...)
@@ -4836,12 +4836,10 @@ function _TW_InitSkinChangerHooks()
                 return nil
             end
         end
-        end
-        -- GetGloves — real-time glove model/skin swap (Bankroll parity).
         if type(Sk.GetGloves) == "function" then
             local oGG = Sk.GetGloves
             Sk.GetGloves = function(g, sk, ...)
-                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning and _TW_LPActive() then
+                if Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning then
                     local gm, gs
                     for gt in pairs(GLOVES or {}) do
                         local s = Config.Skins.SelectedSkins[gt]
@@ -4859,6 +4857,7 @@ function _TW_InitSkinChangerHooks()
                 return nil
             end
         end
+
     end)
 end
 pcall(_TW_InitSkinChangerHooks)
