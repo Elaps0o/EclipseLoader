@@ -5816,12 +5816,19 @@ function _spawnViewmodelCore(knife, me)
 end
 
 function spawnViewmodel(knife)
-    if SkinSystem.spawned or not SkinSystem.scriptRunning then return end
-    local me = IsAlive(); if not me then return end
+    -- Bankroll-pure: no fake viewmodel cloning. The GetCameraModel /
+    -- GetCharacterModel / Vm.new / GetGloves hooks installed by
+    -- _TW_InitSkinChangerHooks make the GAME itself build the selected
+    -- knife/glove model on the natural equip/respawn path. Spawning our
+    -- own clone here (legacy Tripleware path) is what caused white/gray
+    -- knives, locked-Parent errors and the "old method" the user reported.
+    if not SkinSystem.scriptRunning then return end
     _sanitizeSkinConfig()
-    local ok, err = pcall(_spawnViewmodelCore, knife, me)
-    if not ok then warn("[Eclipse] Custom knife spawn failed: " .. tostring(err)) end
-    if not SkinSystem.spawned and SkinSystem.vm then pcall(function() SkinSystem.vm:Destroy() end); SkinSystem.vm=nil; restoreOriginalKnife() end
+    -- Tear down any legacy fake VM if one is still around.
+    if SkinSystem.vm then pcall(function() SkinSystem.vm:Destroy() end); SkinSystem.vm = nil end
+    -- Make sure the game's own knife is visible (undo any prior hide).
+    pcall(restoreOriginalKnife)
+    SkinSystem.spawned = true
 end
 
 function _findCameraBaseKnife()
