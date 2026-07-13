@@ -13931,81 +13931,17 @@ do
         local dummyRoot = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
             or model:FindFirstChild("Torso") or model:FindFirstChild("UpperTorso")
 
-        local function _isBodyMotor(m)
-            return m and m:IsA("Motor6D")
-                and m.Part0 and m.Part1
-                and _isBodyPartName(m.Part0.Name)
-                and _isBodyPartName(m.Part1.Name)
-        end
-
-        local srcMotorsByName, srcMotorsByPart = {}, {}
-        for _, m in ipairs(ch:GetDescendants()) do
-            if _isBodyMotor(m) then
-                srcMotorsByName[m.Name] = m
-                if m.Part1 then srcMotorsByPart[m.Part1.Name] = m end
-            end
-        end
-
-        local motorAliases = {
-            RootJoint      = { "RootJoint", "Root" },
-            Root           = { "Root", "RootJoint" },
-            Neck           = { "Neck" },
-            Waist          = { "Waist" },
-            LeftShoulder   = { "LeftShoulder", "Left Shoulder" },
-            RightShoulder  = { "RightShoulder", "Right Shoulder" },
-            LeftElbow      = { "LeftElbow" },
-            RightElbow     = { "RightElbow" },
-            LeftWrist      = { "LeftWrist" },
-            RightWrist     = { "RightWrist" },
-            LeftHip        = { "LeftHip", "Left Hip" },
-            RightHip       = { "RightHip", "Right Hip" },
-            LeftKnee       = { "LeftKnee" },
-            RightKnee      = { "RightKnee" },
-            LeftAnkle      = { "LeftAnkle" },
-            RightAnkle     = { "RightAnkle" },
-            ["Left Shoulder"]  = { "Left Shoulder", "LeftShoulder" },
-            ["Right Shoulder"] = { "Right Shoulder", "RightShoulder" },
-            ["Left Hip"]       = { "Left Hip", "LeftHip" },
-            ["Right Hip"]      = { "Right Hip", "RightHip" },
-        }
-
-        local function _sourceMotorFor(dm)
-            if not dm then return nil end
-            local same = srcMotorsByName[dm.Name]
-            if same then return same end
-            if dm.Part1 and srcMotorsByPart[dm.Part1.Name] then return srcMotorsByPart[dm.Part1.Name] end
-            for _, alias in ipairs(motorAliases[dm.Name] or {}) do
-                if srcMotorsByName[alias] then return srcMotorsByName[alias] end
-            end
-            return nil
-        end
-
-        local mirrorMotors = {}
-        for _, m in ipairs(model:GetDescendants()) do
-            if _isBodyMotor(m) then
-                mirrorMotors[#mirrorMotors + 1] = { dummy = m, source = _sourceMotorFor(m) }
-            end
-        end
-
-        -- Motor6D mirroring: copy every LP joint's Transform onto the matching
-        -- dummy joint. This drives the dummy off its own rig hierarchy, so
-        -- limbs stay glued to the correct parent and always animate exactly
-        -- like the LocalPlayer (no open arms / bent legs / T-pose).
-        local useMotorMirror = true
-        if useMotorMirror then
-            for _, p in ipairs(model:GetDescendants()) do
-                if p:IsA("BasePart") and not _isAccessoryPart(p) then
-                    p.Anchored = (p == dummyRoot)
-                    p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = false, false, false, true
-                end
-            end
-        end
-
-        -- Render-follow every dummy body part to the matching LP limb. This is
-        -- more accurate than physics welds for mixed R15 -> R6 overlays: no limb
-        -- lag, no falling pieces, no inverted weld solving, and the dummy copies
-        -- the LocalPlayer pose every frame exactly as seen in third person.
+        -- Visual pose relay: copy the FINAL rendered BasePart CFrames from the
+        -- LocalPlayer instead of trying to replay Motor6D.Transform on a mixed
+        -- R6/R15 rig.  This fixes the frozen R15 Woman/Mickey bodies and also
+        -- fixes Joker/Clown R6 right-arm inversion caused by R15 shoulder motor
+        -- orientation differences.  The original character still plays every
+        -- animation; the overlay simply draws on top of those exact poses.
         local syncParts = {}
+        local sourceParts = {}
+        for _, p in ipairs(ch:GetDescendants()) do
+            if p:IsA("BasePart") then sourceParts[p.Name] = p end
+        end
         local heightScale = tonumber(model:GetAttribute("EclipseCPMHeightScale")) or 1.0
         local function _offsetFor(dummyName, target)
             local tn = target and target.Name or ""
@@ -14028,43 +13964,73 @@ do
             if o then return CFrame.new(o * heightScale) end
             return CFrame.new()
         end
-        if not useMotorMirror then
-            for _, p in ipairs(model:GetDescendants()) do
-                if p:IsA("BasePart") and not _isAccessoryPart(p) and _isBodyPartName(p.Name) then
-                    local target = _lpLimb(ch, p.Name) or hrp
-                    p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.Massless =
-                        true, false, false, false, true
-                    syncParts[#syncParts + 1] = { part = p, target = target, offset = _offsetFor(p.Name, target) }
-                elseif p:IsA("BasePart") and not _isAccessoryPart(p) then
-                    -- Unknown loose body part — anchor to HRP to prevent falling.
-                    p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.Massless =
-                        true, false, false, false, true
-                    syncParts[#syncParts + 1] = { part = p, target = hrp, offset = CFrame.new() }
+
+        local function _firstPart(names)
+            for _, n in ipairs(names or {}) do
+                local p = sourceParts[n] or (ch and ch:FindFirstChild(n))
+                if p and p:IsA("BasePart") and p.Parent then return p end
+            end
+            return nil
+        end
+
+        local function _blendCF(a, b, alpha)
+            if a and b then return a.CFrame:Lerp(b.CFrame, alpha or 0.5) end
+            if a then return a.CFrame end
+            if b then return b.CFrame end
+            return nil
+        end
+
+        local function _targetCFrameFor(dummyName)
+            local exact = sourceParts[dummyName]
+            if exact and exact.Parent then return exact.CFrame, nil end
+
+            -- R6 overlay on an R15 local character.  Pick the closest animated
+            -- rendered limb, not the raw Motor6D, so right/left sides stay sane.
+            if dummyName == "Torso" then
+                local upper = _firstPart({ "UpperTorso", "Torso" })
+                local lower = _firstPart({ "LowerTorso", "Torso" })
+                return _blendCF(upper, lower, 0.35), nil
+            elseif dummyName == "Left Arm" then
+                local p = _firstPart({ "LeftUpperArm", "LeftLowerArm", "LeftHand", "Left Arm" })
+                return p and p.CFrame, p
+            elseif dummyName == "Right Arm" then
+                local p = _firstPart({ "RightUpperArm", "RightLowerArm", "RightHand", "Right Arm" })
+                return p and p.CFrame, p
+            elseif dummyName == "Left Leg" then
+                local p = _firstPart({ "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "Left Leg" })
+                return p and p.CFrame, p
+            elseif dummyName == "Right Leg" then
+                local p = _firstPart({ "RightUpperLeg", "RightLowerLeg", "RightFoot", "Right Leg" })
+                return p and p.CFrame, p
+            end
+
+            -- R15 overlay on an R6 local character (or any missing exact part).
+            local target = _lpLimb(ch, dummyName) or hrp
+            return target and target.CFrame, target
+        end
+
+        for _, p in ipairs(model:GetDescendants()) do
+            if p:IsA("BasePart") and not _isAccessoryPart(p) then
+                p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = true, false, false, false, true
+                if _isBodyPartName(p.Name) then
+                    local _, target = _targetCFrameFor(p.Name)
+                    syncParts[#syncParts + 1] = { part = p, name = p.Name, offset = _offsetFor(p.Name, target) }
+                else
+                    syncParts[#syncParts + 1] = { part = p, name = "HumanoidRootPart", offset = CFrame.new() }
                 end
+            elseif p:IsA("BasePart") then
+                p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = false, false, false, true
             end
         end
 
         local function _syncPose()
             if not (scriptRunning and _cpmActive and _overlay == model and ch and ch.Parent) then return end
-            if useMotorMirror then
-                if dummyRoot and dummyRoot.Parent and hrp and hrp.Parent then
-                    dummyRoot.CFrame = hrp.CFrame
-                    dummyRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                    dummyRoot.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-                end
-                for _, item in ipairs(mirrorMotors) do
-                    local dm, sm = item.dummy, item.source
-                    if dm and dm.Parent and sm and sm.Parent then
-                        dm.Transform = sm.Transform
-                    elseif dm and dm.Parent then
-                        dm.Transform = CFrame.new()
-                    end
-                end
-            else
-                for _, item in ipairs(syncParts) do
-                    local part, target = item.part, item.target
-                    if part and part.Parent and target and target.Parent then
-                        part.CFrame = target.CFrame * item.offset
+            for _, item in ipairs(syncParts) do
+                local part = item.part
+                if part and part.Parent then
+                    local cf = _targetCFrameFor(item.name)
+                    if cf then
+                        part.CFrame = cf * (item.offset or CFrame.new())
                         part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
                     end
@@ -15253,10 +15219,15 @@ end)()
         Aimbot_Key         = "Aim Assist",
         Trigger_Key        = "Trigger Bot",
         ESP_Key            = "Enable ESP",
+        Bhop_Key           = "Bunny Hop",
         BunnyHop_Key       = "Bunny Hop",
+        Strafe_Key         = "Auto Strafer",
         AutoStrafe_Key     = "Auto Strafer",
+        AS_Key             = "Auto Kill",
         AutoSkill_Key      = "Auto Kill",
         SilentAim_Key      = "Silent Aim",
+        AutoStop_Key       = "Auto Stop",
+        TP_Key             = "Third Person",
         ThirdPerson_Key    = "Third Person",
         WeaponHighlight_Key= "Weapon Highlight",
         SpectatorList_Key  = "Spectator List",
@@ -15291,11 +15262,15 @@ end)()
     -- Explicit picker -> toggle name map (covers cases where toggle name
     -- doesn't follow the *_Key -> *_Toggle convention).
     local KB_TOGGLE = {
+        AS_Key             = "AS_Enable",
         AutoSkill_Key      = "AS_Enable",
         SilentAim_Key      = "SilentAim_Toggle",
         AutoStop_Key       = "AutoStop_Toggle",
+        Bhop_Key           = "Bhop_Toggle",
         BunnyHop_Key       = "Bhop_Toggle",
+        Strafe_Key         = "Strafe_Toggle",
         AutoStrafe_Key     = "Strafe_Toggle",
+        TP_Key             = "ThirdPerson_Toggle",
         ThirdPerson_Key    = "ThirdPerson_Toggle",
         WeaponHighlight_Key= "WH_Toggle",
         SpectatorList_Key  = "Spec_Toggle",
@@ -15310,11 +15285,15 @@ end)()
     }
     -- Fallback: read Config values by picker name.
     local KB_CFG = {
+        AS_Key             = function() return Config.Misc.AutoSkill end,
         AutoSkill_Key      = function() return Config.Misc.AutoSkill end,
         SilentAim_Key      = function() return Config.Aim and Config.Aim.SilentAim end,
         AutoStop_Key       = function() return Config.Movement.AutoStop end,
+        Bhop_Key           = function() return Config.Movement.BunnyHop end,
         BunnyHop_Key       = function() return Config.Movement.BunnyHop end,
+        Strafe_Key         = function() return Config.Movement.AutoStrafe end,
         AutoStrafe_Key     = function() return Config.Movement.AutoStrafe end,
+        TP_Key             = function() return Config.Misc.ThirdPerson end,
         ThirdPerson_Key    = function() return Config.Misc.ThirdPerson end,
         WeaponHighlight_Key= function() return Config.Misc.WeaponHighlight end,
         SpectatorList_Key  = function() return Config.Misc.SpectatorList end,
