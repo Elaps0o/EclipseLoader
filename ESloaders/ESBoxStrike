@@ -12039,33 +12039,55 @@ MoveGB:AddDropdown("AutoStop_Options", {
 -- KeyPicker chain (gp=true) which drops the KeyPicker InputBegan fireState().
 -- This explicit listener toggles Config + UI directly, debounced per-key so
 -- if the picker also fires it becomes a no-op (150ms window).
+-- Failsafe keybind listener: neverlose's KeyPicker sometimes swallows the
+-- InputBegan (gp=true from its own input-capture chain) and the paired
+-- toggle never flips even with SyncToggleState=true. We wait one frame
+-- after a matching key press: if the toggle didn't change, flip it ourselves.
 task.spawn(function()
     local UIS = game:GetService("UserInputService")
-    local _kbDeb = {}
-    local function _run(togName, optName, cb, extra)
-        local opt = Library.Options and Library.Options[optName]
-        local tog = Library.Toggles and Library.Toggles[togName]
-        if not (opt and tog) then return end
-        local now = tick()
-        if _kbDeb[optName] and (now - _kbDeb[optName]) < 0.20 then return end
-        _kbDeb[optName] = now
-        local new = not (tog.Value == true)
-        pcall(function() tog:SetValue(new) end)
-        pcall(cb, new)
-        if extra then pcall(extra, new) end
-    end
+    local BINDS = {
+        { opt="Bhop_Key",     tog="Bhop_Toggle",     set=function(v) Config.Movement.BunnyHop = v end },
+        { opt="Strafe_Key",   tog="Strafe_Toggle",   set=function(v) Config.Movement.AutoStrafe = v end },
+        { opt="AutoStop_Key", tog="AutoStop_Toggle", set=function(v) Config.Movement.AutoStop = v end },
+        { opt="TP_Key",       tog="TP_Toggle",       set=function(v)
+            Config.Misc.ThirdPerson = v
+            if v then
+                pcall(function() if _G.EclipseTPEnable then _G.EclipseTPEnable() end end)
+                task.defer(function()
+                    local m = Config.Misc.CustomPlayerModel
+                    if m and m ~= "Off" and _G.EclipseApplyPlayerModel then pcall(_G.EclipseApplyPlayerModel, m) end
+                end)
+            else
+                pcall(function() if _G.EclipseCPMClear then _G.EclipseCPMClear() end end)
+                pcall(function() if _G.EclipseTPDisable then _G.EclipseTPDisable() end end)
+            end
+        end },
+    }
+    local _deb = {}
     UIS.InputBegan:Connect(function(input, gp)
         if not scriptRunning then return end
-        -- NOTE: Bhop_Key, Strafe_Key, AutoStop_Key and TP_Key all use
-        -- KeyPickers with SyncToggleState=true + Mode="Toggle", which means
-        -- the library ALREADY toggles the paired toggle (and fires its
-        -- Callback) on key press. Handling them here again caused a
-        -- double-flip on every keypress — the toggle turned on then instantly
-        -- back off, producing the "rapid reload / flicker" behavior on Bhop
-        -- and Auto Strafer. Keep this handler as a stub for future keys that
-        -- genuinely need side-effects beyond the toggle callback.
+        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        local key = input.KeyCode
+        for _, b in ipairs(BINDS) do
+            local opt = Library.Options and Library.Options[b.opt]
+            local tog = Library.Toggles and Library.Toggles[b.tog]
+            if opt and tog and opt.Value == key then
+                local now = tick()
+                if _deb[b.opt] and (now - _deb[b.opt]) < 0.25 then break end
+                local before = tog.Value == true
+                task.delay(0.05, function()
+                    local after = tog.Value == true
+                    if after == before then
+                        _deb[b.opt] = tick()
+                        local new = not before
+                        pcall(function() tog:SetValue(new) end)
+                        pcall(b.set, new)
+                    end
+                end)
+                break
+            end
+        end
     end)
-
 end)
 
 
@@ -13696,13 +13718,25 @@ do
             end)
             if ok and generated then model = _sanitizeGeneratedModel(generated, cfg, false) end
         elseif cfg.bodyType == "female" then
-            -- Woman bundle (239) — R6 with CharacterMesh. Executors often ignore
-            -- CharacterMesh applied via CreateHumanoidModelFromDescription, so
-            -- we build a proper R6 primitive rig and mount the ACTUAL woman
-            -- mesh files (extracted from the bundle assets) as SpecialMesh via
-            -- _applyR6Body, which guarantees the woman body renders.
-            model = _buildR6Rig(cfg)
-            _applyR6Body(model, cfg)
+            -- Woman bundle (239) is an R15 body — build via
+            -- CreateHumanoidModelFromDescription(R15). Applying bundle asset
+            -- IDs on an R6 rig loads empty meshes (previous "no body" bug).
+            local desc = _makeDescription(cfg)
+            pcall(function()
+                -- Force classic Woman proportions on top of the bundle body
+                -- so the rig doesn't inherit whatever the executor's default
+                -- HumanoidDescription had.
+                desc.BodyTypeScale   = 0
+                desc.ProportionScale = 0
+                desc.WidthScale      = 0.85
+                desc.DepthScale      = 0.90
+                desc.HeightScale     = 0.95
+                desc.HeadScale       = 0.95
+            end)
+            local ok, generated = pcall(function()
+                return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+            end)
+            if ok and generated then model = _sanitizeGeneratedModel(generated, cfg, false) end
         end
 
         if not model then
@@ -13953,10 +13987,11 @@ do
             end
         end
 
-        -- Always use direct CFrame body-part mirroring. Motor6D-only mirroring
-        -- leaves generated bundle rigs (Woman/Mickey) in T-pose when the LP rig
-        -- differs, causing open arms / broken legs.
-        local useMotorMirror = false
+        -- Motor6D mirroring: copy every LP joint's Transform onto the matching
+        -- dummy joint. This drives the dummy off its own rig hierarchy, so
+        -- limbs stay glued to the correct parent and always animate exactly
+        -- like the LocalPlayer (no open arms / bent legs / T-pose).
+        local useMotorMirror = true
         if useMotorMirror then
             for _, p in ipairs(model:GetDescendants()) do
                 if p:IsA("BasePart") and not _isAccessoryPart(p) then
@@ -14036,6 +14071,16 @@ do
                 end
             end
         end
+        -- Kill any animator on the dummy so it doesn't reset Motor6D.Transform
+        -- back to CFrame.new() every frame (that was the "T-pose / open arms").
+        for _, d in ipairs(model:GetDescendants()) do
+            if d:IsA("Animator") or d:IsA("AnimationController") then
+                pcall(function() d:Destroy() end)
+            end
+        end
+        local dHum = model:FindFirstChildOfClass("Humanoid")
+        if dHum then pcall(function() dHum.EvaluateStateMachine = false end) end
+
         _syncPose()
         if _syncConn then pcall(function() _syncConn:Disconnect() end) end
         _syncConn = connectSignal(RunService.RenderStepped:Connect(function()
@@ -17836,7 +17881,28 @@ end)
         local spd = math.rad(tonumber(Config.Misc.AntiAimSpeed) or 80)
         pcall(function()
             local pos = hrp.Position
+            -- Head/neck pitch helper: tilts ONLY the neck joint so the body
+            -- stays upright while the avatar "looks up/down".
+            local function _setNeckPitch(deg)
+                local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+                local neck  = torso and (torso:FindFirstChild("Neck") or torso:FindFirstChild("NeckAttachment"))
+                if torso then
+                    local motor = torso:FindFirstChild("Neck")
+                    if motor and motor:IsA("Motor6D") then
+                        if not _G.__EclipseNeckC0 then _G.__EclipseNeckC0 = motor.C0 end
+                        motor.C0 = _G.__EclipseNeckC0 * CFrame.Angles(math.rad(deg), 0, 0)
+                    end
+                end
+            end
+            local function _restoreNeck()
+                if not _G.__EclipseNeckC0 then return end
+                local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+                local motor = torso and torso:FindFirstChild("Neck")
+                if motor and motor:IsA("Motor6D") then motor.C0 = _G.__EclipseNeckC0 end
+            end
+
             if yaw == "Freeze" then
+                _restoreNeck()
                 local _st = _G.__EclipseAA or { mode = nil, yawRad = 0 }
                 if _st.mode ~= yaw then
                     local lookCF = (cam and cam.CFrame) or hrp.CFrame
@@ -17847,15 +17913,21 @@ end)
                 end
                 hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, _st.yawRad, 0)
             elseif yaw == "Up" then
-                -- Keep spinning yaw, tilt pitch up (like flicking mouse up).
-                hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
-                hrp.CFrame = CFrame.new(hrp.Position) * (hrp.CFrame - hrp.CFrame.Position) * CFrame.Angles(math.rad(-89), 0, 0)
+                -- Body stays upright + spinning; only the head pitches up.
+                hrp.CFrame = CFrame.new(pos) * (hrp.CFrame - pos) * CFrame.Angles(0, spd, 0)
+                -- Reset any prior pitch/roll on HRP itself.
+                local _, ry, _ = hrp.CFrame:ToOrientation()
+                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, ry, 0)
+                _setNeckPitch(-60)
                 _G.__EclipseAA = { mode = yaw, yawRad = 0 }
             elseif yaw == "Down" then
-                hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
-                hrp.CFrame = CFrame.new(hrp.Position) * (hrp.CFrame - hrp.CFrame.Position) * CFrame.Angles(math.rad(89), 0, 0)
+                hrp.CFrame = CFrame.new(pos) * (hrp.CFrame - pos) * CFrame.Angles(0, spd, 0)
+                local _, ry, _ = hrp.CFrame:ToOrientation()
+                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, ry, 0)
+                _setNeckPitch(60)
                 _G.__EclipseAA = { mode = yaw, yawRad = 0 }
             else -- Forward: continuous spin, upright
+                _restoreNeck()
                 hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
                 _G.__EclipseAA = { mode = yaw, yawRad = 0 }
             end
