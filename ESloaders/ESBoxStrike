@@ -13095,15 +13095,17 @@ do
     -- Outfit definitions (asset IDs from the user).
     -- bodyType: "female" uses the official Roblox Woman bundle body parts;
     -- "male" keeps the default square R6 block body.
-    -- Classic Roblox "Woman" bundle (239) R6 CharacterMesh IDs. These are the
-    -- ACTUAL Woman package meshes — smaller torso, thinner limbs — so the dummy
-    -- gets the true woman body size without any scale hack.
+    -- Classic Roblox "Woman" bundle (239).
+    -- `asset` = official catalog body-part asset that contains CharacterMesh.
+    -- `mesh`  = raw mesh-file fallback used when an executor fails GetObjects.
+    -- Previous builds used only the raw mesh file as an asset id, so GetObjects
+    -- returned no CharacterMesh and the dummy stayed square/blocky.
     local WOMAN_MESHES = {
-        Torso    = 27111894,
-        RightArm = 27111857,
-        LeftArm  = 27111419,
-        LeftLeg  = 27111863,
-        RightLeg = 27111882,
+        Torso    = { asset = 86499666, mesh = 27111894 },
+        RightArm = { asset = 86499698, mesh = 27111857 },
+        LeftArm  = { asset = 86499716, mesh = 27111419 },
+        LeftLeg  = { asset = 86499753, mesh = 27111863 },
+        RightLeg = { asset = 86499793, mesh = 27111882 },
     }
 
     local OUTFITS = {
@@ -13246,13 +13248,17 @@ do
                 desc.HatAccessory  = _csv(cfg.hat)
                 desc.FaceAccessory = _csv(cfg.face)
             end
+            local function _bodyAssetId(v)
+                if typeof(v) == "table" then return v.asset or v.assetId or v.id or v[1] end
+                return v
+            end
             if cfg.bodyAssets then
-                if cfg.bodyAssets.Head then desc.Head = cfg.bodyAssets.Head end
-                if cfg.bodyAssets.Torso then desc.Torso = cfg.bodyAssets.Torso end
-                if cfg.bodyAssets.RightArm then desc.RightArm = cfg.bodyAssets.RightArm end
-                if cfg.bodyAssets.LeftArm then desc.LeftArm = cfg.bodyAssets.LeftArm end
-                if cfg.bodyAssets.LeftLeg then desc.LeftLeg = cfg.bodyAssets.LeftLeg end
-                if cfg.bodyAssets.RightLeg then desc.RightLeg = cfg.bodyAssets.RightLeg end
+                if cfg.bodyAssets.Head then desc.Head = _bodyAssetId(cfg.bodyAssets.Head) end
+                if cfg.bodyAssets.Torso then desc.Torso = _bodyAssetId(cfg.bodyAssets.Torso) end
+                if cfg.bodyAssets.RightArm then desc.RightArm = _bodyAssetId(cfg.bodyAssets.RightArm) end
+                if cfg.bodyAssets.LeftArm then desc.LeftArm = _bodyAssetId(cfg.bodyAssets.LeftArm) end
+                if cfg.bodyAssets.LeftLeg then desc.LeftLeg = _bodyAssetId(cfg.bodyAssets.LeftLeg) end
+                if cfg.bodyAssets.RightLeg then desc.RightLeg = _bodyAssetId(cfg.bodyAssets.RightLeg) end
             end
             -- Both Woman and Mickey are real bundle bodies -> BodyTypeScale=1.00
             -- so Roblox emits the package meshes instead of blocky R15 limbs.
@@ -13267,79 +13273,53 @@ do
     end
 
     local function _applyR6Body(model, cfg)
-        -- R6 outfits can be either classic square bodies (Joker/Clown) or real
-        -- Roblox package bodies (Woman bundle 239).
-        --
-        -- IMPORTANT: `CharacterMesh.MeshId` expects the *mesh file* ID, NOT the
-        -- package asset ID (27111894, etc.). Setting the package ID directly
-        -- leaves MeshId=0, so the part renders as a blocky R6 block instead of
-        -- the woman body. We must load the asset with game:GetObjects and clone
-        -- the real CharacterMesh instance (which carries MeshId/BaseTextureId/
-        -- OverlayTextureId already resolved to file IDs).
+        -- Clean any prior mesh instances.
         for _, d in ipairs(model:GetDescendants()) do
             if d:IsA("CharacterMesh") then pcall(function() d:Destroy() end) end
-            if d:IsA("SpecialMesh") and d.Name == "EclipseWomanMesh" then pcall(function() d:Destroy() end) end
-        end
-        if not cfg.bodyAssets then return end
-        local bodyMap = {
-            Torso    = Enum.BodyPart.Torso,
-            RightArm = Enum.BodyPart.RightArm,
-            LeftArm  = Enum.BodyPart.LeftArm,
-            LeftLeg  = Enum.BodyPart.LeftLeg,
-            RightLeg = Enum.BodyPart.RightLeg,
-        }
-        local partMap = {
-            Torso    = "Torso",
-            RightArm = "Right Arm",
-            LeftArm  = "Left Arm",
-            LeftLeg  = "Left Leg",
-            RightLeg = "Right Leg",
-        }
-        for key, bodyPart in pairs(bodyMap) do
-            local assetId = cfg.bodyAssets[key]
-            if assetId then
-                local placedCM, meshId, baseTex = false, nil, nil
-                for _, obj in ipairs(_loadAssetChildren(assetId)) do
-                    if typeof(obj) ~= "Instance" then
-                        -- Some executors return raw strings/asset-delivery
-                        -- payloads from game:GetObjects for bundle IDs.
-                        -- Skip anything that isn't a real Instance.
-                    elseif obj:IsA("CharacterMesh") then
-                        meshId  = obj.MeshId
-                        baseTex = obj.BaseTextureId
-                        if not placedCM then
-                            obj.Name = "EclipseCPM_" .. key
-                            pcall(function() obj.BodyPart = bodyPart end)
-                            obj.Parent = model
-                            placedCM = true
-                        else
-                            pcall(function() obj:Destroy() end)
-                        end
-                    elseif obj:IsA("SpecialMesh") and not meshId then
-                        meshId = obj.MeshId; baseTex = obj.TextureId
-                        pcall(function() obj:Destroy() end)
-                    else
-                        pcall(function() obj:Destroy() end)
-                    end
-                end
-
-                -- Belt-and-suspenders: also drop a SpecialMesh on the actual
-                -- body part so the Woman mesh renders even when the engine
-                -- does not resolve the CharacterMesh (common on executors).
-                local partName = partMap[key]
-                local part = partName and model:FindFirstChild(partName)
-                if part and part:IsA("BasePart") and meshId and tostring(meshId) ~= "" and tostring(meshId) ~= "rbxassetid://0" then
-                    local sm = Instance.new("SpecialMesh")
-                    sm.Name = "EclipseWomanMesh"
-                    sm.MeshType = Enum.MeshType.FileMesh
-                    pcall(function() sm.MeshId = meshId end)
-                    if baseTex and tostring(baseTex) ~= "" then pcall(function() sm.TextureId = baseTex end) end
-                    sm.Scale = Vector3.new(1,1,1)
-                    sm.Parent = part
-                end
+            if d:IsA("SpecialMesh") and (d.Name == "EclipseWomanMesh" or d.Name == "EclipseWomanHead") then
+                pcall(function() d:Destroy() end)
             end
         end
+        if not cfg.bodyAssets then return end
+
+        -- Direct file-mesh IDs from the Roblox "Woman" package (bundle 239).
+        -- Applied as SpecialMesh(FileMesh) directly on each R6 body part — no
+        -- game:GetObjects, no InsertService, no CharacterMesh. Just works.
+        local WOMAN_FILE_MESH = {
+            ["Torso"]     = "rbxassetid://27111894",
+            ["Right Arm"] = "rbxassetid://27111857",
+            ["Left Arm"]  = "rbxassetid://27111419",
+            ["Left Leg"]  = "rbxassetid://27111863",
+            ["Right Leg"] = "rbxassetid://27111882",
+        }
+        -- Woman head mesh (catalog 10725626210 -> raw mesh file).
+        local WOMAN_HEAD_MESH = "rbxassetid://4489723472"
+
+        local function _makeMesh(part, meshId, textureId, name, scale)
+            if not (part and part:IsA("BasePart")) then return end
+            local sm = Instance.new("SpecialMesh")
+            sm.Name = name or "EclipseWomanMesh"
+            sm.MeshType = Enum.MeshType.FileMesh
+            pcall(function() sm.MeshId = meshId end)
+            if textureId then pcall(function() sm.TextureId = textureId end) end
+            sm.Scale = scale or Vector3.new(1, 1, 1)
+            sm.Parent = part
+        end
+
+        for partName, meshId in pairs(WOMAN_FILE_MESH) do
+            _makeMesh(model:FindFirstChild(partName), meshId, nil, "EclipseWomanMesh", Vector3.new(1, 1, 1))
+        end
+
+        -- Head: replace default R6 head mesh with Woman head.
+        local head = model:FindFirstChild("Head")
+        if head and head:IsA("BasePart") then
+            for _, m in ipairs(head:GetChildren()) do
+                if m:IsA("SpecialMesh") then pcall(function() m:Destroy() end) end
+            end
+            _makeMesh(head, WOMAN_HEAD_MESH, nil, "EclipseWomanHead", Vector3.new(1, 1, 1))
+        end
     end
+
 
 
     local function _findAccessoryAttachment(model, handle)
