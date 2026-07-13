@@ -10465,11 +10465,18 @@ PVGB:AddToggle("PV_BulletImpact", { Text="SHOW IMPACT", Default=false,
 --   LocalPlayer (either via a Player arg or via origin proximity to camera).
 --   Pooled neon parts, 0.14s fade, hard cap of 8. Zero namecall overhead.
 -- =========================================================================
-Config.Visuals.BulletTracer      = Config.Visuals.BulletTracer      or false
+Config.Visuals.BulletTracer      = false
 Config.Visuals.BulletTracerColor = Config.Visuals.BulletTracerColor or Color3.fromRGB(180, 90, 255)
 
 PVGB:AddToggle("PV_BulletTracer", { Text="BULLET TRACER", Default=false,
-    Callback=function(v) Config.Visuals.BulletTracer = v end })
+    Callback=function(v)
+        Config.Visuals.BulletTracer = v and true or false
+        if v and type(_G.EclipseInstallShootTracer) == "function" then
+            pcall(_G.EclipseInstallShootTracer)
+        elseif (not v) and type(_G.EclipseClearTracers) == "function" then
+            pcall(_G.EclipseClearTracers)
+        end
+    end })
     :AddColorPicker("PV_BulletTracerColor", {
         Default=Config.Visuals.BulletTracerColor,
         Callback=function(c) Config.Visuals.BulletTracerColor = c end })
@@ -10515,7 +10522,17 @@ do
         if #_pool < POOL_MAX then table.insert(_pool, p) end
     end
 
+    _G.EclipseClearTracers = function()
+        pcall(function()
+            if _container then
+                for _, ch in ipairs(_container:GetChildren()) do ch:Destroy() end
+            end
+        end)
+    end
+
     local function _drawTracer(a, b)
+        if not (Config and Config.Visuals and Config.Visuals.BulletTracer) then return end
+        if _G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil then return end
         if typeof(a) ~= "Vector3" or typeof(b) ~= "Vector3" then return end
         local d = b - a; local mag = d.Magnitude
         if mag < 0.5 or mag > 5000 then return end
@@ -10526,80 +10543,21 @@ do
             p.CFrame    = CFrame.lookAt(a + d*0.5, b)
             p.Transparency = 0
         end)
-        local start = tick()
-        local conn
-        conn = RunSvc.Heartbeat:Connect(function()
-            local t = (tick() - start) / LIFE
-            if (not p) or (not p.Parent) or t >= 1 then
-                if conn then conn:Disconnect() end
-                _release(p); return
-            end
-            pcall(function() p.Transparency = t end)
+        local tw
+        pcall(function()
+            tw = TweenService:Create(p, TweenInfo.new(LIFE, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), { Transparency = 1 })
+            tw:Play()
+        end)
+        task.delay(LIFE + 0.03, function()
+            pcall(function() if tw then tw:Cancel() end end)
+            _release(p)
         end)
     end
     _G.EclipseDrawTracer = _drawTracer
 
-    -- Hook VFX.CreateTracer: server broadcasts on every ShootWeapon accepted
-    task.spawn(function()
-        local ok, vfx = pcall(function()
-            return RS:WaitForChild("NetworkRemotes", 15):WaitForChild("VFX", 5)
-        end)
-        if not ok or not vfx then return end
-        local ct = vfx:FindFirstChild("CreateTracer")
-        if not (ct and ct:IsA("RemoteEvent")) then return end
-        pcall(function()
-            ct.OnClientEvent:Connect(function(...)
-                if true then return end -- disabled: rely on outgoing ShootWeapon hook
-                if not (Config and Config.Visuals and Config.Visuals.BulletTracer) then return end
-                -- Skip autoskill echoes (flag set right before FireServer)
-                if _G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil then
-                    return
-                end
-                local args = { ... }
-                local attacker, origin, endPos
-                for _, v in ipairs(args) do
-                    local ty = typeof(v)
-                    if ty == "Instance" then
-                        if v:IsA("Player") then
-                            attacker = v
-                        elseif v:IsA("Model") then
-                            local p = game:GetService("Players"):GetPlayerFromCharacter(v)
-                            if p then attacker = p end
-                        end
-                    elseif ty == "Vector3" then
-                        if not origin then origin = v
-                        elseif not endPos then endPos = v end
-                    elseif ty == "CFrame" then
-                        if not origin then origin = v.Position end
-                    elseif type(v) == "table" then
-                        for _, vv in pairs(v) do
-                            if typeof(vv) == "Vector3" then
-                                if not origin then origin = vv
-                                elseif not endPos then endPos = vv end
-                            elseif typeof(vv) == "CFrame" then
-                                if not origin then origin = vv.Position end
-                            elseif typeof(vv) == "Instance" and vv:IsA("Player") then
-                                attacker = vv
-                            end
-                        end
-                    end
-                end
-                -- LP-only filter: attacker must resolve to LocalPlayer.
-                -- Fallback: no attacker → accept if origin is near camera (first-person barrel).
-                local isLP = false
-                if attacker then
-                    isLP = (attacker == LocalPlayer)
-                else
-                    local cam = workspace.CurrentCamera
-                    if cam and origin and (origin - cam.CFrame.Position).Magnitude <= 15 then
-                        isLP = true
-                    end
-                end
-                if not isLP then return end
-                if origin and endPos then pcall(_drawTracer, origin, endPos) end
-            end)
-        end)
-    end)
+    -- No CreateTracer listener: that remote fires for every player and caused
+    -- FPS drops even when the toggle was off. Tracers are LP-only via the lazy
+    -- ShootWeapon hook installed below only after enabling the feature.
 end
 
 
@@ -15553,42 +15511,58 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- BULLET TRACER v2 — hook OUTGOING ShootWeapon (LP is always the
--- attacker) via __namecall. Draws origin → first hit position.
--- Skips AutoSkill echoes with the shared __EclipseSkipTracerUntil flag.
+-- BULLET TRACER v3 — lazy hook OUTGOING ShootWeapon only when enabled.
+-- No hook is installed while disabled, so it cannot cost FPS with the
+-- toggle off. Draws origin → first hit position and skips AutoSkill shots.
 -- ============================================================
 do
-    local hmm = rawget(_G, "hookmetamethod") or hookmetamethod
-    if type(hmm) ~= "function" then return end
-    local ok, oldNC = pcall(function()
+    local installed = false
+    _G.EclipseInstallShootTracer = function()
+        if installed then return end
+        installed = true
+        local ge = (getgenv and getgenv()) or _G
+        local hmm = (type(rawget(ge, "hookmetamethod")) == "function" and rawget(ge, "hookmetamethod")) or hookmetamethod
+        local ncc = (type(rawget(ge, "newcclosure")) == "function" and rawget(ge, "newcclosure")) or newcclosure or function(f) return f end
+        local gncm = (type(rawget(ge, "getnamecallmethod")) == "function" and rawget(ge, "getnamecallmethod")) or getnamecallmethod
+        if type(hmm) ~= "function" or type(gncm) ~= "function" then return end
         local orig
-        orig = hmm(game, "__namecall", function(self, ...)
-            local method = getnamecallmethod and getnamecallmethod() or ""
-            if (method == "FireServer" or method == "InvokeServer")
-               and typeof(self) == "Instance" and self.Name == "ShootWeapon"
-               and Config and Config.Visuals and Config.Visuals.BulletTracer then
-                if not (_G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil) then
-                    local packet = (select(1, ...))
-                    if type(packet) == "table" and type(packet.Bullets) == "table" then
-                        local b = packet.Bullets[1]
-                        if b and typeof(b.Origin) == "Vector3" then
-                            local endPos
-                            if type(b.Hits) == "table" and b.Hits[1] and typeof(b.Hits[1].Position) == "Vector3" then
-                                endPos = b.Hits[1].Position
-                            elseif typeof(b.Direction) == "Vector3" then
-                                endPos = b.Origin + b.Direction.Unit * 500
-                            end
-                            if endPos and type(_G.EclipseDrawTracer) == "function" then
-                                pcall(_G.EclipseDrawTracer, b.Origin, endPos)
+        local ok = pcall(function()
+            orig = hmm(game, "__namecall", ncc(function(self, ...)
+                if Config and Config.Visuals and Config.Visuals.BulletTracer
+                   and not (_G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil)
+                   and typeof(self) == "Instance" and self.Name == "ShootWeapon" then
+                    local method = gncm()
+                    if method == "FireServer" or method == "InvokeServer" then
+                        local packet = select(1, ...)
+                        if type(packet) == "table" then
+                            local bullets = rawget(packet, "Bullets")
+                            local b = type(bullets) == "table" and rawget(bullets, 1)
+                            local origin = type(b) == "table" and rawget(b, "Origin")
+                            if typeof(origin) == "Vector3" then
+                                local endPos
+                                local hits = rawget(b, "Hits")
+                                local h1 = type(hits) == "table" and rawget(hits, 1)
+                                if type(h1) == "table" and typeof(rawget(h1, "Position")) == "Vector3" then
+                                    endPos = rawget(h1, "Position")
+                                else
+                                    local dir = rawget(b, "Direction")
+                                    if typeof(dir) == "Vector3" and dir.Magnitude > 0 then
+                                        endPos = origin + dir.Unit * 500
+                                    end
+                                end
+                                if endPos and type(_G.EclipseDrawTracer) == "function" then
+                                    pcall(_G.EclipseDrawTracer, origin, endPos)
+                                end
                             end
                         end
                     end
                 end
-            end
-            return orig(self, ...)
+                return orig(self, ...)
+            end))
         end)
-        return orig
-    end)
+        if not ok then installed = false end
+    end
+
 end
 
 -- ============================================================
