@@ -13492,10 +13492,24 @@ do
         return model
     end
 
-    local function _sanitizeGeneratedModel(model, cfg)
+    local function _sanitizeGeneratedModel(model, cfg, keepCharacterMesh)
         if not model then return nil end
         model.Name = "CPMRig"
-        _stripBaseOutfit(model)
+        -- Custom stripper: unlike _stripBaseOutfit we can OPTIONALLY keep
+        -- CharacterMesh instances so the Woman bundle body (which is delivered
+        -- as R6 CharacterMesh, not R15 MeshParts) actually renders on the dummy
+        -- instead of falling back to blocky primitive parts.
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        if hum then
+            for _, acc in ipairs(hum:GetAccessories()) do pcall(function() acc:Destroy() end) end
+        end
+        for _, d in ipairs(model:GetDescendants()) do
+            if d:IsA("Shirt") or d:IsA("Pants") or d:IsA("ShirtGraphic") or d:IsA("BodyColors") then
+                pcall(function() d:Destroy() end)
+            elseif d:IsA("CharacterMesh") and not keepCharacterMesh then
+                pcall(function() d:Destroy() end)
+            end
+        end
         for _, d in ipairs(model:GetDescendants()) do
             if d:IsA("Script") or d:IsA("LocalScript") or d:IsA("ModuleScript") then
                 pcall(function() d:Destroy() end)
@@ -13511,7 +13525,6 @@ do
         end
         local hrp = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model:FindFirstChild("UpperTorso")
         if hrp and hrp:IsA("BasePart") then model.PrimaryPart = hrp end
-        local hum = model:FindFirstChildOfClass("Humanoid")
         if hum then
             pcall(function()
                 hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
@@ -13521,8 +13534,6 @@ do
             end)
         end
         pcall(function()
-            local old = model:FindFirstChildOfClass("BodyColors")
-            if old then old:Destroy() end
             local bc = Instance.new("BodyColors")
             bc.HeadColor3, bc.LeftArmColor3, bc.RightArmColor3 = cfg.skinColor, cfg.skinColor, cfg.skinColor
             bc.LeftLegColor3, bc.RightLegColor3, bc.TorsoColor3 = cfg.skinColor, cfg.skinColor, cfg.skinColor
@@ -13530,6 +13541,7 @@ do
         end)
         return model
     end
+
 
     local function _buildModel(name)
         local cfg = OUTFITS[name]; if not cfg then return nil end
@@ -13540,20 +13552,35 @@ do
 
         local model = nil
         if cfg.bodyType == "mickey" then
-            -- Steamboat Mouse is the only outfit that needs the R15 bundle path,
-            -- because its body is R15 meshparts. Female uses the Woman R6 bundle
-            -- (CharacterMesh) so it falls through to the R6 rig path below and
-            -- gets the true Woman proportions with clean limb mirroring.
+            -- Steamboat Mouse: R15 MeshParts. Strip CharacterMesh (there is none).
             local desc = _makeDescription(cfg)
             local ok, generated = pcall(function()
                 return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
             end)
-            if ok and generated then model = _sanitizeGeneratedModel(generated, cfg) end
+            if ok and generated then model = _sanitizeGeneratedModel(generated, cfg, false) end
+        elseif cfg.bodyType == "female" then
+            -- Woman bundle (239) is R6 with CharacterMesh. Ask Roblox to build
+            -- a REAL R6 rig with the woman body meshes attached — this copies
+            -- the actual woman torso/arms/legs/head instead of the blocky R6
+            -- primitives + manual CharacterMesh hack, which was landing meshes
+            -- on the wrong parts and producing a pasty, mismatched body.
+            local desc = _makeDescription(cfg)
+            local ok, generated = pcall(function()
+                return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R6)
+            end)
+            if ok and generated then
+                model = _sanitizeGeneratedModel(generated, cfg, true)
+            end
+            -- Fallback: if the executor blocks the API, rebuild manually so we
+            -- still get a woman-shaped rig instead of a T-pose block.
+            if not model then
+                model = _buildR6Rig(cfg)
+                _applyR6Body(model, cfg)
+            end
         end
 
         if not model then
-            -- Joker/Clown stay true R6 blocky. This is also the fallback if an
-            -- executor blocks CreateHumanoidModelFromDescription.
+            -- Joker/Clown: true blocky R6.
             model = _buildR6Rig(cfg)
             _applyR6Body(model, cfg)
             pcall(function()
@@ -13570,6 +13597,7 @@ do
         _cache[name] = model:Clone()
         return model
     end
+
 
 
     local function _inTool(inst)
@@ -17682,17 +17710,28 @@ end)
         local spd = math.rad(tonumber(Config.Misc.AntiAimSpeed) or 80)
         pcall(function()
             local pos = hrp.Position
+            -- Capture the LP look yaw once per mode-change so Up/Down/Freeze
+            -- lock to a stable facing instead of inheriting the spinning
+            -- CFrame from the previous Forward frame.
+            local _st = _G.__EclipseAA or { mode = nil, yawRad = 0 }
+            if _st.mode ~= yaw then
+                local lookCF = (cam and cam.CFrame) or hrp.CFrame
+                local lv = lookCF.LookVector
+                _st.yawRad = math.atan2(-lv.X, -lv.Z)
+                _st.mode = yaw
+                _G.__EclipseAA = _st
+            end
             if yaw == "Freeze" then
-                -- keep body still, camera preserved below
-                hrp.CFrame = CFrame.new(pos) * (hrp.CFrame - hrp.CFrame.Position)
+                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, _st.yawRad, 0)
             elseif yaw == "Up" then
-                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(math.rad(-89), 0, 0) * CFrame.Angles(0, spd, 0)
+                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, _st.yawRad, 0) * CFrame.Angles(math.rad(-89), 0, 0)
             elseif yaw == "Down" then
-                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(math.rad(89), 0, 0) * CFrame.Angles(0, spd, 0)
-            else -- Forward (default spin)
+                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, _st.yawRad, 0) * CFrame.Angles(math.rad(89), 0, 0)
+            else -- Forward: continuous spin
                 hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
             end
             if cam and camCF then cam.CFrame = camCF end
         end)
+
     end))
 end)()
