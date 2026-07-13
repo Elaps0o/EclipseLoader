@@ -3236,21 +3236,19 @@ local function _g3dSegment(i)
     return p
 end
 function _renderGrenade3D()
-    if not (Config and Config.GlobalEnable and Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning or Config.Grenade.ESP)) then
+    if not (Config and Config.GlobalEnable and Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning)) then
         _g3dHide(); return
     end
     -- Prediction: only while charging the throw (GPD.ShowNow), so it disappears
     -- as soon as the grenade leaves the hand. Warning/ESP: reflects any live grenade.
     local hasPred = Config.Grenade.Prediction and GPD and GPD.ShowNow and GPD.CachedPts and #GPD.CachedPts >= 2
-    local warnPts = ((Config.Grenade.Warning or Config.Grenade.ESP) and ECLIPSE and ECLIPSE._warn3DPts) or nil
+    local warnPts = (Config.Grenade.Warning and ECLIPSE and ECLIPSE._warn3DPts) or nil
     local hasWarn = warnPts and #warnPts >= 2
     if not (hasPred or hasWarn) then _g3dHide(); return end
     local pts = hasPred and GPD.CachedPts or warnPts
     local col
     if hasPred then
         col = Config.Grenade.LineColor or Color3.fromRGB(0,200,255)
-    elseif Config.Grenade.ESP then
-        col = Config.Grenade.ESPColor or Color3.fromRGB(255,180,60)
     else
         col = Config.Grenade.WarningColor or Color3.fromRGB(255,120,60)
     end
@@ -3283,7 +3281,7 @@ do
         _gAcc = _gAcc + dt
         if _gAcc < 0.05 then return end -- 20Hz cap
         _gAcc = 0
-        if not (Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning or Config.Grenade.ESP)) then return end
+        if not (Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning)) then return end
         pcall(_renderGrenade3D)
     end))
 end
@@ -5651,6 +5649,21 @@ function updateTriggerBot()
     local now = tick()
     if (now - _trigLastScan) < 0.033 then return end
     _trigLastScan = now
+    -- MELEE / KNIFE GATE: TriggerBot cannot fire a bullet with a knife equipped.
+    -- Without this early bail, the silent branch keeps raycasting every 33ms
+    -- and _doClick() spams mouse events while stabbing, causing severe FPS drop.
+    do
+        local find   = _G.EclipseAS_FindEquipped
+        local isMele = _G.EclipseAS_IsMelee
+        if type(find) == "function" and type(isMele) == "function" then
+            local ok, w = pcall(find)
+            if ok and w and isMele(w) then
+                _trigSilentCached = nil
+                _trigLastScan = now + 0.20
+                return
+            end
+        end
+    end
     local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
     local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
     if not isNoSpread and (now - lastTrigger) < delay then return end
@@ -6099,7 +6112,7 @@ function updateMovement()
         end
         local move = hum.MoveDirection
         local isMoving = move and move.Magnitude > 0
-        local isShooting = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        local isShooting = game:GetService("UserInputService"):IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
         local shouldStop = false
         if not isMoving then shouldStop = true end
         if isShooting then shouldStop = true end
@@ -10569,24 +10582,8 @@ WorldEspGB:AddToggle("Grenade_Pred", { Text="GRENADE PREDICTION", Default=false,
 end })
     
     :AddColorPicker("Grenade_LineCol", { Default=Config.Grenade.LineColor, Title="Trajectory color", Callback=function(c) Config.Grenade.LineColor=c end })
--- ESP GRENADE : master toggle that enables enemy grenade trajectory (2D+3D) plus
--- own throw prediction. Adds a small floating label above the flying grenade
--- with its type (e.g. "HE", "SMOKE", "FLASH").
+-- ESP GRENADE removed per request. Prediction and warning remain separate.
 Config.Grenade.ESP = false
-WorldEspGB:AddToggle("Grenade_ESP", { Text="ESP GRENADE", Default=false,
-    Callback=function(v)
-        Config.Grenade.ESP = v
-        -- Master switch: light up both prediction (self) and warning (enemies).
-        Config.Grenade.Warning    = v or Config.Grenade.Warning
-        Config.Grenade.Prediction = v or Config.Grenade.Prediction
-        if _G.EclipseGrenadeESP and _G.EclipseGrenadeESP.setEnabled then
-            pcall(_G.EclipseGrenadeESP.setEnabled, v)
-        end
-    end })
-    :AddColorPicker("Grenade_ESPCol", {
-        Default=Color3.fromRGB(255,180,60), Title="ESP color",
-        Callback=function(c) Config.Grenade.ESPColor = c end })
-Config.Grenade.ESPColor = Color3.fromRGB(255,180,60)
 -- 3D Trajectory is now always embedded into Prediction/Warning/ESP; toggle removed.
 Config.Grenade.Trajectory3D = true
 
@@ -12023,7 +12020,7 @@ local AutoStopToggle = MoveGB:AddToggle("AutoStop_Toggle", {
     Text = "AUTO STOP", Default = false,
     Callback = function(v) Config.Movement.AutoStop = v end,
 })
-    :AddKeyPicker("AutoStop_Key", { Default="None", SyncToggleState=true, Mode="Toggle", Text="Auto Stop" })
+    :AddKeyPicker("AutoStop_Key", { Default="H", SyncToggleState=true, Mode="Toggle", Text="Auto Stop" })
 MoveGB:AddDropdown("AutoStop_Options", {
     Text = "STOP OPTIONS",
     Values = { "Early", "In Air", "Duck", "Move Between Shots", "On Land" },
@@ -12080,8 +12077,16 @@ task.spawn(function()
         end
         if match(Library.Options and Library.Options.TP_Key) then
             _run("TP_Toggle", "TP_Key", function(v) Config.Misc.ThirdPerson = v end, function(v)
-                if v then pcall(function() if _G.EclipseTPEnable then _G.EclipseTPEnable() end end)
-                else pcall(function() if _G.EclipseTPDisable then _G.EclipseTPDisable() end end) end
+                if v then
+                    pcall(function() if _G.EclipseTPEnable then _G.EclipseTPEnable() end end)
+                    task.defer(function()
+                        local m = Config.Misc.CustomPlayerModel
+                        if m and m ~= "Off" and _G.EclipseApplyPlayerModel then pcall(_G.EclipseApplyPlayerModel, m) end
+                    end)
+                else
+                    pcall(function() if _G.EclipseCPMClear then _G.EclipseCPMClear() end end)
+                    pcall(function() if _G.EclipseTPDisable then _G.EclipseTPDisable() end end)
+                end
             end)
         end
     end)
@@ -12098,7 +12103,12 @@ MoveGB:AddToggle("TP_Toggle", { Text="THIRD PERSON", Default=false, Callback=fun
     Config.Misc.ThirdPerson = v
     if v then
         pcall(function() if _G.EclipseTPEnable then _G.EclipseTPEnable() end end)
+        task.defer(function()
+            local m = Config.Misc.CustomPlayerModel
+            if m and m ~= "Off" and _G.EclipseApplyPlayerModel then pcall(_G.EclipseApplyPlayerModel, m) end
+        end)
     else
+        pcall(function() if _G.EclipseCPMClear then _G.EclipseCPMClear() end end)
         pcall(function() if _G.EclipseTPDisable then _G.EclipseTPDisable() end end)
     end
 end })
@@ -12305,9 +12315,11 @@ do
             local cam = workspace.CurrentCamera; if not cam then return end
             cam.CFrame = CFrame.new(hrp.Position + (cam.CFrame.LookVector * -10) + Vector3.new(0, 3, 0), hrp.Position)
             -- Reveal the character body...
-            for _, p in ipairs(ch:GetDescendants()) do
-                if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-                    pcall(function() p.LocalTransparencyModifier = 0 end)
+            if not _G.EclipseCPMActive then
+                for _, p in ipairs(ch:GetDescendants()) do
+                    if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                        pcall(function() p.LocalTransparencyModifier = 0 end)
+                    end
                 end
             end
             -- ...hide first-person viewmodel...
@@ -12416,9 +12428,13 @@ do
         return false
     end
 
+    -- Only arm/hand/glove/sleeve words filter parts out of Weapon Chams.
+    -- "body"/"humanoid"/"viewmodel" removed: many rifles group their receiver
+    -- under a "Body" folder, which previously blocked the shell on the main
+    -- gun body and left red original parts visible next to painted magazines.
     local WH_BODY_WORDS = {
         arm=true, arms=true, hand=true, hands=true, glove=true, gloves=true,
-        sleeve=true, sleeves=true, body=true, humanoid=true, viewmodel=true,
+        sleeve=true, sleeves=true,
     }
     local function _whHasWord(name, words)
         local n = tostring(name or ""):lower():gsub("[%p_]+", " ")
@@ -12498,8 +12514,11 @@ do
            and not part:IsA("MeshPart") and not part:FindFirstChildOfClass("SurfaceAppearance") then
             return false
         end
+        -- Size sanity check relaxed: some rifles (Negev, XM1014, P90) have
+        -- long receivers/barrels that previously tripped the guard and left
+        -- the main body uncovered. Only reject *huge* colliders (map geometry).
         local s = part.Size
-        if s and ((s.X > 12 and s.Y > 12) or (s.Y > 10 and (s.X > 4 or s.Z > 4))) then
+        if s and (s.X > 30 or s.Y > 30 or s.Z > 30) then
             return false
         end
         return true
@@ -12558,6 +12577,17 @@ do
                 clone.Color = color
                 clone.Transparency = trans
                 clone.LocalTransparencyModifier = 0
+                -- Strip texture on MeshPart clones — otherwise the mesh texture
+                -- overrides Neon material and only parts of the weapon glow.
+                if clone:IsA("MeshPart") then
+                    pcall(function() clone.TextureID = "" end)
+                end
+                -- Nested SpecialMesh textures too (older weapon models).
+                for _, m in ipairs(clone:GetDescendants()) do
+                    if m:IsA("SpecialMesh") then
+                        pcall(function() m.TextureId = "" end)
+                    end
+                end
                 clone.Size = part.Size * (scale or 1.010)
                 clone.CFrame = part.CFrame
                 clone.Parent = part
@@ -12572,6 +12602,9 @@ do
                 sh.Material = Enum.Material.Neon
                 sh.Reflectance = 0
                 sh.LocalTransparencyModifier = 0
+                if sh:IsA("MeshPart") and sh.TextureID ~= "" then
+                    sh.TextureID = ""
+                end
                 sh.Size = part.Size * (scale or 1.010)
             end)
         end
@@ -12580,8 +12613,10 @@ do
     local function _syncWHShells(model, rec, color, inten)
         rec.shells = rec.shells or {}
         local a = math.clamp(inten or 1, 0.2, 3.0)
-        local shellT = math.clamp(0.82 - a * 0.22, 0.35, 0.92)
-        local scale  = 1.008 + math.clamp(a - 1, 0, 2) * 0.004
+        local shellT = math.clamp(0.88 - a * 0.18, 0.55, 0.94)
+        -- Very thin uniform offset: prevents "inflated / deformed" shell over
+        -- weapons whose MeshPart geometry doesn't scale linearly (P90, AWP, snipers).
+        local scale  = 1.003 + math.clamp(a - 1, 0, 2) * 0.0015
         local eligible, seen = {}, {}
         for _, part in ipairs(model:GetDescendants()) do
             if _isWHPart(part, model) then
@@ -13089,6 +13124,7 @@ do
             skinColor   = Color3.fromRGB(255, 204, 221),
             bodyAssets  = {
                 -- Roblox Woman bundle 239: classic Woman body, not square R6.
+                Head = 10725626210,
                 Torso = 86499666,
                 RightArm = 86499698,
                 LeftArm = 86499716,
@@ -13166,8 +13202,16 @@ do
     end
 
     local function _paintBody(model, color)
+        local function _insideAccessory(inst)
+            local a = inst and inst.Parent
+            while a and a ~= model and a ~= workspace do
+                if a:IsA("Accessory") then return true end
+                a = a.Parent
+            end
+            return false
+        end
         for _, p in ipairs(model:GetDescendants()) do
-            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" and not _insideAccessory(p) then
                 pcall(function() p.Color = color end)
             end
         end
@@ -13491,22 +13535,10 @@ do
         end
 
         local model = nil
-        if cfg.bodyType == "female" then
-            -- Woman bundle 239 is a classic R6 package. Build an R6 rig and add
-            -- its CharacterMeshes explicitly; this avoids the R15 generator
-            -- silently returning a blocky fallback on several executors.
-            model = _buildR6Rig(cfg)
-            _applyR6Body(model, cfg)
-            pcall(function()
-                local bc = Instance.new("BodyColors")
-                bc.HeadColor3, bc.LeftArmColor3, bc.RightArmColor3 = cfg.skinColor, cfg.skinColor, cfg.skinColor
-                bc.LeftLegColor3, bc.RightLegColor3, bc.TorsoColor3 = cfg.skinColor, cfg.skinColor, cfg.skinColor
-                bc.Parent = model
-            end)
-        elseif cfg.bodyType == "mickey" then
+        if cfg.bodyType == "female" or cfg.bodyType == "mickey" then
             -- Woman bundle 239 and Steamboat Mouse are real bundle bodies. Build
             -- them from HumanoidDescription as R15 so Roblox uses the proper body
-            -- package instead of fake square R6 CharacterMesh limbs.
+            -- package instead of falling back to fake square R6 limbs.
             local desc = _makeDescription(cfg)
             local ok, generated = pcall(function()
                 return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
@@ -13762,7 +13794,10 @@ do
             end
         end
 
-        local useMotorMirror = dummyRoot and #mirrorMotors > 0
+        -- Always use direct CFrame body-part mirroring. Motor6D-only mirroring
+        -- leaves generated bundle rigs (Woman/Mickey) in T-pose when the LP rig
+        -- differs, causing open arms / broken legs.
+        local useMotorMirror = false
         if useMotorMirror then
             for _, p in ipairs(model:GetDescendants()) do
                 if p:IsA("BasePart") and not _isAccessoryPart(p) then
@@ -13852,6 +13887,7 @@ do
     local function _applyModel(name)
         _clearOverlay()
         if not name or name == "Off" then return end
+        if not (Config.Misc and Config.Misc.ThirdPerson == true) then return end
         local ch  = LocalPlayer.Character
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
         if not (ch and hum and hum.Health > 0) then return end
@@ -13872,23 +13908,59 @@ do
         Values = { "Off", "Kawaii Cute Girl", "Joker", "Clown", "Mickey Mouse" },
         Callback = function(v)
             Config.Misc.CustomPlayerModel = v
-            task.spawn(function() _applyModel(v) end)
+            task.spawn(function()
+                if v == "Off" then _clearOverlay(); return end
+                if Config.Misc.ThirdPerson == true then _applyModel(v) else _clearOverlay() end
+            end)
         end
     })
 
     connectSignal(LocalPlayer.CharacterAdded:Connect(function(ch)
         if not scriptRunning then return end
         if _syncConn then pcall(function() _syncConn:Disconnect() end); _syncConn = nil end
+        -- Fresh character = wipe any lingering overlay from the previous life.
+        pcall(_clearOverlay)
         _overlay, _hidden, _hiddenLTM = nil, {}, {}
         _cpmActive = false
         _G.EclipseCPMActive = false
         local v = Config.Misc.CustomPlayerModel
-        if v and v ~= "Off" then
-            local hum = ch:WaitForChild("Humanoid", 5)
-            if hum then task.wait(0.5) end
-            pcall(_applyModel, v)
+        local hum = ch:WaitForChild("Humanoid", 5)
+        -- Hard death hook: instantly destroy overlay the moment the LP dies,
+        -- instead of waiting on the 0.35s watchdog (some maps ragdoll for
+        -- several seconds before CharacterRemoving fires).
+        if hum then
+            connectSignal(hum.Died:Connect(function()
+                pcall(_clearOverlay)
+            end))
+        end
+        if Config.Misc.ThirdPerson == true and v and v ~= "Off" and hum and hum.Health > 0 then
+            task.wait(0.5)
+            if hum.Health > 0 then pcall(_applyModel, v) end
         end
     end))
+
+    connectSignal(LocalPlayer.CharacterRemoving:Connect(function()
+        pcall(_clearOverlay)
+    end))
+
+    task.spawn(function()
+        while scriptRunning do
+            task.wait(0.35)
+            pcall(function()
+                local wanted = Config.Misc and Config.Misc.CustomPlayerModel
+                local tpOn = Config.Misc and Config.Misc.ThirdPerson == true
+                local ch = LocalPlayer.Character
+                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                if not tpOn or not wanted or wanted == "Off" or not (hum and hum.Health > 0) then
+                    if _cpmActive or _overlay then _clearOverlay() end
+                    return
+                end
+                if not (_overlay and _overlay.Parent and _cpmActive) then
+                    _applyModel(wanted)
+                end
+            end)
+        end
+    end)
 
     -- Re-hide any accessory that appears after apply (character equipping
     -- items after we already scanned). Cheap heartbeat, only while active.
@@ -14345,10 +14417,21 @@ do
     end })
     CfgGB:AddButton({ Text = "Load", Func = function()
         if not selectedName then Library:Notify({Title="Configs", Description="Select a config.", Time=3}); return end
-        local ok = pcall(function()
-            NLLib:LoadConfig(readfile(CFG_FOLDER .. "/" .. selectedName))
+        -- Run load on a background thread so the UI + all callback chains don't
+        -- freeze the main thread while every toggle/slider re-fires.
+        local name = selectedName
+        Library:Notify({Title="Configs", Description="Loading <b>"..name.."</b>...", Time=2})
+        task.spawn(function()
+            local data
+            local okR = pcall(function() data = readfile(CFG_FOLDER .. "/" .. name) end)
+            if not okR or not data then
+                Library:Notify({Title="Configs", Description="Read failed", Time=3}); return
+            end
+            task.wait() -- yield a frame before firing hundreds of callbacks
+            local okL = pcall(function() NLLib:LoadConfig(data) end)
+            task.wait()
+            Library:Notify({Title="Configs", Description=okL and ("Loaded <b>"..name.."</b>") or "Load failed", Time=3})
         end)
-        Library:Notify({Title="Configs", Description=ok and ("Loaded <b>"..selectedName.."</b>") or "Load failed", Time=3})
     end })
     CfgGB:AddButton({ Text = "Delete", Func = function()
         if not selectedName then return end
@@ -14964,13 +15047,56 @@ end)()
         s = s:gsub("^Enum%.KeyCode%.", ""):gsub("^Enum%.UserInputType%.", "")
         return s
     end
+    -- Explicit picker -> toggle name map (covers cases where toggle name
+    -- doesn't follow the *_Key -> *_Toggle convention).
+    local KB_TOGGLE = {
+        AutoSkill_Key      = "AS_Enable",
+        SilentAim_Key      = "SilentAim_Toggle",
+        AutoStop_Key       = "AutoStop_Toggle",
+        BunnyHop_Key       = "Bhop_Toggle",
+        AutoStrafe_Key     = "Strafe_Toggle",
+        ThirdPerson_Key    = "ThirdPerson_Toggle",
+        WeaponHighlight_Key= "WH_Toggle",
+        SpectatorList_Key  = "Spec_Toggle",
+        C4Timer_Key        = "C4_Toggle",
+        AutoBuy_Key        = "AutoBuy_Toggle",
+        NoCameraRecoil_Key = "NoRecoil_Toggle",
+        RemoveScope_Key    = "RemoveScope_Toggle",
+        ForceScope_Key     = "ForceScope_Toggle",
+        Aimbot_Key         = "Aimbot_Toggle",
+        Trigger_Key        = "Trigger_Toggle",
+        ESP_Key            = "ESP_Toggle",
+    }
+    -- Fallback: read Config values by picker name.
+    local KB_CFG = {
+        AutoSkill_Key      = function() return Config.Misc.AutoSkill end,
+        SilentAim_Key      = function() return Config.Aim and Config.Aim.SilentAim end,
+        AutoStop_Key       = function() return Config.Movement.AutoStop end,
+        BunnyHop_Key       = function() return Config.Movement.BunnyHop end,
+        AutoStrafe_Key     = function() return Config.Movement.AutoStrafe end,
+        ThirdPerson_Key    = function() return Config.Misc.ThirdPerson end,
+        WeaponHighlight_Key= function() return Config.Misc.WeaponHighlight end,
+        SpectatorList_Key  = function() return Config.Misc.SpectatorList end,
+        C4Timer_Key        = function() return Config.Misc.C4Timer end,
+        AutoBuy_Key        = function() return Config.Misc.AutoBuy end,
+        NoCameraRecoil_Key = function() return Config.Misc.NoCameraRecoil end,
+        RemoveScope_Key    = function() return Config.Misc.RemoveScope end,
+        ForceScope_Key     = function() return Config.Misc.ForceScope end,
+    }
     local function stateFor(name)
-        local candidates = { (name:gsub("_Key$", "_Toggle")), (name:gsub("_Key$", "_Enabled")), (name:gsub("_Key$", "")) }
+        local candidates = { KB_TOGGLE[name], (name:gsub("_Key$", "_Toggle")), (name:gsub("_Key$", "_Enabled")), (name:gsub("_Key$", "")) }
         for _, tn in ipairs(candidates) do
-            local tog = Library.Toggles and Library.Toggles[tn]
-            if tog and tog.Value ~= nil then return tog.Value == true end
+            if tn then
+                local tog = Library.Toggles and Library.Toggles[tn]
+                if tog and tog.Value ~= nil then return tog.Value == true end
+            end
         end
-        return true
+        local cfg = KB_CFG[name]
+        if cfg then
+            local ok, v = pcall(cfg)
+            if ok then return v == true end
+        end
+        return false
     end
     local function isKey(opt)
         local t = rawget(opt, "Type") or opt.Type
@@ -15142,7 +15268,7 @@ EX.ChatFrame = nil
     ECLIPSE._enemyGrenadeHolders = {}   
     task.spawn(function()
         while scriptRunning do
-            if (Config.Grenade.Warning or Config.Grenade.ESP) and GPD_OK then
+            if Config.Grenade.Warning and GPD_OK then
                 local now = tick()
                 for _, p in ipairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and not IsAlly(p) then
@@ -15168,7 +15294,7 @@ EX.ChatFrame = nil
     task.spawn(function()
         while scriptRunning do
             local _okLoop, _errLoop = pcall(function()
-            if (not Config.Grenade.Warning and not Config.Grenade.ESP) or not GPD_OK then
+            if (not Config.Grenade.Warning) or not GPD_OK then
                 if #activeWarn > 0 then clearWarn() end
                 ECLIPSE._warn3DPts = nil
                 return
@@ -15207,7 +15333,7 @@ EX.ChatFrame = nil
                         local t, props = typeFromName(obj.Name)
 
                         local _velOk, _velMag = pcall(function() return obj.AssemblyLinearVelocity.Magnitude end)
-                        local espMode = Config.Grenade.ESP == true
+                        local espMode = false
                         -- Warning mode requires the grenade to be actually flying; ESP mode
                         -- also picks up landed / static grenades so the user can see them
                         -- on the ground.
@@ -17366,7 +17492,7 @@ end)
                     if not _alive() then break end
                     if _isBuyPeriod() then break end
                     local w = _findEquippedWeapon(); if not w then break end
-                    if _isMeleeWeapon(w) then break end
+                    if _isMeleeWeapon(w) then _lockedTarget=nil; task.wait(0.4); break end
                     local rounds = rawget(w, "Rounds") or 0
                     if rounds <= 0 then pcall(_tryRefill, w); break end
                     -- Lock onto the closest visible enemy; keep firing at THAT target while
