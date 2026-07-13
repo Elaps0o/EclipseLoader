@@ -268,6 +268,16 @@ do
     end
 end
 
+local scriptRunning = true
+local UnloadConnections = {}
+local RuntimeWarnAt = {}
+function connectSignal(conn)
+    if conn and typeof(conn) == "RBXScriptConnection" then
+        table.insert(UnloadConnections, conn)
+    end
+    return conn
+end
+
 if getgenv().EclipseHubLoaded then
     warn("Eclipse Hub: reloading previous instance.")
     pcall(function()
@@ -631,7 +641,7 @@ do
     local function _hookRoot(root)
         if not root then return end
         pcall(function()
-            root.DescendantAdded:Connect(function(d)
+            connectSignal(root.DescendantAdded:Connect(function(d)
                 if not d then return end
                 local nm = tostring(d.Name or ""):lower()
                 if nm:find("color") or nm:find("picker") or nm:find("holder") then
@@ -640,7 +650,7 @@ do
                     local sg = d:FindFirstAncestorOfClass("ScreenGui")
                     if sg then _bumpZ(sg) end
                 end
-            end)
+            end))
         end)
     end
     task.spawn(function()
@@ -766,12 +776,13 @@ local function wrapToggle(id, nlToggle, cbHolder)
                 Color3.fromRGB(80,170,255), Color3.fromRGB(180,100,255), Color3.fromRGB(255,220,80), Color3.fromRGB(255,255,255),
             }
             local pi = 1
-            slot.MouseButton1Click:Connect(function()
+            connectSignal(slot.MouseButton1Click:Connect(function()
+                if not scriptRunning then return end
                 pi = (pi % #palette) + 1
                 local c = palette[pi]
                 slot.BackgroundColor3 = c
                 if data.Callback then pcall(data.Callback, c) end
-            end)
+            end))
         end
         local w = {
             Type      = "ColorPicker",
@@ -843,9 +854,10 @@ local function wrapToggle(id, nlToggle, cbHolder)
             OnClick   = function() end,
         }
         if slot then
-            slot.MouseButton1Click:Connect(function()
+            connectSignal(slot.MouseButton1Click:Connect(function()
+                if not scriptRunning then return end
                 picking = true; setVisual(false)
-            end)
+            end))
         end
         local UIS = game:GetService("UserInputService")
         connectSignal(UIS.InputBegan:Connect(function(input, gp)
@@ -1316,57 +1328,52 @@ do
             task.defer(_repairNeverloseInput)
         else
             pcall(function() if type(_skinPreviewClose) == "function" then _skinPreviewClose() end end)
-            -- Close any open dropdown popups when hiding the GUI
+            -- Close any open dropdown/colorpicker popups when hiding the GUI.
+            -- Neverlose tracks every open floating widget in Library.OpenFrames
+            -- (see library.lua Dropdown:SetOpen / Colorpicker:SetOpen), so we
+            -- just call SetOpen(false) on each — that reparents the option
+            -- holder to UnusedHolder and hides it cleanly.
             pcall(function()
-                local sg = (NLLib and NLLib.Holder and NLLib.Holder.Instance) or Library.ScreenGui
-                if not sg then return end
-                for _, d in ipairs(sg:GetDescendants()) do
-                    if d:IsA("GuiObject") and d.Visible then
-                        local nm = tostring(d.Name or "")
-                        local low = nm:lower()
-                        if low:find("dropdown") or low:find("options") or low:find("list") or low:find("scroll") then
-                            local par = d.Parent
-                            local parNm = par and tostring(par.Name or ""):lower() or ""
-                            if low:find("holder") or low:find("popup") or low:find("dropdown") or parNm:find("dropdown") then
-                                pcall(function() d.Visible = false end)
+                local NL = NLLib or Library
+                if NL and type(NL.OpenFrames) == "table" then
+                    -- snapshot keys first because SetOpen mutates OpenFrames
+                    local snap = {}
+                    for k, v in pairs(NL.OpenFrames) do snap[#snap+1] = v end
+                    for _, w in ipairs(snap) do
+                        pcall(function()
+                            if w and type(w.SetOpen) == "function" then
+                                w:SetOpen(false)
                             end
-                        end
+                        end)
                     end
                 end
-                for _, opt in pairs(Library.Options or {}) do
-                    pcall(function()
-                        if opt and opt.Type == "Dropdown" and opt.HideDropdown then opt:HideDropdown() end
-                        if opt and opt.Container and opt.Container.Visible then
-                            local nmL = tostring(opt.Container.Name or ""):lower()
-                            if nmL:find("dropdown") then opt.Container.Visible = false end
-                        end
-                    end)
+                -- Also force-hide the UnusedHolder just in case an option list
+                -- got left visible mid-tween.
+                local uh = NL and NL.UnusedHolder and NL.UnusedHolder.Instance
+                if uh then
+                    for _, d in ipairs(uh:GetDescendants()) do
+                        if d:IsA("GuiObject") then pcall(function() d.Visible = false end) end
+                    end
                 end
             end)
+
         end
         pcall(function() if type(_EclipseMouseUnlockRefresh) == "function" then _EclipseMouseUnlockRefresh() end end)
         return ret
     end
 
     pcall(function()
-        UserInput.InputBegan:Connect(function(input, gpe)
+        connectSignal(UserInput.InputBegan:Connect(function(input, gpe)
+            if not scriptRunning then return end
             if not loadingComplete then return end
             if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
             if input.KeyCode ~= _EclipseGuiKey then return end
             pcall(function() Library:Toggle() end)
-        end)
+        end))
     end)
 end
 
-local scriptRunning = true
-local UnloadConnections = {}
-local RuntimeWarnAt = {}
-function connectSignal(conn)
-    if conn and typeof(conn) == "RBXScriptConnection" then
-        table.insert(UnloadConnections, conn)
-    end
-    return conn
-end
+scriptRunning = true
 
 -- =========================================================================
 -- MOUSE UNLOCK (FPS-safe)
@@ -1650,11 +1657,12 @@ task.spawn(function()
     local ok, ScriptContext = pcall(function() return game:GetService("ScriptContext") end)
     if not ok or not ScriptContext then return end
     pcall(function()
-        ScriptContext.Error:Connect(function(message, stack, sk)
+        connectSignal(ScriptContext.Error:Connect(function(message, stack, sk)
+            if not scriptRunning then return end
             if _eclipseErrorTripped then return end
             if not _isEclipseError(message, stack) then return end
             _panicKick(tostring(message))
-        end)
+        end))
     end)
 end)
 
@@ -1662,12 +1670,13 @@ task.spawn(function()
     local ok, LogService = pcall(function() return game:GetService("LogService") end)
     if not ok or not LogService then return end
     pcall(function()
-        LogService.MessageOut:Connect(function(msg, msgType)
+        connectSignal(LogService.MessageOut:Connect(function(msg, msgType)
+            if not scriptRunning then return end
             if _eclipseErrorTripped then return end
             if msgType ~= Enum.MessageType.MessageError then return end
             if not _isEclipseError(msg, "") then return end
             _panicKick(tostring(msg))
-        end)
+        end))
     end)
 end)
 
@@ -1866,7 +1875,6 @@ task.spawn(function()
 end)
 
 local _IS_DEATHMATCH = (game.PlaceId == 135434213652028)
-task.spawn(function() while true do if _IS_DEATHMATCH then pcall(function() Config.TeamCheck = false end) end task.wait(1) end end)
 local Config = {
     GlobalEnable = true,
     TeamCheck    = not _IS_DEATHMATCH,
@@ -1947,6 +1955,15 @@ local Config = {
     UI = { PanelPositions = {} },
 }
 
+task.spawn(function()
+    while scriptRunning do
+        if _IS_DEATHMATCH then
+            pcall(function() Config.TeamCheck = false end)
+        end
+        task.wait(1)
+    end
+end)
+
 
 _EclipsePanelFrames = _EclipsePanelFrames or {}
 
@@ -1972,13 +1989,14 @@ function _bindPanelPosition(name, frame)
     _applyPanelSavedPosition(name, frame)
 
     pcall(function()
-        frame:GetPropertyChangedSignal("Position"):Connect(function()
+        connectSignal(frame:GetPropertyChangedSignal("Position"):Connect(function()
+            if not scriptRunning then return end
             local p = frame.Position
             Config.UI.PanelPositions[name] = {
                 XS = p.X.Scale, XO = p.X.Offset,
                 YS = p.Y.Scale, YO = p.Y.Offset,
             }
-        end)
+        end))
     end)
 end
 
@@ -3041,13 +3059,14 @@ end
 
 do
     local _gAcc = 0
-    game:GetService("RunService").Heartbeat:Connect(function(dt)
+    connectSignal(game:GetService("RunService").Heartbeat:Connect(function(dt)
+        if not scriptRunning then return end
         _gAcc = _gAcc + dt
         if _gAcc < 0.05 then return end -- 20Hz cap
         _gAcc = 0
         if not (Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning or Config.Grenade.ESP)) then return end
         pcall(_renderGrenade3D)
-    end)
+    end))
 end
 
 
@@ -3846,11 +3865,11 @@ function _ensureESPWeaponIcon(data)
         task.delay(0.04, reassert)
         task.delay(0.12, reassert)
     end
-    pcall(function() img:GetPropertyChangedSignal("ImageTransparency"):Connect(reassertSoon) end)
-    pcall(function() img:GetPropertyChangedSignal("ImageColor3"):Connect(reassertSoon) end)
-    pcall(function() img:GetPropertyChangedSignal("BackgroundTransparency"):Connect(reassertSoon) end)
-    pcall(function() img:GetPropertyChangedSignal("Visible"):Connect(reassertSoon) end)
-    pcall(function() img:GetPropertyChangedSignal("Image"):Connect(reassertSoon) end)
+    pcall(function() connectSignal(img:GetPropertyChangedSignal("ImageTransparency"):Connect(reassertSoon)) end)
+    pcall(function() connectSignal(img:GetPropertyChangedSignal("ImageColor3"):Connect(reassertSoon)) end)
+    pcall(function() connectSignal(img:GetPropertyChangedSignal("BackgroundTransparency"):Connect(reassertSoon)) end)
+    pcall(function() connectSignal(img:GetPropertyChangedSignal("Visible"):Connect(reassertSoon)) end)
+    pcall(function() connectSignal(img:GetPropertyChangedSignal("Image"):Connect(reassertSoon)) end)
     data.WeaponIcon = img
     return img
 end
@@ -4272,11 +4291,31 @@ function updateChams()
             hl.FillTransparency    = baseFillT
             hl.OutlineTransparency = baseOutT
 
-            -- Chams glow light removed by request; keep any leftover instance destroyed.
-            local prevLt = ChamsLT[plr]
-            if prevLt then pcall(function() prevLt:Destroy() end); ChamsLT[plr] = nil end
+            -- Rivals-style glow light scaled by intensity (0.2..3.0 -> 0..1)
+            local u = math.clamp((intensity - 0.2) / 2.8, 0, 1)
+            local host = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+            local lt = ChamsLT[plr]
+            if host and host:IsA("BasePart") then
+                if not lt or not lt.Parent then
+                    if lt then pcall(function() lt:Destroy() end) end
+                    lt = Instance.new("PointLight")
+                    lt.Name = "EclipseChamsGlow"
+                    lt.Shadows = false
+                    lt.Parent = host
+                    ChamsLT[plr] = lt
+                elseif lt.Parent ~= host then
+                    lt.Parent = host
+                end
+                lt.Color      = chamsCol
+                lt.Range      = 6 + u * 24
+                lt.Brightness = 1 + u * 4
+            elseif lt then
+                pcall(function() lt:Destroy() end)
+                ChamsLT[plr] = nil
+            end
         until true
     end
+
 
     -- garbage collect for gone players
     for plr, _ in pairs(ChamsHL) do
@@ -4650,22 +4689,24 @@ function ensureC4UI()
 
     pcall(function()
         local D = {a=false}
-        f.InputBegan:Connect(function(input)
+        connectSignal(f.InputBegan:Connect(function(input)
+            if not scriptRunning then return end
             if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
                 D.a = true; D.s = input.Position; D.p = f.Position
-                input.Changed:Connect(function()
+                connectSignal(input.Changed:Connect(function()
                     if input.UserInputState == Enum.UserInputState.End then D.a = false end
-                end)
+                end))
             end
-        end)
-        UserInput.InputChanged:Connect(function(input)
+        end))
+        connectSignal(UserInput.InputChanged:Connect(function(input)
+            if not scriptRunning then return end
             if D.a and (input.UserInputType == Enum.UserInputType.MouseMovement
             or input.UserInputType == Enum.UserInputType.Touch) then
                 local d = input.Position - D.s
                 f.Position = UDim2.new(D.p.X.Scale, D.p.X.Offset + d.X, D.p.Y.Scale, D.p.Y.Offset + d.Y)
             end
-        end)
+        end))
     end)
     pcall(_bindPanelPosition, "C4Panel", f)
     pcall(_applyNLPanelStyle, f, { Transparency = 0.24, Corner = 8, AccentBar = false })
@@ -4812,7 +4853,7 @@ function C4Hide()
     local tw = TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
         { BackgroundTransparency = 1 })
     tw:Play()
-    tw.Completed:Once(function() if not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 0.24 end end)
+    connectSignal(tw.Completed:Once(function() if scriptRunning and not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 0.24 end end))
 end
 
 function C4Show(status, timeText, sub, color)
@@ -4858,8 +4899,9 @@ function C4Show(status, timeText, sub, color)
 end
 
 task.spawn(function()
-    while true do
+    while scriptRunning do
         task.wait(0.33)
+        if not scriptRunning then break end
         if C4UI.dots and C4UI.dots.Visible then
             local n = (#C4UI.dots.Text % 3) + 1
             C4UI.dots.Text = string.rep(".", n)
@@ -5542,7 +5584,9 @@ function _updateNoRecoil() pcall(_installCombatNamecallHooks) end
 function _updateForceScope()
     if Config and Config.Misc and Config.Misc.ForceScope then
         if not _forceScopeConn then
-            _forceScopeConn = RunService.Heartbeat:Connect(_tryScopeCurrentWeapon)
+            _forceScopeConn = connectSignal(RunService.Heartbeat:Connect(function()
+                if scriptRunning then _tryScopeCurrentWeapon() end
+            end))
         end
     else
         if _forceScopeConn then pcall(function() _forceScopeConn:Disconnect() end); _forceScopeConn = nil end
@@ -6051,7 +6095,7 @@ function disableCollisions(m) for _, p in m:GetDescendants() do cleanPart(p) end
 function _signalOnce(sig, cb)
     if not sig or type(cb) ~= "function" then return nil end
     local ok, conn = pcall(function() return sig:Once(cb) end)
-    if ok then return conn end
+    if ok then return connectSignal(conn) end
     local c
     ok, c = pcall(function()
         return sig:Connect(function(...)
@@ -6059,7 +6103,7 @@ function _signalOnce(sig, cb)
             cb(...)
         end)
     end)
-    return ok and c or nil
+    return ok and connectSignal(c) or nil
 end
 function restoreOriginalKnife()
     if not SkinSystem._hidden then return end
@@ -8364,8 +8408,9 @@ function _ensureHUDAssetViewer()
     confirm.TextColor3 = Color3.fromRGB(255,255,255); confirm.Text = "INJECT SELECTED HUD IMAGE"; confirm.ZIndex = 202
     Instance.new("UICorner", confirm).CornerRadius = UDim.new(0, 5)
 
-    close.MouseButton1Click:Connect(function() gui.Enabled = false end)
-    confirm.MouseButton1Click:Connect(function()
+    connectSignal(close.MouseButton1Click:Connect(function() if scriptRunning then gui.Enabled = false end end))
+    connectSignal(confirm.MouseButton1Click:Connect(function()
+        if not scriptRunning then return end
         local selectedIcon = _iconForWeapon(Config.Skins.SelectedKnife)
         if not selectedIcon then
             status.Text = "Blocked: no readable Icon found for " .. tostring(Config.Skins.SelectedKnife)
@@ -8377,7 +8422,7 @@ function _ensureHUDAssetViewer()
         status.Text = "Confirmed: " .. tostring(Config.Skins.SelectedKnife) .. " Icon will be injected."
         _hudDbg("HUD image override confirmed", Config.Skins.SelectedKnife, selectedIcon)
         pcall(_applyHUDKnife, true)
-    end)
+    end))
     table.insert(UnloadConnections, { Disconnect = function() pcall(function() gui:Destroy() end) end })
     HUDSkin.viewer = { gui=gui, frame=frame, title=title, status=status, list=list, confirm=confirm }
     return HUDSkin.viewer
@@ -9197,15 +9242,18 @@ pcall(function()
             end)
         end
     end
-    LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function()
+    connectSignal(LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function()
+        if not scriptRunning then return end
         pcall(_resetHUDRuntimeForRespawn)
         _reapplyHUDStaggered()
-    end)
-    LocalPlayer:GetPropertyChangedSignal("TeamColor"):Connect(function()
+    end))
+    connectSignal(LocalPlayer:GetPropertyChangedSignal("TeamColor"):Connect(function()
+        if not scriptRunning then return end
         pcall(_resetHUDRuntimeForRespawn)
         _reapplyHUDStaggered()
-    end)
-    LocalPlayer.CharacterAdded:Connect(function(char)
+    end))
+    connectSignal(LocalPlayer.CharacterAdded:Connect(function(char)
+        if not scriptRunning then return end
         pcall(_resetHUDRuntimeForRespawn)
         _reapplyHUDStaggered()
         task.defer(_reapplyHUDStaggered)
@@ -9231,24 +9279,26 @@ pcall(function()
         pcall(function()
             local hum = char:WaitForChild("Humanoid", 5)
             if hum then
-                hum.Died:Connect(function()
+                connectSignal(hum.Died:Connect(function()
+                    if not scriptRunning then return end
                     pcall(_resetHUDRuntimeForRespawn)
-                end)
+                end))
             end
         end)
-    end)
+    end))
 
     pcall(function()
         local char = LocalPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.Died:Connect(function() pcall(_resetHUDRuntimeForRespawn) end) end
+        if hum then connectSignal(hum.Died:Connect(function() if scriptRunning then pcall(_resetHUDRuntimeForRespawn) end end)) end
     end)
 
     if Camera then
-        Camera:GetPropertyChangedSignal("CameraSubject"):Connect(function()
+        connectSignal(Camera:GetPropertyChangedSignal("CameraSubject"):Connect(function()
+            if not scriptRunning then return end
             pcall(_resetHUDRuntimeForRespawn)
             if _hudCanApply() then _reapplyHUDStaggered() else pcall(_hudSpectatorHardClear) end
-        end)
+        end))
     end
 end)
 
@@ -9729,11 +9779,12 @@ end)
 
 -- Force viewmodel reset on death so respawn always rebuilds with SelectedKnife
 pcall(function()
-    LocalPlayer.CharacterRemoving:Connect(function()
+    connectSignal(LocalPlayer.CharacterRemoving:Connect(function()
+        if not scriptRunning then return end
         pcall(removeViewmodel)
         SkinSystem.spawned = false
         SkinSystem.vm = nil
-    end)
+    end))
 end)
 
 connectSignal(Camera.ChildAdded:Connect(function(obj)
@@ -9766,8 +9817,9 @@ end))
 -- swap de viewmodel que reanexa Glove), a skin selecionada volte a ser
 -- aplicada mesmo se ChildAdded/DescendantAdded escaparem por timing.
 task.spawn(function()
-    while true do
+    while scriptRunning do
         task.wait(0.4)
+        if not scriptRunning then break end
         if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() then
             local expected
             for gt in pairs(GLOVES) do
@@ -9889,14 +9941,21 @@ AimGB:AddToggle("Pen_CH_Toggle", { Text="PENETRATION CROSSHAIR", Default=false,
 Config.Aimbot.Silent   = false
 Config.Misc.SilentAim  = false
 AimGB:AddToggle("SilentAim_Toggle", { Text="SILENT AIM", Default=false,
-    Callback=function(v) Config.Misc.SilentAim = v; Config.Aimbot.Silent = v end })
+    Callback=function(v)
+        Config.Misc.SilentAim = v; Config.Aimbot.Silent = v
+        if v and type(_G.EclipseInstallSilentBypass) == "function" then pcall(_G.EclipseInstallSilentBypass) end
+    end })
     :AddKeyPicker("SilentAim_Key", { Default="MB1", SyncToggleState=false, Mode="Hold", Text="Silent Aim" })
 
 -- ============================================================
 -- Testing stuff — embedded silent aim bypass (raycast hook)
 -- ============================================================
 do
-    local ok, err = pcall(function()
+    local installed = false
+    _G.EclipseInstallSilentBypass = function()
+        if installed then return true end
+        installed = true
+        local ok, err = pcall(function()
         local hookfn = hookfunction or (oth and oth.hook) or hookfunc
         assert(hookfn, "executor missing hookfunction/oth.hook")
         assert(getgc, "executor missing getgc")
@@ -9965,20 +10024,21 @@ do
             return best
         end
 
-        RunService.RenderStepped:Connect(function()
+        connectSignal(RunService.RenderStepped:Connect(function()
+            if not scriptRunning then return end
             if Config and Config.Misc and Config.Misc.SilentAim then
                 _tsTarget = _tsClosestHead()
             else
                 _tsTarget = nil
             end
-        end)
+        end))
 
         for _, v in next, getgc(true) do
             if type(v) == "table" and rawget(v, "cast") then
                 local _old
                 _old = hookfn(v.cast, function(...)
                     local args = {...}
-                    if Config and Config.Misc and Config.Misc.SilentAim
+                    if scriptRunning and Config and Config.Misc and Config.Misc.SilentAim
                        and args[2] and typeof(args[2]) == "Vector3" and _tsTarget then
                         local origin = args[1]
                         args[2] = (_tsTarget.Position - origin)
@@ -9987,8 +10047,13 @@ do
                 end)
             end
         end
-    end)
-    if not ok then warn("[Eclipse] Silent bypass skipped: "..tostring(err)) end
+        end)
+        if not ok then
+            installed = false
+            warn("[Eclipse] Silent bypass skipped: "..tostring(err))
+        end
+        return ok
+    end
 end
 
 
@@ -10160,9 +10225,45 @@ Config.Visuals.PlayerChams        = Config.Visuals.PlayerChams        or false
 Config.Visuals.PlayerChamsColor   = Config.Visuals.PlayerChamsColor   or Color3.fromRGB(180, 90, 255)
 Config.Visuals.PlayerChamsInWeapons = (Config.Visuals.PlayerChamsInWeapons ~= nil) and Config.Visuals.PlayerChamsInWeapons or false
 
--- PLAYER CHAMS + DEAD ESP removed per user request.
-Config.Visuals.PlayerChams = false
-Config.Visuals.DeadESP     = false
+-- PLAYER CHAMS (LP only) — Highlight fill + Occluded rim outline.
+-- Applies to LP body, equipped tool and viewmodel (gloves/knife/gun) so it
+-- shows in first-person too. "IN WEAPONS" dropdown controls tool/viewmodel.
+PVGB:AddToggle("PV_PlayerChams", { Text = "PLAYER CHAMS", Default = false,
+    Callback = function(v)
+        Config.Visuals.PlayerChams = v and true or false
+        if not v and _G.EclipsePlayerChamsClear then pcall(_G.EclipsePlayerChamsClear) end
+    end })
+    :AddColorPicker("PV_PlayerChamsColor", {
+        Default = Config.Visuals.PlayerChamsColor,
+        Callback = function(c) Config.Visuals.PlayerChamsColor = c end })
+PVGB:AddDropdown("PV_PlayerChamsInWeapons", {
+    Text = "IN WEAPONS", Default = Config.Visuals.PlayerChamsInWeapons and "YES" or "NO",
+    Values = { "YES", "NO" },
+    Callback = function(v) Config.Visuals.PlayerChamsInWeapons = (v == "YES") end,
+})
+
+-- GLASS EFFECT (LP viewmodel: hands / gloves / knife / gun becomes translucent glass)
+Config.Visuals.GlassFX        = Config.Visuals.GlassFX        or false
+Config.Visuals.GlassFXColor   = Config.Visuals.GlassFXColor   or Color3.fromRGB(235, 240, 255)
+Config.Visuals.GlassFXOpacity = Config.Visuals.GlassFXOpacity or 0.78 -- how see-through (0=solid, 1=invisible)
+PVGB:AddToggle("PV_GlassFX", { Text = "GLASS EFFECT", Default = false,
+    Callback = function(v)
+        Config.Visuals.GlassFX = v and true or false
+        if not v and _G.EclipseGlassFXClear then pcall(_G.EclipseGlassFXClear) end
+    end })
+    :AddColorPicker("PV_GlassFXColor", {
+        Default = Config.Visuals.GlassFXColor,
+        Callback = function(c) Config.Visuals.GlassFXColor = c end })
+PVGB:AddSlider("PV_GlassFXOpacity", {
+    Text = "GLASS OPACITY", Default = math.floor((Config.Visuals.GlassFXOpacity or 0.78) * 100),
+    Min = 40, Max = 95, Rounding = 0, Suffix = "%",
+    Callback = function(v) Config.Visuals.GlassFXOpacity = (tonumber(v) or 78) / 100 end,
+})
+
+-- DEAD ESP kept OFF (removed per prior user request).
+Config.Visuals.DeadESP = false
+
+
 
 do
     local Players    = game:GetService("Players")
@@ -10198,30 +10299,32 @@ do
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
             if hum.Health <= 0 then _flagDead(char) end
-            hum.Died:Connect(function() _flagDead(char) end)
-            hum.HealthChanged:Connect(function(h) if h <= 0 then _flagDead(char) end end)
+            connectSignal(hum.Died:Connect(function() if scriptRunning then _flagDead(char) end end))
+            connectSignal(hum.HealthChanged:Connect(function(h) if scriptRunning and h <= 0 then _flagDead(char) end end))
         end
     end
 
     local function _bindPlayer(plr)
         if plr == LP then return end
         if plr.Character then _hookChar(plr.Character) end
-        plr.CharacterAdded:Connect(function(c)
+        connectSignal(plr.CharacterAdded:Connect(function(c)
+            if not scriptRunning then return end
             -- new life → clear old corpse tracking for this player
             for c2,_ in pairs(tracked) do
                 if c2 ~= c and c2:IsDescendantOf(game) == false then _cleanup(c2) end
             end
             task.wait(0.2); _hookChar(c)
-        end)
-        plr.CharacterRemoving:Connect(function(c) _cleanup(c) end)
+        end))
+        connectSignal(plr.CharacterRemoving:Connect(function(c) if scriptRunning then _cleanup(c) end end))
     end
     for _, p in ipairs(Players:GetPlayers()) do _bindPlayer(p) end
-    Players.PlayerAdded:Connect(_bindPlayer)
-    Players.PlayerRemoving:Connect(function(p)
+    connectSignal(Players.PlayerAdded:Connect(function(p) if scriptRunning then _bindPlayer(p) end end))
+    connectSignal(Players.PlayerRemoving:Connect(function(p)
         if p.Character then _cleanup(p.Character) end
-    end)
+    end))
 
-    RunService.Heartbeat:Connect(function()
+    connectSignal(RunService.Heartbeat:Connect(function()
+        if not scriptRunning then return end
         local on  = Config.Visuals.DeadESP
         local col = Config.Visuals.DeadESPColor or Color3.fromRGB(255,60,60)
         if not on then
@@ -10260,7 +10363,7 @@ do
                 _cleanup(char)
             end
         end
-    end)
+    end))
 end
 
 do
@@ -10337,7 +10440,8 @@ do
         return out
     end
 
-    RunService.Heartbeat:Connect(function()
+    connectSignal(RunService.Heartbeat:Connect(function()
+        if not scriptRunning then return end
         local on   = Config.Visuals.PlayerChams
         local col  = Config.Visuals.PlayerChamsColor or Color3.fromRGB(180, 90, 255)
         local inW  = Config.Visuals.PlayerChamsInWeapons == true
@@ -10389,12 +10493,149 @@ do
             rec.fill.Adornee = m; rec.fill.FillColor = col; rec.fill.OutlineColor = col; rec.fill.Enabled = true
             rec.rim.Adornee  = m; rec.rim.OutlineColor  = col; rec.rim.Enabled  = true
         end
-    end)
+    end))
 
     if LP then
-        LP.CharacterAdded:Connect(function() _clearAll() end)
-        LP.CharacterRemoving:Connect(function() _clearAll() end)
+        connectSignal(LP.CharacterAdded:Connect(function() if scriptRunning then _clearAll() end end))
+        connectSignal(LP.CharacterRemoving:Connect(function() if scriptRunning then _clearAll() end end))
+end
+
+
+-- GLASS EFFECT runtime — LP viewmodel gets a frosted-glass look (like reference image).
+-- Applies to every BasePart inside workspace.CurrentCamera Models (arms, gloves,
+-- knife, gun) plus the equipped Tool. Preserves originals and restores on toggle-off.
+do
+    local Players    = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local LP         = Players.LocalPlayer
+    local TAG        = "EclipseGlassFX"
+
+    local touched = {}  -- [BasePart] = { Transparency, Material, Reflectance, Color }
+    local outlineHLs = {} -- [Model or Tool] = Highlight (subtle rim)
+
+    local function _snapshot(p)
+        if touched[p] then return end
+        touched[p] = {
+            Transparency = p.Transparency,
+            Material     = p.Material,
+            Reflectance  = p.Reflectance,
+            Color        = p.Color,
+        }
     end
+    local function _restorePart(p)
+        local s = touched[p]; if not s then return end
+        pcall(function()
+            p.Transparency = s.Transparency
+            p.Material     = s.Material
+            p.Reflectance  = s.Reflectance
+            p.Color        = s.Color
+        end)
+        touched[p] = nil
+    end
+    local function _clearOutlines()
+        for host, h in pairs(outlineHLs) do
+            pcall(function() h:Destroy() end)
+            outlineHLs[host] = nil
+        end
+    end
+    local function _clearAll()
+        for p, _ in pairs(touched) do _restorePart(p) end
+        _clearOutlines()
+    end
+    _G.EclipseGlassFXClear = _clearAll
+
+    local function _collectHosts()
+        local hosts = {}
+        local cam = workspace.CurrentCamera
+        if cam then
+            for _, top in ipairs(cam:GetChildren()) do
+                if top:IsA("Model") then
+                    table.insert(hosts, top)
+                    for _, ch in ipairs(top:GetDescendants()) do
+                        if ch:IsA("Model") then table.insert(hosts, ch) end
+                    end
+                end
+            end
+        end
+        local ch = LP and LP.Character
+        if ch then
+            local tool = ch:FindFirstChildOfClass("Tool")
+            if tool then table.insert(hosts, tool) end
+        end
+        return hosts
+    end
+
+    connectSignal(RunService.Heartbeat:Connect(function()
+        if not scriptRunning then return end
+        local on = Config.Visuals.GlassFX
+        if not on then
+            if next(touched) or next(outlineHLs) then _clearAll() end
+            return
+        end
+        local col   = Config.Visuals.GlassFXColor   or Color3.fromRGB(235, 240, 255)
+        local trans = math.clamp(tonumber(Config.Visuals.GlassFXOpacity) or 0.78, 0.4, 0.95)
+
+        local hosts = _collectHosts()
+        local active = {}
+        for _, h in ipairs(hosts) do active[h] = true end
+
+        -- Cleanup hosts that vanished (weapon swap, tool unequip)
+        for host, hl in pairs(outlineHLs) do
+            if not active[host] or not host.Parent then
+                pcall(function() hl:Destroy() end)
+                outlineHLs[host] = nil
+            end
+        end
+        -- Restore parts whose host is no longer active
+        for p, _ in pairs(touched) do
+            local ok = false
+            for _, h in ipairs(hosts) do
+                if p:IsDescendantOf(h) then ok = true; break end
+            end
+            if not ok or not p.Parent then _restorePart(p) end
+        end
+
+        for _, host in ipairs(hosts) do
+            -- Subtle rim outline (occluded) to match the frosted knife silhouette
+            local hl = outlineHLs[host]
+            if not (hl and hl.Parent) then
+                hl = Instance.new("Highlight")
+                hl.Name = "EclipseGlassFX_Rim"
+                hl:SetAttribute(TAG, true)
+                hl.DepthMode = Enum.HighlightDepthMode.Occluded
+                hl.FillTransparency = 1
+                hl.OutlineTransparency = 0.15
+                hl.OutlineColor = col
+                hl.Adornee = host
+                hl.Parent  = host
+                outlineHLs[host] = hl
+            else
+                hl.OutlineColor = col
+                hl.Adornee = host
+                hl.Enabled = true
+            end
+            -- Frost every BasePart under the host
+            for _, d in ipairs(host:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    _snapshot(d)
+                    pcall(function()
+                        d.Transparency = trans
+                        d.Material     = Enum.Material.Glass
+                        d.Reflectance  = 0.15
+                        d.Color        = col
+                    end)
+                end
+            end
+        end
+    end))
+
+    if LP then
+        connectSignal(LP.CharacterAdded:Connect(function() if scriptRunning then _clearAll() end end))
+        connectSignal(LP.CharacterRemoving:Connect(function() if scriptRunning then _clearAll() end end))
+    end
+end
+
+
 end
 
 
@@ -10406,8 +10647,9 @@ end
 --   every ColorPicker holder's ZIndex on open so it stays above the panel.
 -- =========================================================================
 task.spawn(function()
-    while true do
+    while scriptRunning do
         task.wait(0.25)
+        if not scriptRunning then break end
         local sg = Library and Library.ScreenGui
         if sg then
             for _, d in ipairs(sg:GetDescendants()) do
@@ -10472,7 +10714,6 @@ PVGB:AddToggle("PV_BulletTracer", { Text="BULLET TRACER", Default=false,
     Callback=function(v)
         Config.Visuals.BulletTracer = v and true or false
         if v then
-            if type(_G.EclipseInstallShootTracer) == "function" then pcall(_G.EclipseInstallShootTracer) end
             if type(_G.EclipseInstallCreateTracerListener) == "function" then pcall(_G.EclipseInstallCreateTracerListener) end
         else
             if type(_G.EclipseUninstallCreateTracerListener) == "function" then pcall(_G.EclipseUninstallCreateTracerListener) end
@@ -10482,6 +10723,7 @@ PVGB:AddToggle("PV_BulletTracer", { Text="BULLET TRACER", Default=false,
     :AddColorPicker("PV_BulletTracerColor", {
         Default=Config.Visuals.BulletTracerColor,
         Callback=function(c) Config.Visuals.BulletTracerColor = c end })
+
 
 do
     local RS         = game:GetService("ReplicatedStorage")
@@ -10546,18 +10788,79 @@ do
     end
     _G.EclipseLPAlivePlaying = _lpAlivePlaying
 
+    -- Cached refs to the game's own tracer asset (premium look, no lag).
+    local _assetsF, _tracersF, _defaultTracer
+    local function _resolveTracerAsset()
+        if _defaultTracer and _defaultTracer.Parent then return _defaultTracer end
+        local ok = pcall(function()
+            _assetsF  = RS:FindFirstChild("Assets") or RS:WaitForChild("Assets", 3)
+            _tracersF = _assetsF and (_assetsF:FindFirstChild("Tracers") or _assetsF:WaitForChild("Tracers", 3))
+            _defaultTracer = _tracersF and _tracersF:FindFirstChild("Default")
+        end)
+        if ok then return _defaultTracer end
+        return nil
+    end
+
+    local DebrisSvc = game:GetService("Debris")
+    local function _debrisFolder()
+        return workspace:FindFirstChild("Debris") or workspace
+    end
+
     local function _drawTracer(a, b)
         if not (Config and Config.Visuals and Config.Visuals.BulletTracer) then return end
         if _G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil then return end
         if not _lpAlivePlaying() then return end
         if typeof(a) ~= "Vector3" or typeof(b) ~= "Vector3" then return end
         local d = b - a; local mag = d.Magnitude
-        if mag < 0.5 or mag > 5000 then return end
+        if mag < 0.5 then return end
+        local dir = d.Unit
+
+        -- Preferred path: clone game's Assets.Tracers.Default and tween it.
+        local asset = _resolveTracerAsset()
+        if asset then
+            local ok, clone = pcall(function() return asset:Clone() end)
+            if ok and clone then
+                pcall(function()
+                    clone.CollisionGroup = "Debris"
+                    clone.CanCollide = false
+                    clone.CanQuery   = false
+                    clone.CanTouch   = false
+                    clone.Anchored   = true
+                    local col = Config.Visuals.BulletTracerColor
+                    if col then pcall(function() clone.Color = col end) end
+                    clone.CFrame = CFrame.new(a + dir * 5)
+                    clone.Parent = _debrisFolder()
+                    local tw = TweenService:Create(clone,
+                        TweenInfo.new(1, Enum.EasingStyle.Linear),
+                        { CFrame = CFrame.new(a + dir * 1000) })
+                    task.defer(function() pcall(function() tw:Play() end) end)
+                    local ti = TweenInfo.new(0.05, Enum.EasingStyle.Linear)
+                    local map = {
+                        TopAttachment    = Vector3.new(0,  0.1, 0),
+                        BottomAttachment = Vector3.new(0, -0.1, 0),
+                        LeftAttachment   = Vector3.new(-0.1, 0, 0),
+                        RightAttachment  = Vector3.new( 0.1, 0, 0),
+                    }
+                    for name, off in pairs(map) do
+                        local at = clone:FindFirstChild(name)
+                        if at then
+                            pcall(function() at.Position = Vector3.new(0,0,0) end)
+                            pcall(function() TweenService:Create(at, ti, { Position = off }):Play() end)
+                        end
+                    end
+                    DebrisSvc:AddItem(clone, 2)
+                end)
+                return
+            end
+        end
+
+        -- Fallback: pooled neon part (used only if the game's asset isn't found).
+        if mag > 5000 then return end
         local ok, p = pcall(_get); if not ok or not p then return end
         pcall(function()
-            p.Color     = Config.Visuals.BulletTracerColor or Color3.fromRGB(180,90,255)
-            p.Size      = Vector3.new(0.06, 0.06, mag)
-            p.CFrame    = CFrame.lookAt(a + d*0.5, b)
+            p.Color        = Config.Visuals.BulletTracerColor or Color3.fromRGB(180,90,255)
+            p.Size         = Vector3.new(0.06, 0.06, mag)
+            p.CFrame       = CFrame.lookAt(a + d*0.5, b)
             p.Transparency = 0
         end)
         local tw
@@ -10571,6 +10874,7 @@ do
         end)
     end
     _G.EclipseDrawTracer = _drawTracer
+
 
     -- ------------------------------------------------------------
     -- LAZY CreateTracer listener (RemoteEvent OnClientEvent).
@@ -10634,6 +10938,7 @@ do
         if _ctConn then return end
         local ev = _resolveCT(); if not ev then return end
         _ctConn = ev.OnClientEvent:Connect(function(...)
+            if not scriptRunning then return end
             if not (Config and Config.Visuals and Config.Visuals.BulletTracer) then return end
             if _G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil then return end
             if not _lpAlivePlaying() then return end
@@ -10642,6 +10947,7 @@ do
             if not _isLPSource(who, origin) then return end
             _drawTracer(origin, dest)
         end)
+        connectSignal(_ctConn)
     end
 
     _G.EclipseUninstallCreateTracerListener = function()
@@ -10672,7 +10978,8 @@ do
     local _impacts, _hb = {}, nil
     local function _ensureHB()
         if _hb then return end
-        _hb = RunService.Heartbeat:Connect(function(dt)
+        _hb = connectSignal(RunService.Heartbeat:Connect(function(dt)
+            if not scriptRunning then return end
             for i = #_impacts, 1, -1 do
                 local e = _impacts[i]; e.t = e.t + dt
                 local a = e.t / e.life
@@ -10684,7 +10991,7 @@ do
                     e.l2.BackgroundTransparency = a
                 end
             end
-        end)
+        end))
     end
 
     local function _cap(list, limit, key)
@@ -10746,12 +11053,13 @@ do
         local im = vfx:FindFirstChild("CreateImpact")
         if im and im:IsA("RemoteEvent") then
             pcall(function()
-                im.OnClientEvent:Connect(function(d)
+                connectSignal(im.OnClientEvent:Connect(function(d)
+                    if not scriptRunning then return end
                     if type(d) ~= "table" then return end
                     if Config.Visuals.BulletImpact then
                         pcall(_spawnImpact, d.Position, d.Normal)
                     end
-                end)
+                end))
 
             end)
         end
@@ -11650,22 +11958,30 @@ do
     Config.Misc.AutoSkillRespectBuy = true
     Config.Misc.AutoSkillRefill     = true
 
-    -- RAPID RELOAD — same refill logic as AutoSkill, but standalone.
-    Config.Misc.RapidReload = Config.Misc.RapidReload or false
-    local RRGB = Tabs.Misc:AddLeftGroupbox("RAPID RELOAD")
+    -- RAPID RELOAD + RAPID FIRE — standalone Misc helpers.
+    Config.Misc.RapidReload   = Config.Misc.RapidReload or false
+    Config.Misc.RapidFire     = Config.Misc.RapidFire or false
+    Config.Misc.RapidFireRate = Config.Misc.RapidFireRate or 20
+    local RRGB = MiscGB
     RRGB:AddToggle("RR_Enable", { Text = "RAPID RELOAD", Default = false,
         Callback = function(v) Config.Misc.RapidReload = v end })
+    RRGB:AddToggle("RF_Enable", { Text = "RAPID FIRE", Default = false,
+        Callback = function(v) Config.Misc.RapidFire = v end })
+    RRGB:AddSlider("RF_Rate", { Text = "RAPID FIRE RATE", Default = Config.Misc.RapidFireRate,
+        Min = 1, Max = 40, Rounding = 0, Suffix = " /s",
+        Callback = function(v) Config.Misc.RapidFireRate = v end })
 
-    -- ANTI-AIM (Spinbot) — from attached source: spins HRP each Heartbeat.
+    -- ANTI-AIM (Spinbot) — sits on the RIGHT side, next to AUTOSKILL.
     Config.Misc.AntiAim      = Config.Misc.AntiAim or false
     Config.Misc.AntiAimSpeed = Config.Misc.AntiAimSpeed or 80
-    local AAGB = Tabs.Misc:AddLeftGroupbox("ANTI-AIM")
+    local AAGB = Tabs.Misc:AddRightGroupbox("ANTI-AIM")
     AAGB:AddToggle("AA_Enable", { Text = "SPINBOT", Default = false,
         Callback = function(v) Config.Misc.AntiAim = v end })
     AAGB:AddSlider("AA_Speed", { Text = "SPINBOT SPEED", Default = Config.Misc.AntiAimSpeed,
         Min = 1, Max = 150, Rounding = 0, Suffix = "",
         Callback = function(v) Config.Misc.AntiAimSpeed = v end })
 end
+
 
 -- ============================================================
 -- THIRD PERSON — source-style (RenderStepped drives cam.CFrame,
@@ -11727,7 +12043,8 @@ do
         -- Third Person (Mur4Scripts source method): override cam.CFrame each frame
         -- following the HumanoidRootPart with a fixed offset, and hide the
         -- viewmodel knife/weapon inside the camera.
-        _tpConn = RunS.RenderStepped:Connect(function()
+        _tpConn = connectSignal(RunS.RenderStepped:Connect(function()
+            if not scriptRunning then return end
             if not Config.Misc.ThirdPerson then return end
             local ch  = LocalPlayer.Character
             local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
@@ -11740,7 +12057,7 @@ do
                 end
             end
             _hideVM()
-        end)
+        end))
     end
 
     local function _tpDisable()
@@ -11762,9 +12079,10 @@ do
     _G.EclipseTPEnable  = _tpEnable
     _G.EclipseTPDisable = _tpDisable
 
-    LocalPlayer.CharacterAdded:Connect(function()
+    connectSignal(LocalPlayer.CharacterAdded:Connect(function()
+        if not scriptRunning then return end
         if Config.Misc.ThirdPerson then task.wait(0.3); pcall(_tpEnable) end
-    end)
+    end))
 end
 
 
@@ -11789,7 +12107,7 @@ do
     _G.EclipseWHClear = _clearAll
 
     if LocalPlayer then
-        LocalPlayer.CharacterAdded:Connect(function() _clearAll(); task.wait(0.5) end)
+        connectSignal(LocalPlayer.CharacterAdded:Connect(function() if scriptRunning then _clearAll(); task.wait(0.5) end end))
     end
 
     local function _collectVMWeapons()
@@ -11840,10 +12158,19 @@ do
             rec.fill.Adornee = model
             rec.fill.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             rec.fill.Parent = model
-            -- PointLight removed: highlight now uses only the Highlight
-            -- fill/rim so no ambient/scene light leaks onto other props.
+            -- Rivals-style glow: PointLight attached to primary/first BasePart
+            -- scales Range and Brightness with intensity for a real bloom.
             rec.light = nil
             rec.lightHost = nil
+            local host = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+            if host then
+                local pl = Instance.new("PointLight")
+                pl.Name = "EclipseWHGlow"
+                pl.Shadows = false
+                pl.Parent = host
+                rec.light = pl
+                rec.lightHost = host
+            end
             _highlights[model] = rec
         end
         local a = math.clamp((inten or 1), 0.2, 3.0)
@@ -11868,16 +12195,19 @@ do
                     local nh = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
                     if nh then rec.light.Parent = nh; rec.lightHost = nh end
                 end
+                -- Rivals mapping: rng = 6 + a/3 * 24, bri = 1 + a/3 * 4
+                local u = math.clamp(a / 3.0, 0, 1)
                 rec.light.Color      = color
-                rec.light.Brightness = math.clamp(a * 2.5, 0.5, 8.0)
-                rec.light.Range      = math.clamp(4 + a * 6, 4, 22)
+                rec.light.Range      = 6 + u * 24
+                rec.light.Brightness = 1 + u * 4
             end)
         end
     end
 
 
+
     local _whAcc = 0
-    RunS.Heartbeat:Connect(function(dt)
+    connectSignal(RunS.Heartbeat:Connect(function(dt)
         if not scriptRunning then return end
         if not Config.Misc.WeaponHighlight then
             if next(_highlights) then _clearAll() end
@@ -11896,7 +12226,7 @@ do
         if inten < 0.2 then inten = 0.2 end
         local col = Config.Misc.WeaponHighlightColor or Color3.fromRGB(0, 170, 255)
         for _, m in ipairs(list) do _ensureHighlight(m, col, inten) end
-    end)
+    end))
 end
 
 
@@ -11994,14 +12324,15 @@ function _applyStretch(v)
         return
     end
     if _EclipseStretch.conn then return end
-    _EclipseStretch.conn = RunService.RenderStepped:Connect(function()
+    _EclipseStretch.conn = connectSignal(RunService.RenderStepped:Connect(function()
+        if not scriptRunning then return end
         if not Camera then return end
         if (_EclipseStretch.v or 0) <= 0 then return end
         local f = _stretchFactor(_EclipseStretch.v)
         pcall(function()
             Camera.CFrame = Camera.CFrame * CFrame.new(0, 0, 0, 1, 0, 0, 0, f, 0, 0, 0, 1)
         end)
-    end)
+    end))
     connectSignal(_EclipseStretch.conn)
 end
 MiscGB:AddSlider("StretchedRes_Slider", { Text="STRETCHED RESOLUTION", Default=0, Min=0, Max=10, Rounding=1,
@@ -12039,8 +12370,8 @@ do
     -- Bind to RenderStep with a "First" priority so the FOV is enforced BEFORE
     -- ESP loops (Heartbeat) run WorldToViewportPoint. Combined with Heartbeat
     -- + PreRender, this keeps ESP boxes stuck to enemies while CustomFOV is on.
-    _G.__EclipseFOVConn  = RunService.Heartbeat:Connect(_apply)
-    _G.__EclipseFOVConn2 = RunService.PreRender:Connect(_apply)
+    _G.__EclipseFOVConn  = connectSignal(RunService.Heartbeat:Connect(_apply))
+    _G.__EclipseFOVConn2 = connectSignal(RunService.PreRender:Connect(_apply))
     pcall(function()
         RunService:BindToRenderStep("EclipseCustomFOV", Enum.RenderPriority.First.Value, _apply)
     end)
@@ -12311,22 +12642,24 @@ local function ensureSpecUI()
     -- Drag
     pcall(function()
         local D = {a=false}
-        f.InputBegan:Connect(function(input)
+        connectSignal(f.InputBegan:Connect(function(input)
+            if not scriptRunning then return end
             if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
                 D.a = true; D.s = input.Position; D.p = f.Position
-                input.Changed:Connect(function()
+                connectSignal(input.Changed:Connect(function()
                     if input.UserInputState == Enum.UserInputState.End then D.a = false end
-                end)
+                end))
             end
-        end)
-        UserInput.InputChanged:Connect(function(input)
+        end))
+        connectSignal(UserInput.InputChanged:Connect(function(input)
+            if not scriptRunning then return end
             if D.a and (input.UserInputType == Enum.UserInputType.MouseMovement
             or input.UserInputType == Enum.UserInputType.Touch) then
                 local d = input.Position - D.s
                 f.Position = UDim2.new(D.p.X.Scale, D.p.X.Offset + d.X, D.p.Y.Scale, D.p.Y.Offset + d.Y)
             end
-        end)
+        end))
     end)
     pcall(_bindPanelPosition, "SpecPanel", f)
     pcall(_applyNLPanelStyle, f, { Transparency = 0.24, Corner = 6, AccentBar = false })
@@ -12409,14 +12742,15 @@ task.spawn(function()
                     TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
                     { BackgroundTransparency = 1 })
                 tw:Play()
-                tw.Completed:Once(function()
+                connectSignal(tw.Completed:Once(function()
+                    if not scriptRunning then return end
                     if SpecUI.frame and Config.Misc.SpectatorList ~= true then
                         SpecUI.frame.Visible = false
                     elseif SpecUI.frame then
                         SpecUI.frame.Visible = false
                         SpecUI.frame.BackgroundTransparency = 0.24
                     end
-                end)
+                end))
                 wasVisible = false
             end
         end)
@@ -12457,12 +12791,13 @@ task.spawn(function()
                         TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
                         { BackgroundTransparency = 1 })
                     tw:Play()
-                    tw.Completed:Once(function()
+                    connectSignal(tw.Completed:Once(function()
+                        if not scriptRunning then return end
                         if not C4UI.shown and C4UI.frame then
                             C4UI.frame.Visible = false
                             C4UI.frame.BackgroundTransparency = 0.24
                         end
-                    end)
+                    end))
                 end
             end
         end)
@@ -12927,7 +13262,7 @@ function showTermsModal(onAccept)
 
         -- 8. Continuous top-bar accent pulse
         task.spawn(function()
-            while gui and gui.Parent do
+            while scriptRunning and gui and gui.Parent do
                 T:Create(topGrad, TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
                     Offset = Vector2.new(1, 0)
                 }):Play()
@@ -12940,7 +13275,8 @@ function showTermsModal(onAccept)
 
     -- ---------- CHECKBOX → AUTO-CONTINUE (no button) ----------
     local locked = false
-    check.MouseButton1Click:Connect(function()
+    connectSignal(check.MouseButton1Click:Connect(function()
+        if not scriptRunning then return end
         if locked then return end
         locked = true
 
@@ -12980,7 +13316,7 @@ function showTermsModal(onAccept)
         task.wait(0.92)
         pcall(function() gui:Destroy() end)
         if onAccept then pcall(onAccept) end
-    end)
+    end))
 end
 
 
@@ -13015,7 +13351,7 @@ function showWarningModal(titleText, bodyText, acceptText, declineText, onAccept
     dim.AutoButtonColor = false
     dim.Active = true
     dim.ZIndex = 1
-    dim.MouseButton1Click:Connect(function() end)
+    connectSignal(dim.MouseButton1Click:Connect(function() end))
 
     local card = Instance.new("Frame", dim)
     card.AnchorPoint = Vector2.new(0.5,0.5)
@@ -13089,13 +13425,15 @@ function showWarningModal(titleText, bodyText, acceptText, declineText, onAccept
         end)
     end
 
-    buttonAccept.MouseButton1Click:Connect(function()
+    connectSignal(buttonAccept.MouseButton1Click:Connect(function()
+        if not scriptRunning then return end
         closeModal(onAccept)
-    end)
+    end))
 
-    buttonDecline.MouseButton1Click:Connect(function()
+    connectSignal(buttonDecline.MouseButton1Click:Connect(function()
+        if not scriptRunning then return end
         closeModal(onDecline)
-    end)
+    end))
 end
 
 EX = {} 
@@ -13118,23 +13456,25 @@ EX.originalSoundIds = {}
     local function makeDraggable(frame)
         local dragging, dragStart, startPos
         frame.Active = true
-        frame.InputBegan:Connect(function(input)
+        connectSignal(frame.InputBegan:Connect(function(input)
+            if not scriptRunning then return end
             if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
                 dragging = true; dragStart = input.Position; startPos = frame.Position
-                input.Changed:Connect(function()
+                connectSignal(input.Changed:Connect(function()
                     if input.UserInputState == Enum.UserInputState.End then dragging = false end
-                end)
+                end))
             end
-        end)
-        UserInput.InputChanged:Connect(function(input)
+        end))
+        connectSignal(UserInput.InputChanged:Connect(function(input)
+            if not scriptRunning then return end
             if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
             or input.UserInputType == Enum.UserInputType.Touch) then
                 local d = input.Position - dragStart
                 frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
                                            startPos.Y.Scale, startPos.Y.Offset + d.Y)
             end
-        end)
+        end))
     end
 
     EX.makePanel = function(name, size, pos, titleText)
@@ -13949,12 +14289,13 @@ end)()
         local function _hook(ch)
             local hum = ch:WaitForChild("Humanoid", 5)
             if not hum then return end
-            hum.Died:Connect(function()
+            connectSignal(hum.Died:Connect(function()
+                if not scriptRunning then return end
                 _logBoth("Player Eliminated", p.Name.." was eliminated.")
-            end)
+            end))
         end
         if p.Character then task.spawn(_hook, p.Character) end
-        p.CharacterAdded:Connect(_hook)
+        connectSignal(p.CharacterAdded:Connect(function(ch) if scriptRunning then _hook(ch) end end))
     end
     for _, p in ipairs(Players:GetPlayers()) do _watchPlayer(p) end
     table.insert(UnloadConnections, Players.PlayerAdded:Connect(_watchPlayer))
@@ -14562,6 +14903,7 @@ end)()
         local ev = ui and ui:FindFirstChild("UIPlayerKilled")
         if ev and ev.OnClientEvent then
             local conn = ev.OnClientEvent:Connect(function(info)
+                if not scriptRunning then return end
                 if type(info) ~= "table" then return end
                 if not Config.GlobalEnable then return end
                 local myId = tostring(LocalPlayer.UserId)
@@ -14649,12 +14991,14 @@ end)()
         hum:SetAttribute("EclipseKillHooked", true)
         local hConn, dConn
         hConn = hum.HealthChanged:Connect(function(hp)
+            if not scriptRunning then return end
             if tonumber(hp) and hp <= 0 then
                 if hConn then pcall(function() hConn:Disconnect() end) end
                 pcall(_tryKillEffectFromHealth, plr, char)
             end
         end)
         dConn = hum.Died:Connect(function()
+            if not scriptRunning then return end
             if dConn then pcall(function() dConn:Disconnect() end) end
             if hConn then pcall(function() hConn:Disconnect() end) end
             pcall(_tryKillEffectFromHealth, plr, char)
@@ -14706,6 +15050,7 @@ end)()
                     stat:SetAttribute("EclipseKillWatch", true)
                     local last = tonumber(stat.Value) or 0
                     local conn = stat.Changed:Connect(function(v)
+                        if not scriptRunning then return end
                         local cur = tonumber(v) or 0
                         if cur > last then
                             last = cur
@@ -14765,6 +15110,7 @@ end)()
         if not folder or folder:GetAttribute("EclipseKFXHooked") then return end
         folder:SetAttribute("EclipseKFXHooked", true)
         local conn = folder.ChildAdded:Connect(function(child)
+            if not scriptRunning then return end
             if not (Config.GlobalEnable and Config.Visuals.KillEffect) then return end
             task.wait(0.05)
             if not (child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") and (child:FindFirstChild("Head") or child:FindFirstChild("UpperTorso"))) then return end
@@ -14846,8 +15192,9 @@ task.spawn(function()
         return v
     end
     task.wait(15)
+    if not scriptRunning then return end
     local notified = {}
-    while true do
+    while scriptRunning do
         pcall(function()
             local src = fetch()
             local remote = parseVersion(src)
@@ -15213,11 +15560,12 @@ end)
         _seq         = 0
     end
 
-    LocalPlayer.CharacterAdded:Connect(function(_)
+    connectSignal(LocalPlayer.CharacterAdded:Connect(function(_)
+        if not scriptRunning then return end
         _resetASState()
         task.delay(0.35, _resetASState)
-    end)
-    LocalPlayer.CharacterRemoving:Connect(_resetASState)
+    end))
+    connectSignal(LocalPlayer.CharacterRemoving:Connect(function() if scriptRunning then _resetASState() end end))
 
     ------------------------------------------------------------------
     -- Dedicated refill loop (KOV background) — cheap gates first
@@ -15471,13 +15819,15 @@ end)
     do
         local UIS = game:GetService("UserInputService")
         local _mb1Held = false
-        UIS.InputBegan:Connect(function(inp, gp)
+        connectSignal(UIS.InputBegan:Connect(function(inp, gp)
+            if not scriptRunning then return end
             if gp then return end
             if inp.UserInputType == Enum.UserInputType.MouseButton1 then _mb1Held = true end
-        end)
-        UIS.InputEnded:Connect(function(inp)
+        end))
+        connectSignal(UIS.InputEnded:Connect(function(inp)
+            if not scriptRunning then return end
             if inp.UserInputType == Enum.UserInputType.MouseButton1 then _mb1Held = false end
-        end)
+        end))
 
         local function _visibleHead(pl)
             local c = pl.Character; if not c then return nil end
@@ -15583,8 +15933,9 @@ _G.EclipseBulletTracerFire = function() end
 -- Independent loop; safe when AutoSkill is disabled.
 -- ============================================================
 task.spawn(function()
-    while true do
+    while scriptRunning do
         task.wait(0.12)
+        if not scriptRunning then break end
         if Config and Config.Misc and Config.Misc.RapidReload then
             local find = _G.EclipseAS_FindEquipped
             local refill = _G.EclipseAS_TryRefill
@@ -15600,60 +15951,107 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- BULLET TRACER v3 — lazy hook OUTGOING ShootWeapon only when enabled.
--- No hook is installed while disabled, so it cannot cost FPS with the
--- toggle off. Draws origin → first hit position and skips AutoSkill shots.
+-- BULLET TRACER v4 — NO ShootWeapon namecall hook (that path caused
+-- global lag). Tracers are drawn exclusively from the CreateTracer
+-- OnClientEvent listener, filtered to LP-authored shots, using the
+-- game's own Assets.Tracers.Default asset (see _drawTracer).
+-- ============================================================
+_G.EclipseInstallShootTracer = function() end
+
+-- ============================================================
+-- BULLET TRACER — auto-install CreateTracer listener if the
+-- toggle was restored ON by autoconfig on load.
+-- ============================================================
+task.defer(function()
+    if Config and Config.Visuals and Config.Visuals.BulletTracer
+       and type(_G.EclipseInstallCreateTracerListener) == "function" then
+        pcall(_G.EclipseInstallCreateTracerListener)
+    end
+end)
+
+-- ============================================================
+-- RAPID FIRE (Misc) — fires the equipped weapon at the crosshair
+-- as fast as RapidFireRate allows, using the raw ShootWeapon RE.
+-- Independent from AutoSkill (no aim, no target-lock). Skips melee,
+-- respects buy period, and does NOT trigger the LP tracer echo
+-- (tracers are still drawn when the toggle is on because CreateTracer
+-- fires normally; only autoskill silently suppresses tracers).
 -- ============================================================
 do
-    local installed = false
-    _G.EclipseInstallShootTracer = function()
-        if installed then return end
-        installed = true
-        local ge = (getgenv and getgenv()) or _G
-        local hmm = (type(rawget(ge, "hookmetamethod")) == "function" and rawget(ge, "hookmetamethod")) or hookmetamethod
-        local ncc = (type(rawget(ge, "newcclosure")) == "function" and rawget(ge, "newcclosure")) or newcclosure or function(f) return f end
-        local gncm = (type(rawget(ge, "getnamecallmethod")) == "function" and rawget(ge, "getnamecallmethod")) or getnamecallmethod
-        if type(hmm) ~= "function" or type(gncm) ~= "function" then return end
-        local orig
-        local ok = pcall(function()
-            orig = hmm(game, "__namecall", ncc(function(self, ...)
-                if Config and Config.Visuals and Config.Visuals.BulletTracer
-                   and not (_G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil)
-                   and (type(_G.EclipseLPAlivePlaying) ~= "function" or _G.EclipseLPAlivePlaying())
-                   and typeof(self) == "Instance" and self.Name == "ShootWeapon" then
-                    local method = gncm()
-                    if method == "FireServer" or method == "InvokeServer" then
-                        local packet = select(1, ...)
-                        if type(packet) == "table" then
-                            local bullets = rawget(packet, "Bullets")
-                            local b = type(bullets) == "table" and rawget(bullets, 1)
-                            local origin = type(b) == "table" and rawget(b, "Origin")
-                            if typeof(origin) == "Vector3" then
-                                local endPos
-                                local hits = rawget(b, "Hits")
-                                local h1 = type(hits) == "table" and rawget(hits, 1)
-                                if type(h1) == "table" and typeof(rawget(h1, "Position")) == "Vector3" then
-                                    endPos = rawget(h1, "Position")
-                                else
-                                    local dir = rawget(b, "Direction")
-                                    if typeof(dir) == "Vector3" and dir.Magnitude > 0 then
-                                        endPos = origin + dir.Unit * 500
-                                    end
-                                end
-                                if endPos and type(_G.EclipseDrawTracer) == "function" then
-                                    pcall(_G.EclipseDrawTracer, origin, endPos)
-                                end
+    local RS      = game:GetService("ReplicatedStorage")
+    local Players = game:GetService("Players")
+    local LP      = Players.LocalPlayer
+    local _re, _seq = nil, 0
+    local function _findRE()
+        if typeof(_re) == "Instance" and _re.Parent then return _re end
+        local ok, re = pcall(function()
+            local nr = RS:FindFirstChild("NetworkRemotes")
+            local inv = nr and nr:FindFirstChild("Inventory")
+            return inv and inv:FindFirstChild("ShootWeapon")
+        end)
+        if ok and typeof(re) == "Instance" then _re = re end
+        return _re
+    end
+
+    task.spawn(function()
+        while scriptRunning do
+            local rate = tonumber(Config and Config.Misc and Config.Misc.RapidFireRate) or 20
+            if rate < 1 then rate = 1 end
+            task.wait(1 / rate)
+            if not scriptRunning then break end
+            if not (Config and Config.Misc and Config.Misc.RapidFire) then
+                -- idle
+            else
+                local find    = _G.EclipseAS_FindEquipped
+                local isMelee = _G.EclipseAS_IsMelee
+                local isBuy   = _G.EclipseAS_IsBuyPeriod
+                local alive   = _G.EclipseLPAlivePlaying
+                if type(find) ~= "function" or (type(alive) == "function" and not alive()) then
+                    -- skip
+                elseif type(isBuy) == "function" and isBuy() then
+                    -- skip
+                else
+                    local ok, w = pcall(find)
+                    if ok and w and not (type(isMelee) == "function" and isMelee(w)) then
+                        local rounds = rawget(w, "Rounds") or 0
+                        if rounds > 0 then
+                            local re = _findRE()
+                            local cam = workspace.CurrentCamera
+                            if re and cam then
+                                local origin = cam.CFrame.Position
+                                local dir    = cam.CFrame.LookVector
+                                _seq = _seq + 1
+                                local packet = {
+                                    Identifier     = rawget(w, "Identifier"),
+                                    ShootingHand   = "Right",
+                                    Bullets = {{
+                                        Direction = dir,
+                                        Origin    = origin,
+                                        Hits      = {{
+                                            Normal   = -dir,
+                                            Position = origin + dir * 500,
+                                            Instance = workspace.Terrain,
+                                            Distance = 500,
+                                            Material = "Plastic",
+                                            Exit     = false,
+                                        }},
+                                    }},
+                                    Seq            = _seq,
+                                    IsSniperScoped = false,
+                                }
+                                pcall(function() w.Rounds = rounds - 1 end)
+                                pcall(function() re:FireServer(packet) end)
                             end
                         end
                     end
                 end
-                return orig(self, ...)
-            end))
-        end)
-        if not ok then installed = false end
-    end
-
+            end
+        end
+    end)
 end
+
+
+
 
 -- ============================================================
 -- DROPDOWN AUTO-CLOSE — brute-force close every neverlose dropdown
@@ -15662,40 +16060,30 @@ end
 -- ============================================================
 task.spawn(function()
     local wasOpen = false
-    while true do
+    while scriptRunning do
         task.wait(0.1)
+        if not scriptRunning then break end
         local open = Library and (Library._guiOpen or Library.Toggled)
         if wasOpen and not open then
-            local roots = {}
-            pcall(function() table.insert(roots, game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")) end)
-            pcall(function() table.insert(roots, game:GetService("CoreGui")) end)
-            for _, root in ipairs(roots) do
-                if root then
-                    for _, d in ipairs(root:GetDescendants()) do
-                        if d:IsA("GuiObject") and d.Visible then
-                            local nm = tostring(d.Name or ""):lower()
-                            local pn = d.Parent and tostring(d.Parent.Name or ""):lower() or ""
-                            if (nm:find("dropdown") or nm:find("droplist") or nm == "list" or nm == "options"
-                                or pn:find("dropdown")) and (not nm:find("button")) then
-                                pcall(function() d.Visible = false end)
+            pcall(function()
+                local NL = NLLib or Library
+                if NL and type(NL.OpenFrames) == "table" then
+                    local snap = {}
+                    for _, v in pairs(NL.OpenFrames) do snap[#snap+1] = v end
+                    for _, w in ipairs(snap) do
+                        pcall(function()
+                            if w and type(w.SetOpen) == "function" then
+                                w:SetOpen(false)
                             end
-                        end
+                        end)
                     end
                 end
-            end
-            for _, opt in pairs(Library and Library.Options or {}) do
-                pcall(function()
-                    if opt and opt.Type == "Dropdown" then
-                        for _, m in ipairs({"HideDropdown","CloseDropdown","Close","Hide"}) do
-                            if type(opt[m]) == "function" then pcall(opt[m], opt) end
-                        end
-                    end
-                end)
-            end
+            end)
         end
         wasOpen = open and true or false
     end
 end)
+
 
 -- ============================================================
 -- ANTI-AIM (Spinbot) — Heartbeat loop, ported from attached source.
@@ -15706,7 +16094,8 @@ do
     local RunS    = game:GetService("RunService")
     local Players = game:GetService("Players")
     local LP      = Players.LocalPlayer
-    RunS.Heartbeat:Connect(function()
+    connectSignal(RunS.Heartbeat:Connect(function()
+        if not scriptRunning then return end
         if not (Config and Config.Misc and Config.Misc.AntiAim) then return end
         local char = LP and LP.Character
         if not char then return end
@@ -15720,5 +16109,5 @@ do
             hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(tonumber(Config.Misc.AntiAimSpeed) or 80), 0)
             if cam and camCF then cam.CFrame = camCF end
         end)
-    end)
+    end))
 end
