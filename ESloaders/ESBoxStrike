@@ -12049,12 +12049,28 @@ task.spawn(function()
         local tog = Library.Toggles and Library.Toggles[togName]
         if not (opt and tog) then return end
         local now = tick()
-        if _kbDeb[optName] and (now - _kbDeb[optName]) < 0.20 then return end
+        if _kbDeb[optName] and (now - _kbDeb[optName]) < 0.25 then return end
         _kbDeb[optName] = now
-        local new = not (tog.Value == true)
-        pcall(function() tog:SetValue(new) end)
-        pcall(cb, new)
-        if extra then pcall(extra, new) end
+        local before = tog.Value == true
+        -- Defer a frame so the neverlose KeyPicker's own InputBegan (when
+        -- SyncToggleState=true) can flip the toggle first. If it already
+        -- toggled, we just mirror the callback; otherwise we perform the flip
+        -- ourselves. This prevents the classic double-toggle bug where the
+        -- picker turns Bhop ON and the failsafe immediately turns it OFF.
+        task.defer(function()
+            local after = tog.Value == true
+            if after ~= before then
+                -- picker handled the flip natively; just make sure the
+                -- callback side-effects ran (they already did via SetValue).
+                pcall(cb, after)
+                if extra then pcall(extra, after) end
+            else
+                local new = not before
+                pcall(function() tog:SetValue(new) end)
+                pcall(cb, new)
+                if extra then pcall(extra, new) end
+            end
+        end)
     end
     UIS.InputBegan:Connect(function(input, gp)
         if not scriptRunning then return end
@@ -13225,6 +13241,13 @@ do
 
     local function _makeDescription(cfg)
         local desc = Instance.new("HumanoidDescription")
+        -- Bundle bodies (female = Woman 239, mickey = Steamboat Mouse) must be
+        -- built BODY-ONLY. Setting Shirt/Pants/Hair/Hat in the description while
+        -- also asking for a bundle body makes Roblox rebuild the rig with the
+        -- clothing package proportions, which inverts limbs / breaks Cute Girl.
+        -- Clothing + accessories are applied AFTER by _applyLoadedAssets so the
+        -- dummy renders exactly like the Mickey path (body first, skins on top).
+        local bundleBody = (cfg.bodyType == "female" or cfg.bodyType == "mickey")
         pcall(function()
             desc.HeadColor      = cfg.skinColor
             desc.LeftArmColor   = cfg.skinColor
@@ -13232,11 +13255,13 @@ do
             desc.LeftLegColor   = cfg.skinColor
             desc.RightLegColor  = cfg.skinColor
             desc.TorsoColor     = cfg.skinColor
-            if cfg.shirt then desc.Shirt = cfg.shirt end
-            if cfg.pants then desc.Pants = cfg.pants end
-            desc.HairAccessory = _csv(cfg.hair)
-            desc.HatAccessory  = _csv(cfg.hat)
-            desc.FaceAccessory = _csv(cfg.face)
+            if not bundleBody then
+                if cfg.shirt then desc.Shirt = cfg.shirt end
+                if cfg.pants then desc.Pants = cfg.pants end
+                desc.HairAccessory = _csv(cfg.hair)
+                desc.HatAccessory  = _csv(cfg.hat)
+                desc.FaceAccessory = _csv(cfg.face)
+            end
             if cfg.bodyAssets then
                 if cfg.bodyAssets.Head then desc.Head = cfg.bodyAssets.Head end
                 if cfg.bodyAssets.Torso then desc.Torso = cfg.bodyAssets.Torso end
@@ -13245,12 +13270,11 @@ do
                 if cfg.bodyAssets.LeftLeg then desc.LeftLeg = cfg.bodyAssets.LeftLeg end
                 if cfg.bodyAssets.RightLeg then desc.RightLeg = cfg.bodyAssets.RightLeg end
             end
-            -- Generated bundle bodies need their own package shape. Mickey and
-            -- the official Woman bundle both need BodyTypeScale enabled so the
-            -- package body is used instead of falling back to blocky R6 limbs.
+            -- Both Woman and Mickey are real bundle bodies -> BodyTypeScale=1.00
+            -- so Roblox emits the package meshes instead of blocky R15 limbs.
             desc.HeightScale, desc.WidthScale, desc.DepthScale = 1.00, 1.00, 1.00
             desc.HeadScale, desc.ProportionScale = 1.00, 0.00
-            desc.BodyTypeScale = cfg.bodyTypeScale or (cfg.bodyType == "mickey" and 1.00 or 0.00)
+            desc.BodyTypeScale = cfg.bodyTypeScale or (bundleBody and 1.00 or 0.00)
         end)
         return desc
     end
