@@ -5686,11 +5686,13 @@ local function _trigSetIgnore(cam)
 end
 function updateTriggerBot()
     if not Config.GlobalEnable or not Config.TriggerBot.Enabled or not IsAlive() then return end
-    -- Throttle scan/raycast work to ~30Hz regardless of mode to prevent
-    -- per-frame raycast storms that spike frame time.
+    -- Throttle scan/raycast work to ~15Hz to prevent per-frame raycast
+    -- storms that spike frame time. TriggerBot doesn't need to react
+    -- faster than a human anyway.
     local now = tick()
-    if (now - _trigLastScan) < 0.033 then return end
+    if (now - _trigLastScan) < 0.066 then return end
     _trigLastScan = now
+
     -- MELEE / KNIFE GATE: TriggerBot cannot fire a bullet with a knife equipped.
     -- Cheap cached check on the equipped Tool — no AutoSkill globals, no
     -- string ops per frame. When a knife is out we bail immediately AND
@@ -12054,38 +12056,16 @@ task.spawn(function()
     end
     UIS.InputBegan:Connect(function(input, gp)
         if not scriptRunning then return end
-        local key = input.KeyCode
-        local mb  = input.UserInputType
-        local function match(opt)
-            if not opt then return false end
-            local v = opt.Value
-            return (v == key) or (v == mb)
-        end
-        if match(Library.Options and Library.Options.Bhop_Key) then
-            _run("Bhop_Toggle", "Bhop_Key", function(v) Config.Movement.BunnyHop = v end)
-        end
-        if match(Library.Options and Library.Options.Strafe_Key) then
-            _run("Strafe_Toggle", "Strafe_Key", function(v) Config.Movement.AutoStrafe = v end)
-        end
-        if match(Library.Options and Library.Options.AutoStop_Key) then
-            _run("AutoStop_Toggle", "AutoStop_Key", function(v) Config.Movement.AutoStop = v end)
-
-        end
-        if match(Library.Options and Library.Options.TP_Key) then
-            _run("TP_Toggle", "TP_Key", function(v) Config.Misc.ThirdPerson = v end, function(v)
-                if v then
-                    pcall(function() if _G.EclipseTPEnable then _G.EclipseTPEnable() end end)
-                    task.defer(function()
-                        local m = Config.Misc.CustomPlayerModel
-                        if m and m ~= "Off" and _G.EclipseApplyPlayerModel then pcall(_G.EclipseApplyPlayerModel, m) end
-                    end)
-                else
-                    pcall(function() if _G.EclipseCPMClear then _G.EclipseCPMClear() end end)
-                    pcall(function() if _G.EclipseTPDisable then _G.EclipseTPDisable() end end)
-                end
-            end)
-        end
+        -- NOTE: Bhop_Key, Strafe_Key, AutoStop_Key and TP_Key all use
+        -- KeyPickers with SyncToggleState=true + Mode="Toggle", which means
+        -- the library ALREADY toggles the paired toggle (and fires its
+        -- Callback) on key press. Handling them here again caused a
+        -- double-flip on every keypress — the toggle turned on then instantly
+        -- back off, producing the "rapid reload / flicker" behavior on Bhop
+        -- and Auto Strafer. Keep this handler as a stub for future keys that
+        -- genuinely need side-effects beyond the toggle callback.
     end)
+
 end)
 
 
@@ -13194,19 +13174,32 @@ do
 
     local function _loadAssetChildren(id)
         -- Executors: game:GetObjects; fallback: InsertService:LoadAsset.
+        -- Some executors return junk (strings, tables, error payloads) for
+        -- bundle IDs — filter to real Instances so callers can safely :IsA().
+        local function _filterInstances(list)
+            local out = {}
+            for _, v in ipairs(list or {}) do
+                if typeof(v) == "Instance" then out[#out+1] = v end
+            end
+            return out
+        end
         local ok, res = pcall(function()
             return game:GetObjects("rbxassetid://" .. tostring(id))
         end)
-        if ok and res and res[1] then return res end
+        if ok and typeof(res) == "table" then
+            local kids = _filterInstances(res)
+            if kids[1] then return kids end
+        end
         local ok2, asset = pcall(function() return InsertService:LoadAsset(id) end)
-        if ok2 and asset then
-            local kids = asset:GetChildren()
+        if ok2 and typeof(asset) == "Instance" then
+            local kids = _filterInstances(asset:GetChildren())
             for _, k in ipairs(kids) do k.Parent = nil end
-            asset:Destroy()
+            pcall(function() asset:Destroy() end)
             return kids
         end
         return {}
     end
+
 
     local function _paintBody(model, color)
         local function _insideAccessory(inst)
@@ -13307,7 +13300,11 @@ do
             if assetId then
                 local placedCM, meshId, baseTex = false, nil, nil
                 for _, obj in ipairs(_loadAssetChildren(assetId)) do
-                    if obj:IsA("CharacterMesh") then
+                    if typeof(obj) ~= "Instance" then
+                        -- Some executors return raw strings/asset-delivery
+                        -- payloads from game:GetObjects for bundle IDs.
+                        -- Skip anything that isn't a real Instance.
+                    elseif obj:IsA("CharacterMesh") then
                         meshId  = obj.MeshId
                         baseTex = obj.BaseTextureId
                         if not placedCM then
@@ -13325,6 +13322,7 @@ do
                         pcall(function() obj:Destroy() end)
                     end
                 end
+
                 -- Belt-and-suspenders: also drop a SpecialMesh on the actual
                 -- body part so the Woman mesh renders even when the engine
                 -- does not resolve the CharacterMesh (common on executors).
