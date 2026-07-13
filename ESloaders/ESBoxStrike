@@ -5674,6 +5674,8 @@ end
 local _trigLastScan = 0
 local _trigSilentLastScan = 0
 local _trigSilentCached = nil
+local _trigLastTool = nil
+local _trigLastToolIsKnife = false
 local _trigRP = RaycastParams.new()
 _trigRP.FilterType = Enum.RaycastFilterType.Exclude
 local function _trigSetIgnore(cam)
@@ -5690,37 +5692,31 @@ function updateTriggerBot()
     if (now - _trigLastScan) < 0.033 then return end
     _trigLastScan = now
     -- MELEE / KNIFE GATE: TriggerBot cannot fire a bullet with a knife equipped.
-    -- Without this early bail, the silent branch keeps raycasting every 33ms
-    -- and _doClick() spams mouse events while stabbing, causing severe FPS drop.
-    -- Two-layer check: (1) AutoSkill globals when available, (2) direct Tool
-    -- name inspection as a fallback so the gate works even before AS loads.
+    -- Cheap cached check on the equipped Tool — no AutoSkill globals, no
+    -- string ops per frame. When a knife is out we bail immediately AND
+    -- push the next scan out 250ms so we don't burn CPU on melee.
     do
-        local isKnife = false
-        local find   = _G.EclipseAS_FindEquipped
-        local isMele = _G.EclipseAS_IsMelee
-        if type(find) == "function" and type(isMele) == "function" then
-            local ok, w = pcall(find)
-            if ok and w and isMele(w) then isKnife = true end
-        end
-        if not isKnife then
-            local ch = LocalPlayer and LocalPlayer.Character
-            local tool = ch and ch:FindFirstChildOfClass("Tool")
+        local ch = LocalPlayer and LocalPlayer.Character
+        local tool = ch and ch:FindFirstChildOfClass("Tool") or nil
+        if tool ~= _trigLastTool then
+            _trigLastTool = tool
+            _trigLastToolIsKnife = false
             if tool then
                 local n = string.lower(tool.Name or "")
                 if n:find("knife", 1, true) or n:find("bayonet", 1, true)
                     or n:find("karambit", 1, true) or n:find("daggers", 1, true)
                     or n:find("kukri", 1, true) or n == "melee"
                     or (KNIVES and KNIVES[tool.Name] == true) then
-                    isKnife = true
+                    _trigLastToolIsKnife = true
                 end
             end
         end
-        if isKnife then
-            _trigSilentCached = nil
-            _trigLastScan = now + 0.20
+        if _trigLastToolIsKnife then
+            _trigLastScan = now + 0.25
             return
         end
     end
+
 
     local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
     local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
@@ -13289,6 +13285,7 @@ do
         -- OverlayTextureId already resolved to file IDs).
         for _, d in ipairs(model:GetDescendants()) do
             if d:IsA("CharacterMesh") then pcall(function() d:Destroy() end) end
+            if d:IsA("SpecialMesh") and d.Name == "EclipseWomanMesh" then pcall(function() d:Destroy() end) end
         end
         if not cfg.bodyAssets then return end
         local bodyMap = {
@@ -13298,29 +13295,49 @@ do
             LeftLeg  = Enum.BodyPart.LeftLeg,
             RightLeg = Enum.BodyPart.RightLeg,
         }
+        local partMap = {
+            Torso    = "Torso",
+            RightArm = "Right Arm",
+            LeftArm  = "Left Arm",
+            LeftLeg  = "Left Leg",
+            RightLeg = "Right Leg",
+        }
         for key, bodyPart in pairs(bodyMap) do
             local assetId = cfg.bodyAssets[key]
             if assetId then
-                local placed = false
+                local placedCM, meshId, baseTex = false, nil, nil
                 for _, obj in ipairs(_loadAssetChildren(assetId)) do
-                    if obj:IsA("CharacterMesh") and not placed then
-                        obj.Name = "EclipseCPM_" .. key
-                        pcall(function() obj.BodyPart = bodyPart end)
-                        obj.Parent = model
-                        placed = true
+                    if obj:IsA("CharacterMesh") then
+                        meshId  = obj.MeshId
+                        baseTex = obj.BaseTextureId
+                        if not placedCM then
+                            obj.Name = "EclipseCPM_" .. key
+                            pcall(function() obj.BodyPart = bodyPart end)
+                            obj.Parent = model
+                            placedCM = true
+                        else
+                            pcall(function() obj:Destroy() end)
+                        end
+                    elseif obj:IsA("SpecialMesh") and not meshId then
+                        meshId = obj.MeshId; baseTex = obj.TextureId
+                        pcall(function() obj:Destroy() end)
                     else
                         pcall(function() obj:Destroy() end)
                     end
                 end
-                -- Fallback: if the asset didn't return a CharacterMesh (some
-                -- executors), synthesize one — MeshId may still be 0, but at
-                -- least BodyPart is set for anything that resolves it later.
-                if not placed then
-                    local cm = Instance.new("CharacterMesh")
-                    cm.Name = "EclipseCPM_" .. key
-                    cm.BodyPart = bodyPart
-                    pcall(function() cm.MeshId = tonumber(assetId) or assetId end)
-                    cm.Parent = model
+                -- Belt-and-suspenders: also drop a SpecialMesh on the actual
+                -- body part so the Woman mesh renders even when the engine
+                -- does not resolve the CharacterMesh (common on executors).
+                local partName = partMap[key]
+                local part = partName and model:FindFirstChild(partName)
+                if part and part:IsA("BasePart") and meshId and tostring(meshId) ~= "" and tostring(meshId) ~= "rbxassetid://0" then
+                    local sm = Instance.new("SpecialMesh")
+                    sm.Name = "EclipseWomanMesh"
+                    sm.MeshType = Enum.MeshType.FileMesh
+                    pcall(function() sm.MeshId = meshId end)
+                    if baseTex and tostring(baseTex) ~= "" then pcall(function() sm.TextureId = baseTex end) end
+                    sm.Scale = Vector3.new(1,1,1)
+                    sm.Parent = part
                 end
             end
         end
@@ -13598,24 +13615,13 @@ do
             end)
             if ok and generated then model = _sanitizeGeneratedModel(generated, cfg, false) end
         elseif cfg.bodyType == "female" then
-            -- Woman bundle (239) is R6 with CharacterMesh. Ask Roblox to build
-            -- a REAL R6 rig with the woman body meshes attached — this copies
-            -- the actual woman torso/arms/legs/head instead of the blocky R6
-            -- primitives + manual CharacterMesh hack, which was landing meshes
-            -- on the wrong parts and producing a pasty, mismatched body.
-            local desc = _makeDescription(cfg)
-            local ok, generated = pcall(function()
-                return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R6)
-            end)
-            if ok and generated then
-                model = _sanitizeGeneratedModel(generated, cfg, true)
-            end
-            -- Fallback: if the executor blocks the API, rebuild manually so we
-            -- still get a woman-shaped rig instead of a T-pose block.
-            if not model then
-                model = _buildR6Rig(cfg)
-                _applyR6Body(model, cfg)
-            end
+            -- Woman bundle (239) — R6 with CharacterMesh. Executors often ignore
+            -- CharacterMesh applied via CreateHumanoidModelFromDescription, so
+            -- we build a proper R6 primitive rig and mount the ACTUAL woman
+            -- mesh files (extracted from the bundle assets) as SpecialMesh via
+            -- _applyR6Body, which guarantees the woman body renders.
+            model = _buildR6Rig(cfg)
+            _applyR6Body(model, cfg)
         end
 
         if not model then
