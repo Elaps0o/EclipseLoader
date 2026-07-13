@@ -13287,13 +13287,13 @@ do
         -- game:GetObjects, no InsertService, no CharacterMesh. Just works.
         local WOMAN_FILE_MESH = {
             ["Torso"]     = "rbxassetid://27111894",
-            ["Right Arm"] = "rbxassetid://27111857",
             ["Left Arm"]  = "rbxassetid://27111419",
-            ["Left Leg"]  = "rbxassetid://27111863",
-            ["Right Leg"] = "rbxassetid://27111882",
+            ["Right Arm"] = "rbxassetid://27111857",
+            ["Left Leg"]  = "rbxassetid://27111882",
+            ["Right Leg"] = "rbxassetid://27111863",
         }
-        -- Woman head mesh (catalog 10725626210 -> raw mesh file).
-        local WOMAN_HEAD_MESH = "rbxassetid://4489723472"
+        -- Woman head mesh (from Woman package, canonical file mesh).
+        local WOMAN_HEAD_MESH = "rbxassetid://27112056"
 
         local function _makeMesh(part, meshId, textureId, name, scale)
             if not (part and part:IsA("BasePart")) then return end
@@ -17733,25 +17733,28 @@ end)
         local spd = math.rad(tonumber(Config.Misc.AntiAimSpeed) or 80)
         pcall(function()
             local pos = hrp.Position
-            -- Capture the LP look yaw once per mode-change so Up/Down/Freeze
-            -- lock to a stable facing instead of inheriting the spinning
-            -- CFrame from the previous Forward frame.
-            local _st = _G.__EclipseAA or { mode = nil, yawRad = 0 }
-            if _st.mode ~= yaw then
-                local lookCF = (cam and cam.CFrame) or hrp.CFrame
-                local lv = lookCF.LookVector
-                _st.yawRad = math.atan2(-lv.X, -lv.Z)
-                _st.mode = yaw
-                _G.__EclipseAA = _st
-            end
             if yaw == "Freeze" then
+                local _st = _G.__EclipseAA or { mode = nil, yawRad = 0 }
+                if _st.mode ~= yaw then
+                    local lookCF = (cam and cam.CFrame) or hrp.CFrame
+                    local lv = lookCF.LookVector
+                    _st.yawRad = math.atan2(-lv.X, -lv.Z)
+                    _st.mode = yaw
+                    _G.__EclipseAA = _st
+                end
                 hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, _st.yawRad, 0)
             elseif yaw == "Up" then
-                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, _st.yawRad, 0) * CFrame.Angles(math.rad(-89), 0, 0)
-            elseif yaw == "Down" then
-                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, _st.yawRad, 0) * CFrame.Angles(math.rad(89), 0, 0)
-            else -- Forward: continuous spin
+                -- Keep spinning yaw, tilt pitch up (like flicking mouse up).
                 hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
+                hrp.CFrame = CFrame.new(hrp.Position) * (hrp.CFrame - hrp.CFrame.Position) * CFrame.Angles(math.rad(-89), 0, 0)
+                _G.__EclipseAA = { mode = yaw, yawRad = 0 }
+            elseif yaw == "Down" then
+                hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
+                hrp.CFrame = CFrame.new(hrp.Position) * (hrp.CFrame - hrp.CFrame.Position) * CFrame.Angles(math.rad(89), 0, 0)
+                _G.__EclipseAA = { mode = yaw, yawRad = 0 }
+            else -- Forward: continuous spin, upright
+                hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
+                _G.__EclipseAA = { mode = yaw, yawRad = 0 }
             end
             if cam and camCF then cam.CFrame = camCF end
         end)
