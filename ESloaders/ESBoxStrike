@@ -13295,7 +13295,16 @@ do
             accessories = { 87960794461758, 8720747474 },
             clothing    = { 15891721015 },     -- grey/white piyama
         },
+        ["Michael Jackson"] = {
+            baseUserId  = 1,
+            bodyType    = "bundle",
+            bundleId    = 186049441345950,
+            skinColor   = Color3.fromRGB(197, 148, 108),
+            -- Billie Jean Outfit 3/3 (shirt+pants combo asset).
+            clothing    = { 134487061084377 },
+        },
     }
+
 
     local _overlay  = nil
     local _hidden   = {}
@@ -13717,6 +13726,38 @@ do
                 return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
             end)
             if ok and generated then model = _sanitizeGeneratedModel(generated, cfg, false) end
+        elseif cfg.bodyType == "bundle" and cfg.bundleId then
+            -- Generic bundle body (e.g. Michael Jackson 1/3 ORIGINAL = 186049441345950).
+            -- Pull the per-limb asset IDs from AvatarEditorService and feed them
+            -- into HumanoidDescription so Roblox rebuilds the exact bundle rig.
+            local desc = _makeDescription(cfg)
+            pcall(function()
+                local AES = game:GetService("AvatarEditorService")
+                local ok, details = pcall(function() return AES:GetItemDetails(cfg.bundleId, Enum.AvatarItemType.Bundle) end)
+                if not (ok and details) then
+                    ok, details = pcall(function() return AES:GetBundleDetails(cfg.bundleId) end)
+                end
+                if ok and details and details.BundledItems then
+                    for _, it in ipairs(details.BundledItems) do
+                        local id = it.Id or it.id
+                        local ty = tostring(it.Type or it.AssetType or "")
+                        if     ty == "Head"       then desc.Head       = id
+                        elseif ty == "Torso"      then desc.Torso      = id
+                        elseif ty == "LeftArm"    then desc.LeftArm    = id
+                        elseif ty == "RightArm"   then desc.RightArm   = id
+                        elseif ty == "LeftLeg"    then desc.LeftLeg    = id
+                        elseif ty == "RightLeg"   then desc.RightLeg   = id
+                        elseif ty == "DynamicHead" then desc.Head      = id
+                        end
+                    end
+                end
+                desc.BodyTypeScale   = 1
+                desc.ProportionScale = 1
+            end)
+            local ok, generated = pcall(function()
+                return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+            end)
+            if ok and generated then model = _sanitizeGeneratedModel(generated, cfg, false) end
         elseif cfg.bodyType == "female" then
             -- Woman bundle (239) is an R15 body — build via
             -- CreateHumanoidModelFromDescription(R15). Applying bundle asset
@@ -13738,6 +13779,7 @@ do
             end)
             if ok and generated then model = _sanitizeGeneratedModel(generated, cfg, false) end
         end
+
 
         if not model then
             -- Joker/Clown: true blocky R6.
@@ -14009,6 +14051,93 @@ do
             return target and target.CFrame, target
         end
 
+        -- Prefer Motor6D-transform mirroring whenever possible: the dummy keeps
+        -- its own limb sizes/proportions, so it never distorts.  Works for
+        -- R15<->R15 directly, and for R6 dummies on an R15 LP via a joint-name
+        -- alias map (fixes Joker/Clown right arm pointing sideways with knife).
+        local dummyIsR15 = model:FindFirstChild("UpperTorso") ~= nil
+        local lpIsR15    = ch:FindFirstChild("UpperTorso") ~= nil
+
+        -- Map: dummy joint name -> list of LP joint names to try (in order).
+        local JOINT_ALIAS
+        if dummyIsR15 and lpIsR15 then
+            JOINT_ALIAS = nil -- direct name match is fine
+        elseif (not dummyIsR15) and lpIsR15 then
+            JOINT_ALIAS = {
+                ["RootJoint"]       = { "Root", "RootJoint" },
+                ["Neck"]            = { "Neck" },
+                ["Right Shoulder"]  = { "RightShoulder" },
+                ["Left Shoulder"]   = { "LeftShoulder" },
+                ["Right Hip"]       = { "RightHip" },
+                ["Left Hip"]        = { "LeftHip" },
+            }
+        elseif dummyIsR15 and (not lpIsR15) then
+            JOINT_ALIAS = {
+                ["Root"]          = { "RootJoint" },
+                ["Neck"]          = { "Neck" },
+                ["RightShoulder"] = { "Right Shoulder" },
+                ["LeftShoulder"]  = { "Left Shoulder" },
+                ["RightHip"]      = { "Right Hip" },
+                ["LeftHip"]       = { "Left Hip" },
+            }
+        else
+            JOINT_ALIAS = nil -- both R6 -> direct match
+        end
+
+        do
+            local lpJoints = {}
+            for _, m in ipairs(ch:GetDescendants()) do
+                if m:IsA("Motor6D") then lpJoints[m.Name] = m end
+            end
+            local dJoints = {}
+            for _, m in ipairs(model:GetDescendants()) do
+                if m:IsA("Motor6D") then dJoints[#dJoints + 1] = m end
+            end
+            local dRoot = model:FindFirstChild("HumanoidRootPart")
+            if dRoot then dRoot.Anchored = true end
+            for _, p in ipairs(model:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = false, false, false, true
+                    if p ~= dRoot then p.Anchored = false end
+                end
+            end
+            local function _resolveSrc(dm)
+                if JOINT_ALIAS then
+                    local list = JOINT_ALIAS[dm.Name]
+                    if list then
+                        for _, n in ipairs(list) do
+                            local s = lpJoints[n]
+                            if s then return s end
+                        end
+                    end
+                end
+                return lpJoints[dm.Name]
+            end
+            local function _syncPose()
+                if not (scriptRunning and _cpmActive and _overlay == model and ch and ch.Parent) then return end
+                local lpHRP = ch:FindFirstChild("HumanoidRootPart")
+                if dRoot and lpHRP then dRoot.CFrame = lpHRP.CFrame end
+                for _, dm in ipairs(dJoints) do
+                    local src = _resolveSrc(dm)
+                    if src then dm.Transform = src.Transform end
+                end
+            end
+            for _, d in ipairs(model:GetDescendants()) do
+                if d:IsA("Animator") or d:IsA("AnimationController") then
+                    pcall(function() d:Destroy() end)
+                end
+            end
+            local dHum = model:FindFirstChildOfClass("Humanoid")
+            if dHum then pcall(function() dHum.EvaluateStateMachine = false end) end
+            _syncPose()
+            if _syncConn then pcall(function() _syncConn:Disconnect() end) end
+            _syncConn = connectSignal(RunService.RenderStepped:Connect(function()
+                pcall(_syncPose)
+            end))
+            return
+        end
+
+
         for _, p in ipairs(model:GetDescendants()) do
             if p:IsA("BasePart") and not _isAccessoryPart(p) then
                 p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = true, false, false, false, true
@@ -14085,7 +14214,7 @@ do
     MiscGB:AddDropdown("CustomPlayerModel_DD", {
         Text = "CUSTOM PLAYER MODEL",
         Default = "Off",
-        Values = { "Off", "Blue Cloud Girl", "Pandas Girl", "Joker", "Clown", "Mickey Mouse" },
+        Values = { "Off", "Blue Cloud Girl", "Pandas Girl", "Joker", "Clown", "Mickey Mouse", "Michael Jackson" },
         Callback = function(v)
             Config.Misc.CustomPlayerModel = v
             task.spawn(function()
