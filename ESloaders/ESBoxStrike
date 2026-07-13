@@ -12203,6 +12203,98 @@ do
     RRGB:AddToggle("RR_Enable", { Text = "RAPID RELOAD", Default = false,
         Callback = function(v) Config.Misc.RapidReload = v end })
 
+    -- ============================================================
+    -- NO SPREAD (Except Snipers) — port from Obsidian/Tripleware dump.
+    -- Requires every weapon ModuleScript under ReplicatedStorage.Database.
+    -- Custom.Weapons, caches original Spread values, and zeroes them
+    -- while the toggle is on. Snipers are skipped so AWP/SSG/G3/SCAR-20
+    -- keep their intended spread.
+    -- ============================================================
+    Config.Misc.NoSpread = Config.Misc.NoSpread or false
+    do
+        local _NS_CACHE = {}   -- name -> { Data=table, Orig={Spread={..}, FireModes={n={..}}}, IsSniper=bool }
+        local _NS_INIT  = false
+
+        local function _nsSetSpread(dst, src, zero)
+            if type(dst) ~= "table" or type(src) ~= "table" then return end
+            local ok = pcall(function() if setreadonly then setreadonly(dst, false) end end)
+            if src.Range               ~= nil then dst.Range               = zero and 0 or src.Range               end
+            if src.PerShot             ~= nil then dst.PerShot             = zero and 0 or src.PerShot             end
+            if src.MovementMultiplier  ~= nil then dst.MovementMultiplier  = zero and 0 or src.MovementMultiplier  end
+            if src.JumpShotMinimum     ~= nil then dst.JumpShotMinimum     = zero and 0 or src.JumpShotMinimum     end
+            pcall(function() if setreadonly then setreadonly(dst, true) end end)
+            if ok then end
+        end
+
+        local function _nsSnapshotSpread(sp)
+            if type(sp) ~= "table" then return nil end
+            return {
+                Range              = sp.Range,
+                PerShot            = sp.PerShot,
+                MovementMultiplier = sp.MovementMultiplier,
+                JumpShotMinimum    = sp.JumpShotMinimum,
+            }
+        end
+
+        local function _nsInit()
+            if _NS_INIT then return end
+            local db = ReplicatedSt:FindFirstChild("Database")
+            local custom = db and db:FindFirstChild("Custom")
+            local weapons = custom and custom:FindFirstChild("Weapons")
+            if not weapons then return end
+            for _, mod in ipairs(weapons:GetChildren()) do
+                if mod:IsA("ModuleScript") then
+                    local okReq, data = pcall(require, mod)
+                    if okReq and type(data) == "table" then
+                        local orig = { Spread = _nsSnapshotSpread(data.Spread), FireModes = {} }
+                        if type(data.FireModes) == "table" then
+                            for k, fm in pairs(data.FireModes) do
+                                if type(fm) == "table" and fm.Spread then
+                                    orig.FireModes[k] = { Spread = _nsSnapshotSpread(fm.Spread) }
+                                end
+                            end
+                        end
+                        _NS_CACHE[mod.Name] = {
+                            Data = data,
+                            Orig = orig,
+                            IsSniper = SniperWeapons[mod.Name] == true,
+                        }
+                    end
+                end
+            end
+            _NS_INIT = true
+        end
+
+        local function _nsApply(zero)
+            _nsInit()
+            for _, entry in pairs(_NS_CACHE) do
+                if not entry.IsSniper then
+                    local d, o = entry.Data, entry.Orig
+                    pcall(function() if setreadonly then setreadonly(d, false) end end)
+                    if d.Spread and o.Spread then _nsSetSpread(d.Spread, o.Spread, zero) end
+                    if type(d.FireModes) == "table" and type(o.FireModes) == "table" then
+                        for k, fm in pairs(d.FireModes) do
+                            local of = o.FireModes[k]
+                            if fm and fm.Spread and of and of.Spread then
+                                _nsSetSpread(fm.Spread, of.Spread, zero)
+                            end
+                        end
+                    end
+                    pcall(function() if setreadonly then setreadonly(d, true) end end)
+                end
+            end
+        end
+
+        MiscGB:AddToggle("NoSpread_Enable", {
+            Text = "NO SPREAD (Except Snipers)",
+            Default = false,
+            Callback = function(v)
+                Config.Misc.NoSpread = v
+                pcall(_nsApply, v)
+            end,
+        })
+    end
+
     -- ANTI-AIM (Spinbot) — sits on the RIGHT side, next to AUTOSKILL.
     Config.Misc.AntiAim      = Config.Misc.AntiAim or false
     Config.Misc.AntiAimSpeed = Config.Misc.AntiAimSpeed or 80
@@ -13101,11 +13193,12 @@ do
     -- Previous builds used only the raw mesh file as an asset id, so GetObjects
     -- returned no CharacterMesh and the dummy stayed square/blocky.
     local WOMAN_MESHES = {
-        Torso    = { asset = 86499666, mesh = 27111894 },
-        RightArm = { asset = 86499698, mesh = 27111857 },
-        LeftArm  = { asset = 86499716, mesh = 27111419 },
-        LeftLeg  = { asset = 86499753, mesh = 27111863 },
-        RightLeg = { asset = 86499793, mesh = 27111882 },
+        Head     = { asset = 10725626210 },
+        Torso    = { asset = 86499666 },
+        RightArm = { asset = 86499698 },
+        LeftArm  = { asset = 86499716 },
+        LeftLeg  = { asset = 86499753 },
+        RightLeg = { asset = 86499793 },
     }
 
     local OUTFITS = {
@@ -13273,50 +13366,52 @@ do
     end
 
     local function _applyR6Body(model, cfg)
-        -- Clean any prior mesh instances.
+        -- Clean any prior mesh instances on body parts.
         for _, d in ipairs(model:GetDescendants()) do
             if d:IsA("CharacterMesh") then pcall(function() d:Destroy() end) end
             if d:IsA("SpecialMesh") and (d.Name == "EclipseWomanMesh" or d.Name == "EclipseWomanHead") then
                 pcall(function() d:Destroy() end)
             end
         end
-        if not cfg.bodyAssets then return end
+        if cfg.bodyType ~= "female" then return end
 
-        -- Direct file-mesh IDs from the Roblox "Woman" package (bundle 239).
-        -- Applied as SpecialMesh(FileMesh) directly on each R6 body part — no
-        -- game:GetObjects, no InsertService, no CharacterMesh. Just works.
-        local WOMAN_FILE_MESH = {
-            ["Torso"]     = "rbxassetid://27111894",
-            ["Left Arm"]  = "rbxassetid://27111419",
-            ["Right Arm"] = "rbxassetid://27111857",
-            ["Left Leg"]  = "rbxassetid://27111882",
-            ["Right Leg"] = "rbxassetid://27111863",
+        -- Official R6 Woman package raw MeshIds (classic Roblox Woman body).
+        local WOMAN = {
+            ["Torso"]     = "634010143",
+            ["Left Arm"]  = "634011680",
+            ["Right Arm"] = "634012480",
+            ["Left Leg"]  = "634013009",
+            ["Right Leg"] = "634013530",
         }
-        -- Woman head mesh (from Woman package, canonical file mesh).
-        local WOMAN_HEAD_MESH = "rbxassetid://27112056"
 
-        local function _makeMesh(part, meshId, textureId, name, scale)
+        local function _applyMesh(part, meshId, name)
             if not (part and part:IsA("BasePart")) then return end
+            for _, m in ipairs(part:GetChildren()) do
+                if m:IsA("SpecialMesh") then pcall(function() m:Destroy() end) end
+            end
             local sm = Instance.new("SpecialMesh")
             sm.Name = name or "EclipseWomanMesh"
             sm.MeshType = Enum.MeshType.FileMesh
-            pcall(function() sm.MeshId = meshId end)
-            if textureId then pcall(function() sm.TextureId = textureId end) end
-            sm.Scale = scale or Vector3.new(1, 1, 1)
+            pcall(function() sm.MeshId = "rbxassetid://" .. meshId end)
+            sm.Scale = Vector3.new(1, 1, 1)
             sm.Parent = part
         end
 
-        for partName, meshId in pairs(WOMAN_FILE_MESH) do
-            _makeMesh(model:FindFirstChild(partName), meshId, nil, "EclipseWomanMesh", Vector3.new(1, 1, 1))
+        for partName, meshId in pairs(WOMAN) do
+            _applyMesh(model:FindFirstChild(partName), meshId, "EclipseWomanMesh")
         end
 
-        -- Head: replace default R6 head mesh with Woman head.
+        -- Head: classic block head with default head mesh type (scale 1.25).
         local head = model:FindFirstChild("Head")
         if head and head:IsA("BasePart") then
             for _, m in ipairs(head:GetChildren()) do
                 if m:IsA("SpecialMesh") then pcall(function() m:Destroy() end) end
             end
-            _makeMesh(head, WOMAN_HEAD_MESH, nil, "EclipseWomanHead", Vector3.new(1, 1, 1))
+            local hm = Instance.new("SpecialMesh")
+            hm.Name = "EclipseWomanHead"
+            hm.MeshType = Enum.MeshType.Head
+            hm.Scale = Vector3.new(1.25, 1.25, 1.25)
+            hm.Parent = head
         end
     end
 
