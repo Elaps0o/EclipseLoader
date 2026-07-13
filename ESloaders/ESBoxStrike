@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "3.0.0 [OFFICIAL]",
+    Version       = "3.0.1 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -608,6 +608,57 @@ local function _makeInlineSlot(nlToggle, kind, color)
         }
     end
     return slot, st
+end
+
+-- ==========================================================================
+-- COLORPICKER POPUP Z-ORDER FIX
+-- ==========================================================================
+-- O painel modal do colorpicker do neverlose-ui as vezes renderiza ATRAS
+-- dos quadradinhos vizinhos (outros colorpickers/keypickers) porque o
+-- ZIndex do popup vem menor. Elevamos o DisplayOrder da ScreenGui hospede
+-- e o ZIndex de qualquer Frame com nome/descendente que denote picker.
+do
+    local function _bumpZ(inst)
+        if not inst or not inst.Parent then return end
+        pcall(function()
+            if inst:IsA("ScreenGui") then
+                if (inst.DisplayOrder or 0) < 100000 then inst.DisplayOrder = 100000 end
+            elseif inst:IsA("GuiObject") then
+                if (inst.ZIndex or 0) < 900 then inst.ZIndex = 900 end
+            end
+        end)
+    end
+    local function _hookRoot(root)
+        if not root then return end
+        pcall(function()
+            root.DescendantAdded:Connect(function(d)
+                if not d then return end
+                local nm = tostring(d.Name or ""):lower()
+                if nm:find("color") or nm:find("picker") or nm:find("holder") then
+                    _bumpZ(d)
+                    -- also bump nearby ancestor screen gui once
+                    local sg = d:FindFirstAncestorOfClass("ScreenGui")
+                    if sg then _bumpZ(sg) end
+                end
+            end)
+        end)
+    end
+    task.spawn(function()
+        local CoreGui = game:GetService("CoreGui")
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        _hookRoot(CoreGui); _hookRoot(pg)
+        -- proactive sweep for existing pickers
+        for _, root in ipairs({CoreGui, pg}) do
+            if root then
+                for _, d in ipairs(root:GetDescendants()) do
+                    local nm = tostring(d.Name or ""):lower()
+                    if nm:find("color") or nm:find("picker") then
+                        _bumpZ(d)
+                    end
+                end
+            end
+        end
+    end)
 end
 
 local function wrapToggle(id, nlToggle, cbHolder)
@@ -1265,6 +1316,33 @@ do
             task.defer(_repairNeverloseInput)
         else
             pcall(function() if type(_skinPreviewClose) == "function" then _skinPreviewClose() end end)
+            -- Close any open dropdown popups when hiding the GUI
+            pcall(function()
+                local sg = (NLLib and NLLib.Holder and NLLib.Holder.Instance) or Library.ScreenGui
+                if not sg then return end
+                for _, d in ipairs(sg:GetDescendants()) do
+                    if d:IsA("GuiObject") and d.Visible then
+                        local nm = tostring(d.Name or "")
+                        local low = nm:lower()
+                        if low:find("dropdown") or low:find("options") or low:find("list") or low:find("scroll") then
+                            local par = d.Parent
+                            local parNm = par and tostring(par.Name or ""):lower() or ""
+                            if low:find("holder") or low:find("popup") or low:find("dropdown") or parNm:find("dropdown") then
+                                pcall(function() d.Visible = false end)
+                            end
+                        end
+                    end
+                end
+                for _, opt in pairs(Library.Options or {}) do
+                    pcall(function()
+                        if opt and opt.Type == "Dropdown" and opt.HideDropdown then opt:HideDropdown() end
+                        if opt and opt.Container and opt.Container.Visible then
+                            local nmL = tostring(opt.Container.Name or ""):lower()
+                            if nmL:find("dropdown") then opt.Container.Visible = false end
+                        end
+                    end)
+                end
+            end)
         end
         pcall(function() if type(_EclipseMouseUnlockRefresh) == "function" then _EclipseMouseUnlockRefresh() end end)
         return ret
@@ -1536,14 +1614,14 @@ local function _isEclipseError(message, stack)
 end
 
 local function _panicKick(reason)
+    -- IMPORTANT: um kick automatico a cada erro estava fechando o jogo
+    -- inteiro do usuario (qualquer excecao interna disparava um Kick).
+    -- Agora apenas logamos o erro no webhook (uma vez) e seguimos rodando:
+    -- o pcall dos call-sites ja evita cascata.
     if _eclipseErrorTripped then return end
     _eclipseErrorTripped = true
     pcall(function() sendWebhook("error", reason) end)
-    task.delay(0.35, function()
-        pcall(function()
-            LocalPlayer:Kick("[Eclipse Hub] Erro interno detectado. Voce foi desconectado por seguranca para evitar bugs/ban.\n\nMotivo: " .. tostring(reason or "unknown"))
-        end)
-    end)
+    task.delay(4, function() _eclipseErrorTripped = false end)
 end
 
 task.spawn(function()
@@ -1558,7 +1636,6 @@ task.spawn(function()
     end)
 end)
 
--- LogService fallback (alguns erros nao passam pelo ScriptContext em certos executores)
 task.spawn(function()
     local ok, LogService = pcall(function() return game:GetService("LogService") end)
     if not ok or not LogService then return end
@@ -1571,6 +1648,7 @@ task.spawn(function()
         end)
     end)
 end)
+
 
 
 local PresenceUsers = {} 
@@ -2899,18 +2977,24 @@ local function _g3dSegment(i)
     return p
 end
 function _renderGrenade3D()
-    if not (Config and Config.GlobalEnable and Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning)) then
+    if not (Config and Config.GlobalEnable and Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning or Config.Grenade.ESP)) then
         _g3dHide(); return
     end
     -- Prediction: only while charging the throw (GPD.ShowNow), so it disappears
-    -- as soon as the grenade leaves the hand. Warning: reflects enemy grenades.
+    -- as soon as the grenade leaves the hand. Warning/ESP: reflects any live grenade.
     local hasPred = Config.Grenade.Prediction and GPD and GPD.ShowNow and GPD.CachedPts and #GPD.CachedPts >= 2
-    local warnPts = (Config.Grenade.Warning and ECLIPSE and ECLIPSE._warn3DPts) or nil
+    local warnPts = ((Config.Grenade.Warning or Config.Grenade.ESP) and ECLIPSE and ECLIPSE._warn3DPts) or nil
     local hasWarn = warnPts and #warnPts >= 2
     if not (hasPred or hasWarn) then _g3dHide(); return end
     local pts = hasPred and GPD.CachedPts or warnPts
-    local col = hasPred and (Config.Grenade.LineColor or Color3.fromRGB(0,200,255))
-                          or (Config.Grenade.WarningColor or Color3.fromRGB(255,120,60))
+    local col
+    if hasPred then
+        col = Config.Grenade.LineColor or Color3.fromRGB(0,200,255)
+    elseif Config.Grenade.ESP then
+        col = Config.Grenade.ESPColor or Color3.fromRGB(255,180,60)
+    else
+        col = Config.Grenade.WarningColor or Color3.fromRGB(255,120,60)
+    end
     _g3dEnsure()
     local used = 0
     for i = 1, #pts - 1 do
@@ -2929,8 +3013,7 @@ function _renderGrenade3D()
     end
     if _g3d.dot then
         _g3d.dot.Position = pts[#pts]
-        _g3d.dot.Color = hasPred and (Config.Grenade.DotColor or Color3.fromRGB(255,60,60))
-                                  or (Config.Grenade.WarningColor or Color3.fromRGB(255,120,60))
+        _g3d.dot.Color = col
     end
 end
 
@@ -10066,65 +10149,121 @@ SafeAddDropdown(PVGB, "PV_PlayerChamsInWeapons", {
     Callback=function(v) Config.Visuals.PlayerChamsInWeapons = (v == "Yes") end,
 })
 
+-- ============ DEAD ESP =====================================================
+Config.Visuals.DeadESP      = Config.Visuals.DeadESP      or false
+Config.Visuals.DeadESPColor = Config.Visuals.DeadESPColor or Color3.fromRGB(255, 60, 60)
+
+PVGB:AddToggle("PV_DeadESP", { Text="DEAD ESP", Default=false,
+    Callback=function(v) Config.Visuals.DeadESP = v end })
+    :AddColorPicker("PV_DeadESPColor", {
+        Default=Config.Visuals.DeadESPColor, Title="Dead chams color",
+        Callback=function(c) Config.Visuals.DeadESPColor = c end })
+
 do
     local Players    = game:GetService("Players")
     local RunService = game:GetService("RunService")
     local LP         = Players.LocalPlayer
-    local ATTR       = "EclipseChamsPart"
-    local applied    = setmetatable({}, {__mode = "k"})
+    local ATTR       = "EclipseDeadHL"
 
-    local function _paint(part, color)
-        if not part or not part:IsA("BasePart") then return end
-        -- Head lock: never turn the head into a solid block; it becomes a
-        -- neon cube that blocks camera in first person. Skip it entirely.
-        local nm = (part.Name or ""):lower()
-        if nm == "head" then return end
-        if part:GetAttribute(ATTR) == nil then
-            part:SetAttribute(ATTR, true)
-            applied[part] = {
-                Material=part.Material, Color=part.Color,
-                Transparency=part.Transparency, Reflectance=part.Reflectance,
-                LTM=part.LocalTransparencyModifier,
-            }
-        end
-        pcall(function()
-            part.Material     = Enum.Material.ForceField
-            part.Color        = color
-            part.Reflectance  = 0.15
-            part.Transparency = 0.35
-            -- LP body/arms are hidden in first person via LocalTransparencyModifier.
-            -- Force it to 0 so the chams are actually visible on the LocalPlayer
-            -- (same trick ThirdPerson uses to reveal the LP model).
-            part.LocalTransparencyModifier = 0
-        end)
+    local tracked = {} -- [character] = Highlight
+
+    local function _cleanup(char)
+        local h = tracked[char]
+        if h then pcall(function() h:Destroy() end); tracked[char] = nil end
     end
-
-    local function _restore(part)
-        local s = applied[part]; if not s then return end
-        pcall(function()
-            if part and part.Parent then
-                part.Material     = s.Material
-                part.Color        = s.Color
-                part.Transparency = s.Transparency
-                part.Reflectance  = s.Reflectance
-                part.LocalTransparencyModifier = s.LTM or 0
-            end
-        end)
-        pcall(function() if part and part.Parent then part:SetAttribute(ATTR, nil) end end)
-        applied[part] = nil
+    local function _cleanAll()
+        for c, _ in pairs(tracked) do _cleanup(c) end
     end
+    _G.EclipseDeadESPClear = _cleanAll
 
-    local function _isWeaponPart(part, char)
-        local p = part.Parent
-        while p and p ~= char and p ~= workspace do
-            if p:IsA("Tool") then return true end
-            p = p.Parent
-        end
+    local function _isDead(char)
+        if not char or not char.Parent then return false end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return false end
+        if hum.Health <= 0 then return true end
+        if hum:GetState() == Enum.HumanoidStateType.Dead then return true end
         return false
     end
 
+    RunService.Heartbeat:Connect(function()
+        local on  = Config.Visuals.DeadESP
+        local col = Config.Visuals.DeadESPColor or Color3.fromRGB(255,60,60)
+        if not on then
+            if next(tracked) then _cleanAll() end
+            return
+        end
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LP then
+                local char = plr.Character
+                if char and _isDead(char) then
+                    local h = tracked[char]
+                    if not (h and h.Parent) then
+                        h = Instance.new("Highlight")
+                        h.Name = "EclipseDeadESP"
+                        h:SetAttribute(ATTR, true)
+                        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                        h.FillTransparency = 0.4
+                        h.OutlineTransparency = 0
+                        h.Adornee = char
+                        h.Parent = char
+                        tracked[char] = h
+                    end
+                    h.FillColor = col
+                    h.OutlineColor = col
+                    h.Enabled = true
+                elseif char and tracked[char] then
+                    _cleanup(char)
+                end
+            end
+        end
+        -- purge stale entries (character removed / respawned)
+        for c, _ in pairs(tracked) do
+            if not c.Parent then _cleanup(c) end
+        end
+    end)
+
+    Players.PlayerRemoving:Connect(function(p)
+        if p.Character then _cleanup(p.Character) end
+    end)
+end
+
+do
+    local Players    = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local LP         = Players.LocalPlayer
+
+    -- Two-highlight approach (same method the WeaponHighlight uses on other
+    -- players). A Highlight renders through the render pipeline regardless of
+    -- LocalTransparencyModifier and works in first person on the LocalPlayer.
+    --
+    --   * Body highlight → adornee = Character (all parts except tools)
+    --   * Tool highlight → adornee = equipped Tool (only when "In Weapons")
+    local state = { body=nil, tool=nil, curTool=nil, toolConn=nil }
+    local ATTR = "EclipseChamsHL"
+
+    local function _mkHL(name)
+        local h = Instance.new("Highlight")
+        h.Name = name
+        h:SetAttribute(ATTR, true)
+        h.Enabled = true
+        h.FillTransparency = 0.35
+        h.OutlineTransparency = 1
+        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        return h
+    end
+
     local function _clearAll()
-        for part in pairs(applied) do _restore(part) end
+        if state.body    then pcall(function() state.body:Destroy() end);    state.body=nil end
+        if state.tool    then pcall(function() state.tool:Destroy() end);    state.tool=nil end
+        if state.toolConn then pcall(function() state.toolConn:Disconnect() end); state.toolConn=nil end
+        state.curTool = nil
+        -- legacy: purge any leftover paint attributes from the old implementation
+        local ch = LP and LP.Character
+        if ch then
+            for _, d in ipairs(ch:GetDescendants()) do
+                if d:IsA("Highlight") and d:GetAttribute(ATTR) then pcall(function() d:Destroy() end) end
+            end
+        end
     end
     _G.EclipsePlayerChamsClear = _clearAll
 
@@ -10133,26 +10272,43 @@ do
         local col  = Config.Visuals.PlayerChamsColor or Color3.fromRGB(180, 90, 255)
         local inW  = Config.Visuals.PlayerChamsInWeapons == true
         local ch   = LP and LP.Character
-        if on and ch then
-            for _, d in ipairs(ch:GetDescendants()) do
-                if d:IsA("BasePart") then
-                    local isW = _isWeaponPart(d, ch)
-                    if (not isW) or inW then
-                        _paint(d, col)
-                    elseif applied[d] then
-                        _restore(d)
-                    end
-                end
+        if not (on and ch) then
+            if state.body or state.tool then _clearAll() end
+            return
+        end
+        -- Body highlight
+        if not (state.body and state.body.Parent) then
+            state.body = _mkHL("EclipseChams_Body")
+            state.body.Parent = ch
+        end
+        state.body.Adornee = ch
+        state.body.FillColor = col
+        state.body.Enabled = true
+
+        -- Tool highlight
+        local tool = ch:FindFirstChildOfClass("Tool")
+        if inW and tool then
+            if state.curTool ~= tool then
+                if state.tool then pcall(function() state.tool:Destroy() end) end
+                state.tool = _mkHL("EclipseChams_Tool")
+                state.tool.Parent = tool
+                state.curTool = tool
             end
+            state.tool.Adornee = tool
+            state.tool.FillColor = col
+            state.tool.Enabled = true
         else
-            _clearAll()
+            if state.tool then pcall(function() state.tool:Destroy() end); state.tool=nil end
+            state.curTool = nil
         end
     end)
 
     if LP then
+        LP.CharacterAdded:Connect(function() _clearAll() end)
         LP.CharacterRemoving:Connect(function() _clearAll() end)
     end
 end
+
 
 
 
@@ -11069,6 +11225,33 @@ BhopToggle = MoveGB:AddToggle("Bhop_Toggle", {
 MoveGB:AddToggle("Strafe_Toggle",{ Text="AUTO STRAFER", Default=false, Callback=function(v) Config.Movement.AutoStrafe=v end })
     :AddKeyPicker("Strafe_Key",  { Default="C", SyncToggleState=true, Mode="Toggle", Text="Auto Strafer" })
 
+-- Failsafe direct keybind listener for Bunny Hop / Auto Strafer.
+-- Guarantees Config + toggle UI stay in sync when the bound key is pressed,
+-- even if the KeyPicker -> Toggle sync path is swallowed by the UI build.
+do
+    local UIS = game:GetService("UserInputService")
+    local function _bindMoveKey(optKey, toggleKey, cfgKey)
+        connectSignal(UIS.InputBegan:Connect(function(input, gp)
+            if gp then return end
+            local opt = Library.Options and Library.Options[optKey]
+            if not opt then return end
+            local bound = opt.Value
+            if not bound or bound == Enum.KeyCode.Unknown then return end
+            local match = (input.KeyCode == bound) or (input.UserInputType == bound)
+            if not match then return end
+            local newVal = not (Config.Movement[cfgKey] == true)
+            Config.Movement[cfgKey] = newVal
+            local tog = Library.Toggles and Library.Toggles[toggleKey]
+            if tog and tog.SetValue then pcall(tog.SetValue, tog, newVal) end
+            if opt.Toggled ~= nil then opt.Toggled = newVal end
+        end))
+    end
+    _bindMoveKey("Bhop_Key",   "Bhop_Toggle",   "BunnyHop")
+    _bindMoveKey("Strafe_Key", "Strafe_Toggle", "AutoStrafe")
+end
+
+
+
 
 Config.Movement.StrafeSpeed = 1.5
 MoveGB:AddToggle("Jumpbug_Toggle", { Text="JUMPBUG", Default=false, Callback=function(v) Config.Movement.Jumpbug=v end })
@@ -11540,8 +11723,7 @@ Config.Misc.CustomFOV = Config.Misc.CustomFOV or 0
 do
     local RunService = game:GetService("RunService")
     local _baseFOV = nil
-    if _G.__EclipseFOVConn then pcall(function() _G.__EclipseFOVConn:Disconnect() end) end
-    _G.__EclipseFOVConn = RunService.PreRender:Connect(function()
+    local function _apply()
         local cam = workspace.CurrentCamera
         if not cam then return end
         local v = tonumber(Config.Misc.CustomFOV) or 0
@@ -11558,7 +11740,14 @@ do
             end
             _baseFOV = nil
         end
-    end)
+    end
+    if _G.__EclipseFOVConn then pcall(function() _G.__EclipseFOVConn:Disconnect() end) end
+    if _G.__EclipseFOVConn2 then pcall(function() _G.__EclipseFOVConn2:Disconnect() end) end
+    -- Aplicar em Heartbeat garante que qualquer projecao de ESP feita no
+    -- mesmo frame (WorldToViewportPoint) ja veja o FOV correto, evitando
+    -- que as caixas fiquem "flutuando" fora do inimigo apos mudar o slider.
+    _G.__EclipseFOVConn  = RunService.Heartbeat:Connect(_apply)
+    _G.__EclipseFOVConn2 = RunService.PreRender:Connect(_apply)
 end
 MiscGB:AddSlider("CustomFOV_Slider", { Text="CUSTOM FOV (+)", Default=Config.Misc.CustomFOV or 0, Min=0, Max=50, Rounding=0, Suffix="°",
     Callback=function(v) Config.Misc.CustomFOV = v end })
@@ -12873,7 +13062,7 @@ EX.ChatFrame = nil
     ECLIPSE._enemyGrenadeHolders = {}   
     task.spawn(function()
         while scriptRunning do
-            if Config.Grenade.Warning and GPD_OK then
+            if (Config.Grenade.Warning or Config.Grenade.ESP) and GPD_OK then
                 local now = tick()
                 for _, p in ipairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and not IsAlly(p) then
@@ -12899,7 +13088,7 @@ EX.ChatFrame = nil
     task.spawn(function()
         while scriptRunning do
             local _okLoop, _errLoop = pcall(function()
-            if not Config.Grenade.Warning or not GPD_OK then
+            if (not Config.Grenade.Warning and not Config.Grenade.ESP) or not GPD_OK then
                 if #activeWarn > 0 then clearWarn() end
                 ECLIPSE._warn3DPts = nil
                 return
@@ -12938,7 +13127,12 @@ EX.ChatFrame = nil
                         local t, props = typeFromName(obj.Name)
 
                         local _velOk, _velMag = pcall(function() return obj.AssemblyLinearVelocity.Magnitude end)
-                        if t and props and _velOk and _velMag and _velMag > 15 then
+                        local espMode = Config.Grenade.ESP == true
+                        -- Warning mode requires the grenade to be actually flying; ESP mode
+                        -- also picks up landed / static grenades so the user can see them
+                        -- on the ground.
+                        local velOk = (_velOk and _velMag and _velMag > 15) or espMode
+                        if t and props and velOk then
                             local anc = obj.Parent
                             local inHand = false
                             while anc and anc ~= Workspace do
@@ -12947,32 +13141,30 @@ EX.ChatFrame = nil
                             end
                             if not inHand then
                                 local skipAlly = false
-                                local ok, owner = pcall(function() return obj:GetNetworkOwner() end)
-                                if ok and owner then
-                                    if owner == LocalPlayer or IsAlly(owner) then skipAlly = true end
-                                else
-
-                                    
-
-                                    if next(ECLIPSE._enemyGrenadeHolders) == nil then
-                                        skipAlly = true
+                                if not espMode then
+                                    local ok, owner = pcall(function() return obj:GetNetworkOwner() end)
+                                    if ok and owner then
+                                        if owner == LocalPlayer or IsAlly(owner) then skipAlly = true end
                                     else
-
-                                        
-                                        local nearest, nd
-                                        for _, p in ipairs(Players:GetPlayers()) do
-                                            if p.Character and p.Character.PrimaryPart then
-                                                local d = (p.Character.PrimaryPart.Position - obj.Position).Magnitude
-                                                if not nd or d < nd then nd = d; nearest = p end
-                                            end
-                                        end
-                                        if nearest and (nearest == LocalPlayer or IsAlly(nearest)) and (nd or 999) < 25 then
+                                        if next(ECLIPSE._enemyGrenadeHolders) == nil then
                                             skipAlly = true
+                                        else
+                                            local nearest, nd
+                                            for _, p in ipairs(Players:GetPlayers()) do
+                                                if p.Character and p.Character.PrimaryPart then
+                                                    local d = (p.Character.PrimaryPart.Position - obj.Position).Magnitude
+                                                    if not nd or d < nd then nd = d; nearest = p end
+                                                end
+                                            end
+                                            if nearest and (nearest == LocalPlayer or IsAlly(nearest)) and (nd or 999) < 25 then
+                                                skipAlly = true
+                                            end
                                         end
                                     end
                                 end
                                 if not skipAlly and ((not myPos) or (obj.Position - myPos).Magnitude <= 250) then
-                                    local pts = simulate(obj.Position, obj.AssemblyLinearVelocity, props)
+                                    local vel = (_velOk and _velMag and _velMag > 5) and obj.AssemblyLinearVelocity or Vector3.new(0, 0.01, 0)
+                                    local pts = simulate(obj.Position, vel, props)
                                     best = obj; bestType = t; bestPts = pts; bestEnd = pts[#pts]
                                     break
                                 end
