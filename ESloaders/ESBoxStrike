@@ -1,5 +1,5 @@
 local ECLIPSE = {
-    Version       = "3.0.1 [OFFICIAL]",
+    Version       = "3.0.0 [OFFICIAL]",
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "https://eclipssehub.lovable.app",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
@@ -10370,8 +10370,133 @@ PVGB:AddToggle("PV_BulletImpact", { Text="SHOW IMPACT", Default=false,
         Default=Config.Visuals.BulletImpactColor,
         Callback=function(c) Config.Visuals.BulletImpactColor = c end })
 
--- Bullet Tracer removed per user request.
-Config.Visuals.BulletTracer = false
+-- =========================================================================
+-- BULLET TRACER (LP-ONLY)
+--   Uses the ShootWeapon → VFX.CreateTracer round trip: whenever the server
+--   broadcasts a tracer, we accept it ONLY when the attacker resolves to the
+--   LocalPlayer (either via a Player arg or via origin proximity to camera).
+--   Pooled neon parts, 0.14s fade, hard cap of 8. Zero namecall overhead.
+-- =========================================================================
+Config.Visuals.BulletTracer      = Config.Visuals.BulletTracer      or false
+Config.Visuals.BulletTracerColor = Config.Visuals.BulletTracerColor or Color3.fromRGB(180, 90, 255)
+
+PVGB:AddToggle("PV_BulletTracer", { Text="BULLET TRACER", Default=false,
+    Callback=function(v) Config.Visuals.BulletTracer = v end })
+    :AddColorPicker("PV_BulletTracerColor", {
+        Default=Config.Visuals.BulletTracerColor,
+        Callback=function(c) Config.Visuals.BulletTracerColor = c end })
+
+do
+    local RS         = game:GetService("ReplicatedStorage")
+    local RunSvc     = game:GetService("RunService")
+    local LIFE       = 0.14
+    local POOL_MAX   = 8
+
+    local _container
+    local function _ensureCT()
+        if _container and _container.Parent then return _container end
+        _container = Instance.new("Folder")
+        _container.Name   = "EclipseTracerFX"
+        _container.Parent = workspace.CurrentCamera or workspace
+        return _container
+    end
+
+    local _pool = {}
+    local function _mkPart()
+        local p = Instance.new("Part")
+        p.Anchored=true; p.CanCollide=false; p.CanQuery=false; p.CanTouch=false
+        p.CastShadow=false; p.Massless=true
+        p.Material = Enum.Material.Neon
+        p.Size     = Vector3.new(0.06, 0.06, 1)
+        return p
+    end
+    local function _get()
+        local p
+        while #_pool > 0 do
+            p = table.remove(_pool)
+            if p and p.Parent == nil then break end
+            p = nil
+        end
+        if not p then p = _mkPart() end
+        p.Parent = _ensureCT()
+        return p
+    end
+    local function _release(p)
+        if not p then return end
+        pcall(function() p.Parent = nil end)
+        if #_pool < POOL_MAX then table.insert(_pool, p) end
+    end
+
+    local function _drawTracer(a, b)
+        if typeof(a) ~= "Vector3" or typeof(b) ~= "Vector3" then return end
+        local d = b - a; local mag = d.Magnitude
+        if mag < 0.5 or mag > 5000 then return end
+        local ok, p = pcall(_get); if not ok or not p then return end
+        pcall(function()
+            p.Color     = Config.Visuals.BulletTracerColor or Color3.fromRGB(180,90,255)
+            p.Size      = Vector3.new(0.06, 0.06, mag)
+            p.CFrame    = CFrame.lookAt(a + d*0.5, b)
+            p.Transparency = 0
+        end)
+        local start = tick()
+        local conn
+        conn = RunSvc.Heartbeat:Connect(function()
+            local t = (tick() - start) / LIFE
+            if (not p) or (not p.Parent) or t >= 1 then
+                if conn then conn:Disconnect() end
+                _release(p); return
+            end
+            pcall(function() p.Transparency = t end)
+        end)
+    end
+    _G.EclipseDrawTracer = _drawTracer
+
+    -- Hook VFX.CreateTracer: server broadcasts on every ShootWeapon accepted
+    task.spawn(function()
+        local ok, vfx = pcall(function()
+            return RS:WaitForChild("NetworkRemotes", 15):WaitForChild("VFX", 5)
+        end)
+        if not ok or not vfx then return end
+        local ct = vfx:FindFirstChild("CreateTracer")
+        if not (ct and ct:IsA("RemoteEvent")) then return end
+        pcall(function()
+            ct.OnClientEvent:Connect(function(...)
+                if not (Config and Config.Visuals and Config.Visuals.BulletTracer) then return end
+                local args = { ... }
+                local attacker, origin, endPos
+                for _, v in ipairs(args) do
+                    local ty = typeof(v)
+                    if ty == "Instance" and v:IsA("Player") then
+                        attacker = v
+                    elseif ty == "Vector3" then
+                        if not origin then origin = v
+                        elseif not endPos then endPos = v end
+                    elseif ty == "CFrame" then
+                        if not origin then origin = v.Position end
+                    elseif type(v) == "table" then
+                        for _, vv in pairs(v) do
+                            if typeof(vv) == "Vector3" then
+                                if not origin then origin = vv
+                                elseif not endPos then endPos = vv end
+                            end
+                        end
+                    end
+                end
+                -- LP-only filter: if attacker included, must be LocalPlayer.
+                -- If no attacker in payload, use camera-origin proximity.
+                if attacker then
+                    if attacker ~= LocalPlayer then return end
+                else
+                    local cam = workspace.CurrentCamera
+                    if cam and origin and (origin - cam.CFrame.Position).Magnitude > 10 then
+                        return
+                    end
+                end
+                if origin and endPos then pcall(_drawTracer, origin, endPos) end
+            end)
+        end)
+    end)
+end
 
 
 
@@ -14591,10 +14716,29 @@ end)
     local _remoteHolder
     local _weaponTable
 
+    -- Rate-limit expensive getgc(true) scans (main crash/hitch source).
+    -- Never scan more than once every ~0.5s per resolver.
+    local _lastRemoteScan, _lastWeaponScan = 0, 0
+    local SCAN_COOLDOWN = 0.5
+
+    local function _safeGetgc()
+        local ok, t = pcall(getgc, true)
+        if ok and type(t) == "table" then return t end
+        return nil
+    end
+
     local function _findRemote()
-        if _remoteHolder and rawget(_remoteHolder, "ShootWeapon") then return _remoteHolder end
+        if _remoteHolder then
+            local ok, sw = pcall(rawget, _remoteHolder, "ShootWeapon")
+            if ok and sw then return _remoteHolder end
+            _remoteHolder = nil
+        end
         if type(getgc) ~= "function" then return nil end
-        for _, t in pairs(getgc(true)) do
+        local now = tick()
+        if (now - _lastRemoteScan) < SCAN_COOLDOWN then return nil end
+        _lastRemoteScan = now
+        local gc = _safeGetgc(); if not gc then return nil end
+        for _, t in pairs(gc) do
             if type(t) == "table" then
                 local ok, sw = pcall(rawget, t, "ShootWeapon")
                 if ok and type(sw) == "table" then
@@ -14622,9 +14766,14 @@ end)
         if _weaponTable then
             local ok, eq = pcall(rawget, _weaponTable, "IsEquipped")
             if ok and eq and _isWeaponTable(_weaponTable) then return _weaponTable end
+            _weaponTable = nil
         end
         if type(getgc) ~= "function" then return nil end
-        for _, t in pairs(getgc(true)) do
+        local now = tick()
+        if (now - _lastWeaponScan) < SCAN_COOLDOWN then return nil end
+        _lastWeaponScan = now
+        local gc = _safeGetgc(); if not gc then return nil end
+        for _, t in pairs(gc) do
             if type(t) == "table" then
                 local ok, eq = pcall(rawget, t, "IsEquipped")
                 if ok and eq and _isWeaponTable(t) then
@@ -14867,6 +15016,10 @@ end)
         end
         if sent then
             pcall(_playBlood)
+            -- Draw LP bullet tracer if enabled (autoskill path)
+            if Config.Visuals and Config.Visuals.BulletTracer and _G.EclipseDrawTracer then
+                pcall(_G.EclipseDrawTracer, origin, hitPos)
+            end
         end
     end
 
