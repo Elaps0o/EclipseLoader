@@ -10471,10 +10471,12 @@ Config.Visuals.BulletTracerColor = Config.Visuals.BulletTracerColor or Color3.fr
 PVGB:AddToggle("PV_BulletTracer", { Text="BULLET TRACER", Default=false,
     Callback=function(v)
         Config.Visuals.BulletTracer = v and true or false
-        if v and type(_G.EclipseInstallShootTracer) == "function" then
-            pcall(_G.EclipseInstallShootTracer)
-        elseif (not v) and type(_G.EclipseClearTracers) == "function" then
-            pcall(_G.EclipseClearTracers)
+        if v then
+            if type(_G.EclipseInstallShootTracer) == "function" then pcall(_G.EclipseInstallShootTracer) end
+            if type(_G.EclipseInstallCreateTracerListener) == "function" then pcall(_G.EclipseInstallCreateTracerListener) end
+        else
+            if type(_G.EclipseUninstallCreateTracerListener) == "function" then pcall(_G.EclipseUninstallCreateTracerListener) end
+            if type(_G.EclipseClearTracers) == "function" then pcall(_G.EclipseClearTracers) end
         end
     end })
     :AddColorPicker("PV_BulletTracerColor", {
@@ -10530,9 +10532,24 @@ do
         end)
     end
 
+    local Players = game:GetService("Players")
+    local LP      = Players.LocalPlayer
+
+    -- LP must be alive and playing (has character, humanoid > 0 hp).
+    -- Rejects spectator / dead / not-yet-spawned states.
+    local function _lpAlivePlaying()
+        local ch = LP and LP.Character
+        if not ch then return false end
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return false end
+        return true
+    end
+    _G.EclipseLPAlivePlaying = _lpAlivePlaying
+
     local function _drawTracer(a, b)
         if not (Config and Config.Visuals and Config.Visuals.BulletTracer) then return end
         if _G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil then return end
+        if not _lpAlivePlaying() then return end
         if typeof(a) ~= "Vector3" or typeof(b) ~= "Vector3" then return end
         local d = b - a; local mag = d.Magnitude
         if mag < 0.5 or mag > 5000 then return end
@@ -10555,9 +10572,81 @@ do
     end
     _G.EclipseDrawTracer = _drawTracer
 
-    -- No CreateTracer listener: that remote fires for every player and caused
-    -- FPS drops even when the toggle was off. Tracers are LP-only via the lazy
-    -- ShootWeapon hook installed below only after enabling the feature.
+    -- ------------------------------------------------------------
+    -- LAZY CreateTracer listener (RemoteEvent OnClientEvent).
+    -- Only connects while BulletTracer toggle is ON, disconnects
+    -- when OFF. Filters strictly to LP-authored tracers via player
+    -- arg OR origin proximity to camera (viewmodel muzzle).
+    -- Zero cost when the toggle is off (no connection exists).
+    -- ------------------------------------------------------------
+    local _ctConn = nil
+    local _ctRE   = nil
+    local function _resolveCT()
+        if _ctRE and _ctRE.Parent then return _ctRE end
+        local ok, vfx = pcall(function()
+            return RS:WaitForChild("NetworkRemotes", 5):WaitForChild("VFX", 3)
+        end)
+        if not ok or not vfx then return nil end
+        local ev = vfx:FindFirstChild("CreateTracer")
+        if ev and ev:IsA("RemoteEvent") then _ctRE = ev; return ev end
+        return nil
+    end
+
+    local function _isLPSource(arg1, origin)
+        -- Accept when the payload names the LP directly.
+        if typeof(arg1) == "Instance" then
+            if arg1:IsA("Player") and arg1 == LP then return true end
+            if arg1:IsA("Model") and LP and arg1 == LP.Character then return true end
+            local plr = Players:GetPlayerFromCharacter(arg1)
+            if plr and plr == LP then return true end
+        end
+        -- Fallback: origin within 15 studs of the camera (viewmodel muzzle).
+        if typeof(origin) == "Vector3" then
+            local cam = workspace.CurrentCamera
+            if cam and (origin - cam.CFrame.Position).Magnitude <= 15 then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function _extractTracerArgs(...)
+        local a, b, c = ...
+        -- Common shapes: (origin, dest), (player, origin, dest), (data table)
+        if typeof(a) == "Vector3" and typeof(b) == "Vector3" then
+            return nil, a, b
+        end
+        if typeof(a) == "Instance" and typeof(b) == "Vector3" and typeof(c) == "Vector3" then
+            return a, b, c
+        end
+        if type(a) == "table" then
+            local origin = rawget(a, "Origin") or rawget(a, "From") or rawget(a, "Start")
+            local dest   = rawget(a, "Destination") or rawget(a, "To") or rawget(a, "End") or rawget(a, "Position") or rawget(a, "Hit")
+            local who    = rawget(a, "Player") or rawget(a, "Character") or rawget(a, "Attacker")
+            if typeof(origin) == "Vector3" and typeof(dest) == "Vector3" then
+                return who, origin, dest
+            end
+        end
+        return nil, nil, nil
+    end
+
+    _G.EclipseInstallCreateTracerListener = function()
+        if _ctConn then return end
+        local ev = _resolveCT(); if not ev then return end
+        _ctConn = ev.OnClientEvent:Connect(function(...)
+            if not (Config and Config.Visuals and Config.Visuals.BulletTracer) then return end
+            if _G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil then return end
+            if not _lpAlivePlaying() then return end
+            local who, origin, dest = _extractTracerArgs(...)
+            if not (typeof(origin) == "Vector3" and typeof(dest) == "Vector3") then return end
+            if not _isLPSource(who, origin) then return end
+            _drawTracer(origin, dest)
+        end)
+    end
+
+    _G.EclipseUninstallCreateTracerListener = function()
+        if _ctConn then pcall(function() _ctConn:Disconnect() end) _ctConn = nil end
+    end
 end
 
 
@@ -15530,6 +15619,7 @@ do
             orig = hmm(game, "__namecall", ncc(function(self, ...)
                 if Config and Config.Visuals and Config.Visuals.BulletTracer
                    and not (_G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil)
+                   and (type(_G.EclipseLPAlivePlaying) ~= "function" or _G.EclipseLPAlivePlaying())
                    and typeof(self) == "Instance" and self.Name == "ShootWeapon" then
                     local method = gncm()
                     if method == "FireServer" or method == "InvokeServer" then
