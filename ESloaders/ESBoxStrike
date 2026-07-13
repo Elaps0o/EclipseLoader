@@ -26,6 +26,40 @@ local MarketplaceSvc = game:GetService("MarketplaceService")
 local LocalPlayer = Players.LocalPlayer
 
 -- ============================================================
+-- Purge leftover GUIs from a previous script instance / reinject.
+-- Runs at load AND on Unload so panels (Spectator, C4, SkinPreview,
+-- Terms, Warning, Kill Indicator, etc.) never duplicate.
+-- ============================================================
+local function _purgeEclipseGuis()
+    local ECLIPSE_GUI_NAMES = {
+        EclipseSpectatorPanel = true, EclipseC4Timer = true,
+        EclipseSkinPreview = true,    EclipseESPIcons = true,
+        EclipseHUDAssetViewer = true, EclipseTerms = true,
+        EclipseWarning = true,        EclipseKillIndicator = true,
+        EclipseEspPreview = true,     EclipseKeybindList = true,
+        EclipseWatermark = true,      EclipseCustomCursor = true,
+    }
+    local roots = {}
+    pcall(function() roots[#roots+1] = game:GetService("CoreGui") end)
+    pcall(function() if gethui then roots[#roots+1] = gethui() end end)
+    pcall(function()
+        local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if pg then roots[#roots+1] = pg end
+    end)
+    for _, root in ipairs(roots) do
+        for _, ch in ipairs(root:GetChildren()) do
+            local nm = ch.Name or ""
+            if ECLIPSE_GUI_NAMES[nm] or nm:sub(1,7) == "Eclipse" then
+                pcall(function() ch:Destroy() end)
+            end
+        end
+    end
+end
+pcall(_purgeEclipseGuis)
+_G.EclipsePurgeGuis = _purgeEclipseGuis
+
+
+-- ============================================================
 -- ES-152  ·  Estabilizador de Script (Eclipse Stability v152)
 -- Não remove recursos — apenas isola loops mortos, colapsa
 -- trabalho redundante entre frames e circuita quebras de FPS.
@@ -3492,6 +3526,12 @@ function _EclipseHitPossible(part, allowWallbang)
     end
     return false, stats
 end
+local AIM_ALL_PARTS = {
+    "Head","Neck","UpperTorso","LowerTorso","Torso","HumanoidRootPart",
+    "LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm","LeftHand","RightHand",
+    "LeftUpperLeg","RightUpperLeg","LeftLowerLeg","RightLowerLeg","LeftFoot","RightFoot",
+    "Left Arm","Right Arm","Left Leg","Right Leg",
+}
 function GetAimbotTargetPart(character)
     if not character then return nil end
     local pn = Config.Aimbot.TargetPart
@@ -3500,6 +3540,19 @@ function GetAimbotTargetPart(character)
     elseif pn == "Arms" then cand = {"LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm","LeftHand","RightHand"}
     elseif pn == "Legs" then cand = {"LeftUpperLeg","RightUpperLeg","LeftLowerLeg","RightLowerLeg","LeftFoot","RightFoot"}
     elseif pn == "HumanoidRootPart" then cand = {"HumanoidRootPart"} end
+    -- Preferred part first, but only if visible — lets us stick to Head when it's peeking.
+    for _, n in ipairs(cand) do
+        local p = character:FindFirstChild(n)
+        if p and p:IsA("BasePart") and IsVisible(p) then return p end
+    end
+    -- Fallback: scan every body part and lock the FIRST visible one.
+    -- Fixes cases where the enemy is peeking / half-covered by cover, smoke or
+    -- a grenade — aim now snaps to whatever limb is exposed instead of dropping.
+    for _, n in ipairs(AIM_ALL_PARTS) do
+        local p = character:FindFirstChild(n)
+        if p and p:IsA("BasePart") and IsVisible(p) then return p end
+    end
+    -- Last resort: preferred part even if blocked, then head/HRP.
     for _, n in ipairs(cand) do
         local p = character:FindFirstChild(n)
         if p and p:IsA("BasePart") then return p end
@@ -5753,6 +5806,31 @@ function updateTriggerBot()
                             local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
                             if pStats and pStats.Success then
                                 if _tryFireOnPlayer(pl) then return end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Fallback: no direct crosshair hit, but sweep a small cone (~5°) and fire
+    -- if ANY body part of any enemy is visible. Lets the trigger pull on a
+    -- peeking hand / foot / shoulder without needing pixel-perfect crosshair.
+    do
+        local origin = ray.Origin
+        local dir = ray.Direction.Unit
+        local coneCos = math.cos(math.rad(5))
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= LocalPlayer and pl.Character and (not Config.TeamCheck or _IS_DEATHMATCH or not IsAlly(pl)) then
+                local h = pl.Character:FindFirstChildOfClass("Humanoid")
+                if h and h.Health > 0 then
+                    for _, p in ipairs(pl.Character:GetChildren()) do
+                        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                            local to = (p.Position - origin)
+                            if to.Magnitude > 0 and dir:Dot(to.Unit) >= coneCos and IsVisible(p) then
+                                if _tryFireOnPlayer(pl) then return end
+                                break
                             end
                         end
                     end
@@ -9729,6 +9807,9 @@ function CleanupScript()
     if _forceScopeConn then pcall(function() _forceScopeConn:Disconnect() end); _forceScopeConn = nil end
     for _, c in ipairs(UnloadConnections) do pcall(function() c:Disconnect() end) end
     table.clear(UnloadConnections)
+    -- Kill any leftover Eclipse* ScreenGuis (Spectator, C4, SkinPreview, etc.)
+    pcall(function() if _G.EclipsePurgeGuis then _G.EclipsePurgeGuis() end end)
+
     if Camera.CameraType == Enum.CameraType.Scriptable then
         Camera.CameraType = OriginalCameraType
         if LocalPlayer.Character then
@@ -13501,9 +13582,9 @@ do
 
         local model = nil
         if cfg.bodyType == "female" or cfg.bodyType == "mickey" then
-            -- Woman bundle 239 and Steamboat Mouse are real bundle bodies. Build
-            -- them from HumanoidDescription as R15 so Roblox uses the proper body
-            -- package instead of falling back to fake square R6 limbs.
+            -- Real bundle bodies (Woman 239, Steamboat Mouse). Build via
+            -- HumanoidDescription as R15 so Roblox loads the actual package
+            -- meshes instead of falling back to blocky R6 limbs.
             local desc = _makeDescription(cfg)
             local ok, generated = pcall(function()
                 return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
