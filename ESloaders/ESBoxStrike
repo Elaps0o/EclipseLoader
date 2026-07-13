@@ -10165,65 +10165,96 @@ do
     local LP         = Players.LocalPlayer
     local ATTR       = "EclipseDeadHL"
 
-    local tracked = {} -- [character] = Highlight
+    -- Track any character whose Humanoid has died OR whose current health is 0.
+    -- Same logic base as HealthESP: detect Humanoid.Health<=0. Once flagged as
+    -- dead we keep the highlight on the corpse until the character is removed.
+    local dead    = {}   -- [character] = true
+    local tracked = {}   -- [character] = Highlight
+    local hooked  = {}   -- [character] = true
 
     local function _cleanup(char)
+        dead[char]    = nil
+        hooked[char]  = nil
         local h = tracked[char]
         if h then pcall(function() h:Destroy() end); tracked[char] = nil end
     end
     local function _cleanAll()
         for c, _ in pairs(tracked) do _cleanup(c) end
+        for c, _ in pairs(dead)    do dead[c]    = nil end
+        for c, _ in pairs(hooked)  do hooked[c]  = nil end
     end
     _G.EclipseDeadESPClear = _cleanAll
 
-    local function _isDead(char)
-        if not char or not char.Parent then return false end
+    local function _flagDead(char) if char then dead[char] = true end end
+
+    local function _hookChar(char)
+        if not char or hooked[char] then return end
+        hooked[char] = true
         local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum then return false end
-        if hum.Health <= 0 then return true end
-        if hum:GetState() == Enum.HumanoidStateType.Dead then return true end
-        return false
+        if hum then
+            if hum.Health <= 0 then _flagDead(char) end
+            hum.Died:Connect(function() _flagDead(char) end)
+            hum.HealthChanged:Connect(function(h) if h <= 0 then _flagDead(char) end end)
+        end
     end
+
+    local function _bindPlayer(plr)
+        if plr == LP then return end
+        if plr.Character then _hookChar(plr.Character) end
+        plr.CharacterAdded:Connect(function(c)
+            -- new life → clear old corpse tracking for this player
+            for c2,_ in pairs(tracked) do
+                if c2 ~= c and c2:IsDescendantOf(game) == false then _cleanup(c2) end
+            end
+            task.wait(0.2); _hookChar(c)
+        end)
+        plr.CharacterRemoving:Connect(function(c) _cleanup(c) end)
+    end
+    for _, p in ipairs(Players:GetPlayers()) do _bindPlayer(p) end
+    Players.PlayerAdded:Connect(_bindPlayer)
+    Players.PlayerRemoving:Connect(function(p)
+        if p.Character then _cleanup(p.Character) end
+    end)
 
     RunService.Heartbeat:Connect(function()
         local on  = Config.Visuals.DeadESP
         local col = Config.Visuals.DeadESPColor or Color3.fromRGB(255,60,60)
         if not on then
-            if next(tracked) then _cleanAll() end
+            if next(tracked) then
+                for c, h in pairs(tracked) do pcall(function() h:Destroy() end); tracked[c] = nil end
+            end
             return
         end
+        -- Fallback poll: catches deaths we might have missed hooking
         for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= LP then
-                local char = plr.Character
-                if char and _isDead(char) then
-                    local h = tracked[char]
-                    if not (h and h.Parent) then
-                        h = Instance.new("Highlight")
-                        h.Name = "EclipseDeadESP"
-                        h:SetAttribute(ATTR, true)
-                        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                        h.FillTransparency = 0.4
-                        h.OutlineTransparency = 0
-                        h.Adornee = char
-                        h.Parent = char
-                        tracked[char] = h
-                    end
-                    h.FillColor = col
-                    h.OutlineColor = col
-                    h.Enabled = true
-                elseif char and tracked[char] then
-                    _cleanup(char)
-                end
+            if plr ~= LP and plr.Character then
+                local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health <= 0 then dead[plr.Character] = true end
+                if not hooked[plr.Character] then _hookChar(plr.Character) end
             end
         end
-        -- purge stale entries (character removed / respawned)
-        for c, _ in pairs(tracked) do
-            if not c.Parent then _cleanup(c) end
+        -- Apply highlight to every dead character we know about
+        for char, _ in pairs(dead) do
+            if char and char.Parent then
+                local h = tracked[char]
+                if not (h and h.Parent) then
+                    h = Instance.new("Highlight")
+                    h.Name = "EclipseDeadESP"
+                    h:SetAttribute(ATTR, true)
+                    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    h.FillTransparency = 0.4
+                    h.OutlineTransparency = 0
+                    h.Adornee = char
+                    h.Parent  = char
+                    tracked[char] = h
+                end
+                h.FillColor    = col
+                h.OutlineColor = col
+                h.Enabled      = true
+            else
+                _cleanup(char)
+            end
         end
-    end)
-
-    Players.PlayerRemoving:Connect(function(p)
-        if p.Character then _cleanup(p.Character) end
     end)
 end
 
@@ -10231,41 +10262,75 @@ do
     local Players    = game:GetService("Players")
     local RunService = game:GetService("RunService")
     local LP         = Players.LocalPlayer
+    local ATTR       = "EclipsePCHams"
 
-    -- Two-highlight approach (same method the WeaponHighlight uses on other
-    -- players). A Highlight renders through the render pipeline regardless of
-    -- LocalTransparencyModifier and works in first person on the LocalPlayer.
-    --
-    --   * Body highlight → adornee = Character (all parts except tools)
-    --   * Tool highlight → adornee = equipped Tool (only when "In Weapons")
-    local state = { body=nil, tool=nil, curTool=nil, toolConn=nil }
-    local ATTR = "EclipseChamsHL"
+    -- Same recipe used for other players: a Highlight (AlwaysOnTop fill + Occluded rim).
+    -- We adorn the LP character body, PLUS every model inside workspace.CurrentCamera
+    -- (viewmodel weapon, gloves, arms, knife, tool) so first-person hands / weapon glow too.
+    local vmHLs = {}   -- [model] = {fill, rim}
+    local bodyHL, toolHL, curTool
 
-    local function _mkHL(name)
+    local function _mkFill(host)
         local h = Instance.new("Highlight")
-        h.Name = name
+        h.Name = "EclipsePChams_Fill"
         h:SetAttribute(ATTR, true)
-        h.Enabled = true
-        h.FillTransparency = 0.35
-        h.OutlineTransparency = 1
         h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        h.FillTransparency = 0.35
+        h.OutlineTransparency = 0
+        h.Adornee = host
+        h.Parent  = host
+        return h
+    end
+    local function _mkRim(host)
+        local h = Instance.new("Highlight")
+        h.Name = "EclipsePChams_Rim"
+        h:SetAttribute(ATTR, true)
+        h.DepthMode = Enum.HighlightDepthMode.Occluded
+        h.FillTransparency = 1
+        h.OutlineTransparency = 0
+        h.Adornee = host
+        h.Parent  = host
         return h
     end
 
+    local function _clearVM()
+        for m, rec in pairs(vmHLs) do
+            if rec.fill then pcall(function() rec.fill:Destroy() end) end
+            if rec.rim  then pcall(function() rec.rim:Destroy()  end) end
+            vmHLs[m] = nil
+        end
+    end
     local function _clearAll()
-        if state.body    then pcall(function() state.body:Destroy() end);    state.body=nil end
-        if state.tool    then pcall(function() state.tool:Destroy() end);    state.tool=nil end
-        if state.toolConn then pcall(function() state.toolConn:Disconnect() end); state.toolConn=nil end
-        state.curTool = nil
-        -- legacy: purge any leftover paint attributes from the old implementation
+        _clearVM()
+        if bodyHL then pcall(function() bodyHL.fill:Destroy() end); pcall(function() bodyHL.rim:Destroy() end); bodyHL = nil end
+        if toolHL then pcall(function() toolHL.fill:Destroy() end); pcall(function() toolHL.rim:Destroy() end); toolHL = nil end
+        curTool = nil
+        -- purge leftover marks (legacy attribute)
         local ch = LP and LP.Character
         if ch then
             for _, d in ipairs(ch:GetDescendants()) do
-                if d:IsA("Highlight") and d:GetAttribute(ATTR) then pcall(function() d:Destroy() end) end
+                if d:IsA("Highlight") and (d:GetAttribute("EclipseChamsHL") or d:GetAttribute(ATTR)) then
+                    pcall(function() d:Destroy() end)
+                end
             end
         end
     end
     _G.EclipsePlayerChamsClear = _clearAll
+
+    local function _collectVM()
+        local out = {}
+        local cam = workspace.CurrentCamera
+        if not cam then return out end
+        for _, top in ipairs(cam:GetChildren()) do
+            if top:IsA("Model") then
+                table.insert(out, top)
+                for _, ch in ipairs(top:GetChildren()) do
+                    if ch:IsA("Model") then table.insert(out, ch) end
+                end
+            end
+        end
+        return out
+    end
 
     RunService.Heartbeat:Connect(function()
         local on   = Config.Visuals.PlayerChams
@@ -10273,33 +10338,51 @@ do
         local inW  = Config.Visuals.PlayerChamsInWeapons == true
         local ch   = LP and LP.Character
         if not (on and ch) then
-            if state.body or state.tool then _clearAll() end
+            if bodyHL or toolHL or next(vmHLs) then _clearAll() end
             return
         end
-        -- Body highlight
-        if not (state.body and state.body.Parent) then
-            state.body = _mkHL("EclipseChams_Body")
-            state.body.Parent = ch
+        -- Body (character in world — also visible in third-person)
+        if not (bodyHL and bodyHL.fill and bodyHL.fill.Parent) then
+            if bodyHL then pcall(function() bodyHL.fill:Destroy() end); pcall(function() bodyHL.rim:Destroy() end) end
+            bodyHL = { fill = _mkFill(ch), rim = _mkRim(ch) }
         end
-        state.body.Adornee = ch
-        state.body.FillColor = col
-        state.body.Enabled = true
+        bodyHL.fill.Adornee = ch; bodyHL.fill.FillColor = col; bodyHL.fill.OutlineColor = col; bodyHL.fill.Enabled = true
+        bodyHL.rim.Adornee  = ch; bodyHL.rim.OutlineColor  = col; bodyHL.rim.Enabled  = true
 
-        -- Tool highlight
+        -- Equipped Tool (world)
         local tool = ch:FindFirstChildOfClass("Tool")
         if inW and tool then
-            if state.curTool ~= tool then
-                if state.tool then pcall(function() state.tool:Destroy() end) end
-                state.tool = _mkHL("EclipseChams_Tool")
-                state.tool.Parent = tool
-                state.curTool = tool
+            if curTool ~= tool or not (toolHL and toolHL.fill and toolHL.fill.Parent) then
+                if toolHL then pcall(function() toolHL.fill:Destroy() end); pcall(function() toolHL.rim:Destroy() end) end
+                toolHL = { fill = _mkFill(tool), rim = _mkRim(tool) }
+                curTool = tool
             end
-            state.tool.Adornee = tool
-            state.tool.FillColor = col
-            state.tool.Enabled = true
+            toolHL.fill.Adornee = tool; toolHL.fill.FillColor = col; toolHL.fill.OutlineColor = col; toolHL.fill.Enabled = true
+            toolHL.rim.Adornee  = tool; toolHL.rim.OutlineColor  = col; toolHL.rim.Enabled  = true
         else
-            if state.tool then pcall(function() state.tool:Destroy() end); state.tool=nil end
-            state.curTool = nil
+            if toolHL then pcall(function() toolHL.fill:Destroy() end); pcall(function() toolHL.rim:Destroy() end); toolHL = nil end
+            curTool = nil
+        end
+
+        -- Viewmodel (first-person hands / gloves / knife / gun)
+        local vmList = _collectVM()
+        local active = {}
+        for _, m in ipairs(vmList) do active[m] = true end
+        for m, rec in pairs(vmHLs) do
+            if not active[m] or not m.Parent then
+                if rec.fill then pcall(function() rec.fill:Destroy() end) end
+                if rec.rim  then pcall(function() rec.rim:Destroy()  end) end
+                vmHLs[m] = nil
+            end
+        end
+        for _, m in ipairs(vmList) do
+            local rec = vmHLs[m]
+            if not (rec and rec.fill and rec.fill.Parent) then
+                rec = { fill = _mkFill(m), rim = _mkRim(m) }
+                vmHLs[m] = rec
+            end
+            rec.fill.Adornee = m; rec.fill.FillColor = col; rec.fill.OutlineColor = col; rec.fill.Enabled = true
+            rec.rim.Adornee  = m; rec.rim.OutlineColor  = col; rec.rim.Enabled  = true
         end
     end)
 
@@ -10462,12 +10545,21 @@ do
         pcall(function()
             ct.OnClientEvent:Connect(function(...)
                 if not (Config and Config.Visuals and Config.Visuals.BulletTracer) then return end
+                -- Skip autoskill echoes (flag set right before FireServer)
+                if _G.__EclipseSkipTracerUntil and tick() < _G.__EclipseSkipTracerUntil then
+                    return
+                end
                 local args = { ... }
                 local attacker, origin, endPos
                 for _, v in ipairs(args) do
                     local ty = typeof(v)
-                    if ty == "Instance" and v:IsA("Player") then
-                        attacker = v
+                    if ty == "Instance" then
+                        if v:IsA("Player") then
+                            attacker = v
+                        elseif v:IsA("Model") then
+                            local p = game:GetService("Players"):GetPlayerFromCharacter(v)
+                            if p then attacker = p end
+                        end
                     elseif ty == "Vector3" then
                         if not origin then origin = v
                         elseif not endPos then endPos = v end
@@ -10478,20 +10570,26 @@ do
                             if typeof(vv) == "Vector3" then
                                 if not origin then origin = vv
                                 elseif not endPos then endPos = vv end
+                            elseif typeof(vv) == "CFrame" then
+                                if not origin then origin = vv.Position end
+                            elseif typeof(vv) == "Instance" and vv:IsA("Player") then
+                                attacker = vv
                             end
                         end
                     end
                 end
-                -- LP-only filter: if attacker included, must be LocalPlayer.
-                -- If no attacker in payload, use camera-origin proximity.
+                -- LP-only filter: attacker must resolve to LocalPlayer.
+                -- Fallback: no attacker → accept if origin is near camera (first-person barrel).
+                local isLP = false
                 if attacker then
-                    if attacker ~= LocalPlayer then return end
+                    isLP = (attacker == LocalPlayer)
                 else
                     local cam = workspace.CurrentCamera
-                    if cam and origin and (origin - cam.CFrame.Position).Magnitude > 10 then
-                        return
+                    if cam and origin and (origin - cam.CFrame.Position).Magnitude <= 15 then
+                        isLP = true
                     end
                 end
+                if not isLP then return end
                 if origin and endPos then pcall(_drawTracer, origin, endPos) end
             end)
         end)
@@ -11866,13 +11964,17 @@ do
             _baseFOV = nil
         end
     end
-    if _G.__EclipseFOVConn then pcall(function() _G.__EclipseFOVConn:Disconnect() end) end
+    if _G.__EclipseFOVConn  then pcall(function() _G.__EclipseFOVConn:Disconnect() end)  end
     if _G.__EclipseFOVConn2 then pcall(function() _G.__EclipseFOVConn2:Disconnect() end) end
-    -- Aplicar em Heartbeat garante que qualquer projecao de ESP feita no
-    -- mesmo frame (WorldToViewportPoint) ja veja o FOV correto, evitando
-    -- que as caixas fiquem "flutuando" fora do inimigo apos mudar o slider.
+    pcall(function() RunService:UnbindFromRenderStep("EclipseCustomFOV") end)
+    -- Bind to RenderStep with a "First" priority so the FOV is enforced BEFORE
+    -- ESP loops (Heartbeat) run WorldToViewportPoint. Combined with Heartbeat
+    -- + PreRender, this keeps ESP boxes stuck to enemies while CustomFOV is on.
     _G.__EclipseFOVConn  = RunService.Heartbeat:Connect(_apply)
     _G.__EclipseFOVConn2 = RunService.PreRender:Connect(_apply)
+    pcall(function()
+        RunService:BindToRenderStep("EclipseCustomFOV", Enum.RenderPriority.First.Value, _apply)
+    end)
 end
 MiscGB:AddSlider("CustomFOV_Slider", { Text="CUSTOM FOV (+)", Default=Config.Misc.CustomFOV or 0, Min=0, Max=50, Rounding=0, Suffix="°",
     Callback=function(v) Config.Misc.CustomFOV = v end })
@@ -15016,10 +15118,9 @@ end)
         end
         if sent then
             pcall(_playBlood)
-            -- Draw LP bullet tracer if enabled (autoskill path)
-            if Config.Visuals and Config.Visuals.BulletTracer and _G.EclipseDrawTracer then
-                pcall(_G.EclipseDrawTracer, origin, hitPos)
-            end
+            -- AutoSkill bullets DO NOT show tracer per user request.
+            -- Flag the next ~250ms so the CreateTracer echo is skipped.
+            _G.__EclipseSkipTracerUntil = tick() + 0.25
         end
     end
 
