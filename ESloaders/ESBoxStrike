@@ -5692,18 +5692,36 @@ function updateTriggerBot()
     -- MELEE / KNIFE GATE: TriggerBot cannot fire a bullet with a knife equipped.
     -- Without this early bail, the silent branch keeps raycasting every 33ms
     -- and _doClick() spams mouse events while stabbing, causing severe FPS drop.
+    -- Two-layer check: (1) AutoSkill globals when available, (2) direct Tool
+    -- name inspection as a fallback so the gate works even before AS loads.
     do
+        local isKnife = false
         local find   = _G.EclipseAS_FindEquipped
         local isMele = _G.EclipseAS_IsMelee
         if type(find) == "function" and type(isMele) == "function" then
             local ok, w = pcall(find)
-            if ok and w and isMele(w) then
-                _trigSilentCached = nil
-                _trigLastScan = now + 0.20
-                return
+            if ok and w and isMele(w) then isKnife = true end
+        end
+        if not isKnife then
+            local ch = LocalPlayer and LocalPlayer.Character
+            local tool = ch and ch:FindFirstChildOfClass("Tool")
+            if tool then
+                local n = string.lower(tool.Name or "")
+                if n:find("knife", 1, true) or n:find("bayonet", 1, true)
+                    or n:find("karambit", 1, true) or n:find("daggers", 1, true)
+                    or n:find("kukri", 1, true) or n == "melee"
+                    or (KNIVES and KNIVES[tool.Name] == true) then
+                    isKnife = true
+                end
             end
         end
+        if isKnife then
+            _trigSilentCached = nil
+            _trigLastScan = now + 0.20
+            return
+        end
     end
+
     local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
     local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
     if not isNoSpread and (now - lastTrigger) < delay then return end
@@ -13261,10 +13279,14 @@ do
 
     local function _applyR6Body(model, cfg)
         -- R6 outfits can be either classic square bodies (Joker/Clown) or real
-        -- Roblox package bodies (Woman bundle 239).  The Woman bundle is an R6
-        -- CharacterMesh package, not an R15 meshpart body, so forcing R15 makes
-        -- many executors fall back to the square/blocky body.  Apply the package
-        -- meshes directly to the R6 rig so Cute Girl uses the actual Woman body.
+        -- Roblox package bodies (Woman bundle 239).
+        --
+        -- IMPORTANT: `CharacterMesh.MeshId` expects the *mesh file* ID, NOT the
+        -- package asset ID (27111894, etc.). Setting the package ID directly
+        -- leaves MeshId=0, so the part renders as a blocky R6 block instead of
+        -- the woman body. We must load the asset with game:GetObjects and clone
+        -- the real CharacterMesh instance (which carries MeshId/BaseTextureId/
+        -- OverlayTextureId already resolved to file IDs).
         for _, d in ipairs(model:GetDescendants()) do
             if d:IsA("CharacterMesh") then pcall(function() d:Destroy() end) end
         end
@@ -13277,16 +13299,33 @@ do
             RightLeg = Enum.BodyPart.RightLeg,
         }
         for key, bodyPart in pairs(bodyMap) do
-            local meshId = cfg.bodyAssets[key]
-            if meshId then
-                local cm = Instance.new("CharacterMesh")
-                cm.Name = "EclipseCPM_" .. key
-                cm.BodyPart = bodyPart
-                pcall(function() cm.MeshId = tonumber(meshId) or meshId end)
-                cm.Parent = model
+            local assetId = cfg.bodyAssets[key]
+            if assetId then
+                local placed = false
+                for _, obj in ipairs(_loadAssetChildren(assetId)) do
+                    if obj:IsA("CharacterMesh") and not placed then
+                        obj.Name = "EclipseCPM_" .. key
+                        pcall(function() obj.BodyPart = bodyPart end)
+                        obj.Parent = model
+                        placed = true
+                    else
+                        pcall(function() obj:Destroy() end)
+                    end
+                end
+                -- Fallback: if the asset didn't return a CharacterMesh (some
+                -- executors), synthesize one — MeshId may still be 0, but at
+                -- least BodyPart is set for anything that resolves it later.
+                if not placed then
+                    local cm = Instance.new("CharacterMesh")
+                    cm.Name = "EclipseCPM_" .. key
+                    cm.BodyPart = bodyPart
+                    pcall(function() cm.MeshId = tonumber(assetId) or assetId end)
+                    cm.Parent = model
+                end
             end
         end
     end
+
 
     local function _findAccessoryAttachment(model, handle)
         if not (model and handle) then return nil end
