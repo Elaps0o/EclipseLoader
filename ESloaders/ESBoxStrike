@@ -3526,12 +3526,6 @@ function _EclipseHitPossible(part, allowWallbang)
     end
     return false, stats
 end
-local AIM_ALL_PARTS = {
-    "Head","Neck","UpperTorso","LowerTorso","Torso","HumanoidRootPart",
-    "LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm","LeftHand","RightHand",
-    "LeftUpperLeg","RightUpperLeg","LeftLowerLeg","RightLowerLeg","LeftFoot","RightFoot",
-    "Left Arm","Right Arm","Left Leg","Right Leg",
-}
 function GetAimbotTargetPart(character)
     if not character then return nil end
     local pn = Config.Aimbot.TargetPart
@@ -3540,19 +3534,6 @@ function GetAimbotTargetPart(character)
     elseif pn == "Arms" then cand = {"LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm","LeftHand","RightHand"}
     elseif pn == "Legs" then cand = {"LeftUpperLeg","RightUpperLeg","LeftLowerLeg","RightLowerLeg","LeftFoot","RightFoot"}
     elseif pn == "HumanoidRootPart" then cand = {"HumanoidRootPart"} end
-    -- Preferred part first, but only if visible — lets us stick to Head when it's peeking.
-    for _, n in ipairs(cand) do
-        local p = character:FindFirstChild(n)
-        if p and p:IsA("BasePart") and IsVisible(p) then return p end
-    end
-    -- Fallback: scan every body part and lock the FIRST visible one.
-    -- Fixes cases where the enemy is peeking / half-covered by cover, smoke or
-    -- a grenade — aim now snaps to whatever limb is exposed instead of dropping.
-    for _, n in ipairs(AIM_ALL_PARTS) do
-        local p = character:FindFirstChild(n)
-        if p and p:IsA("BasePart") and IsVisible(p) then return p end
-    end
-    -- Last resort: preferred part even if blocked, then head/HRP.
     for _, n in ipairs(cand) do
         local p = character:FindFirstChild(n)
         if p and p:IsA("BasePart") then return p end
@@ -5806,31 +5787,6 @@ function updateTriggerBot()
                             local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
                             if pStats and pStats.Success then
                                 if _tryFireOnPlayer(pl) then return end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- Fallback: no direct crosshair hit, but sweep a small cone (~5°) and fire
-    -- if ANY body part of any enemy is visible. Lets the trigger pull on a
-    -- peeking hand / foot / shoulder without needing pixel-perfect crosshair.
-    do
-        local origin = ray.Origin
-        local dir = ray.Direction.Unit
-        local coneCos = math.cos(math.rad(5))
-        for _, pl in ipairs(Players:GetPlayers()) do
-            if pl ~= LocalPlayer and pl.Character and (not Config.TeamCheck or _IS_DEATHMATCH or not IsAlly(pl)) then
-                local h = pl.Character:FindFirstChildOfClass("Humanoid")
-                if h and h.Health > 0 then
-                    for _, p in ipairs(pl.Character:GetChildren()) do
-                        if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
-                            local to = (p.Position - origin)
-                            if to.Magnitude > 0 and dir:Dot(to.Unit) >= coneCos and IsVisible(p) then
-                                if _tryFireOnPlayer(pl) then return end
-                                break
                             end
                         end
                     end
@@ -13145,39 +13101,23 @@ do
     -- Outfit definitions (asset IDs from the user).
     -- bodyType: "female" uses the official Roblox Woman bundle body parts;
     -- "male" keeps the default square R6 block body.
+    -- Classic Roblox "Woman" bundle (239) R6 CharacterMesh IDs. These are the
+    -- ACTUAL Woman package meshes — smaller torso, thinner limbs — so the dummy
+    -- gets the true woman body size without any scale hack.
+    local WOMAN_MESHES = {
+        Torso    = 27111894,
+        RightArm = 27111857,
+        LeftArm  = 27111419,
+        LeftLeg  = 27111863,
+        RightLeg = 27111882,
+    }
+
     local OUTFITS = {
-        ["Kawaii Cute Girl"] = {
-            baseUserId  = 1,
-            bodyType    = "female",
-            bodyTypeScale = 1.00,
-            -- Cute Girl was rendering way too tall vs. LP. Shrink the whole
-            -- avatar so the head sits at LP head height instead of floating.
-            heightScale = 0.88,
-            widthScale  = 0.90,
-            depthScale  = 0.90,
-            headScale   = 0.95,
-            skinColor   = Color3.fromRGB(255, 204, 221),
-            bodyAssets  = {
-                -- Roblox Woman bundle 239: classic Woman body, not square R6.
-                Head = 10725626210,
-                Torso = 86499666,
-                RightArm = 86499698,
-                LeftArm = 86499716,
-                LeftLeg = 86499753,
-                RightLeg = 86499793,
-            },
-            hair        = { 137465957796118 },              -- Kawaii Kitty Beanie hair
-            hat         = { 137465957796118 },
-            shirt       = 89323645790303,
-            pants       = 92367511902898,
-            accessories = { 137465957796118 },
-            clothing    = { 92367511902898, 89323645790303 }
-        },
         ["Joker"] = {
             baseUserId  = 1,
             bodyType    = "male",
             skinColor   = Color3.fromRGB(230, 227, 210),
-            face        = { 99905090721586 },  -- Animated The Clown of Three Faces
+            face        = { 99905090721586 },
             hat         = { 99905090721586 },
             shirt       = 13062982953,
             pants       = 101481154733615,
@@ -13185,23 +13125,20 @@ do
             clothing    = { 101481154733615, 13062982953 }
         },
         ["Clown"] = {
-            -- Bozo the Clown outfit: shirt + pants + hat on head.
             baseUserId  = 1,
             bodyType    = "male",
             skinColor   = Color3.fromRGB(255, 235, 220),
-            hat         = { 15469944 },        -- Bozo the Clown (hat/hair accessory)
-            shirt       = 14036936643,         -- Bozo the Clown Top
-            pants       = 14036939202,         -- Bozo the Clown Bottom
+            hat         = { 15469944 },
+            shirt       = 14036936643,
+            pants       = 14036939202,
             accessories = { 15469944 },
             clothing    = { 14036939202, 14036936643 }
         },
         ["Mickey Mouse"] = {
-            -- Steamboat Mouse bundle (bundle 295921). No clothing, just the body.
             baseUserId  = 1,
             bodyType    = "mickey",
             skinColor   = Color3.fromRGB(17, 17, 17),
             bodyAssets  = {
-                -- Captured Steamboat Mouse bundle body parts.
                 Torso = 15872749347,
                 RightArm = 15872746109,
                 LeftArm = 15872746095,
@@ -13209,6 +13146,27 @@ do
                 RightLeg = 15872749396,
                 Head = 15872749227,
             },
+        },
+        ["Blue Cloud Girl"] = {
+            -- Uses the real Woman bundle (239) body via R6 CharacterMesh so the
+            -- proportions are the original Woman size — no scale hack, no bug.
+            baseUserId  = 1,
+            bodyType    = "female",
+            skinColor   = Color3.fromRGB(255, 222, 208),
+            bodyAssets  = WOMAN_MESHES,
+            hair        = { 128636341838031 }, -- Tied-Up Cat Wolfcut w/ Clips (white/blue)
+            accessories = { 128636341838031 },
+            clothing    = { 9487774665 },       -- Blue Kawaii Sweater + Cloud Plaid Skirt
+        },
+        ["Pandas Girl"] = {
+            baseUserId  = 1,
+            bodyType    = "female",
+            skinColor   = Color3.fromRGB(255, 222, 208),
+            bodyAssets  = WOMAN_MESHES,
+            hair        = { 87960794461758 },  -- Cute Aesthetic Braids w/ Bear Hood
+            hat         = { 8720747474 },      -- White Bear
+            accessories = { 87960794461758, 8720747474 },
+            clothing    = { 15891721015 },     -- grey/white piyama
         },
     }
 
@@ -13581,10 +13539,11 @@ do
         end
 
         local model = nil
-        if cfg.bodyType == "female" or cfg.bodyType == "mickey" then
-            -- Real bundle bodies (Woman 239, Steamboat Mouse). Build via
-            -- HumanoidDescription as R15 so Roblox loads the actual package
-            -- meshes instead of falling back to blocky R6 limbs.
+        if cfg.bodyType == "mickey" then
+            -- Steamboat Mouse is the only outfit that needs the R15 bundle path,
+            -- because its body is R15 meshparts. Female uses the Woman R6 bundle
+            -- (CharacterMesh) so it falls through to the R6 rig path below and
+            -- gets the true Woman proportions with clean limb mirroring.
             local desc = _makeDescription(cfg)
             local ok, generated = pcall(function()
                 return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
@@ -13961,7 +13920,7 @@ do
     MiscGB:AddDropdown("CustomPlayerModel_DD", {
         Text = "CUSTOM PLAYER MODEL",
         Default = "Off",
-        Values = { "Off", "Kawaii Cute Girl", "Joker", "Clown", "Mickey Mouse" },
+        Values = { "Off", "Blue Cloud Girl", "Pandas Girl", "Joker", "Clown", "Mickey Mouse" },
         Callback = function(v)
             Config.Misc.CustomPlayerModel = v
             task.spawn(function()
@@ -17559,12 +17518,16 @@ end)
         end
 
         task.spawn(function()
-            local _lockedTarget, _lockCleared = nil, 0
+            local _lockedTarget = nil
             while scriptRunning do
-                -- Silent Aim alone NEVER auto-fires anymore — the raycast
-                -- hook (Testing stuff) already redirects real bullets.
-                -- The auto-fire loop only engages when TriggerBot is ALSO
-                -- enabled: on visible enemy → fire once, Silent redirects.
+                -- Silent Aim alone NEVER auto-fires — o raycast hook
+                -- (Testing stuff) redireciona a bala do disparo real.
+                -- Quando TriggerBot ESTÁ ligado junto, aqui apenas
+                -- SIMULAMOS UM CLIQUE DE MOUSE (mesma mecânica do
+                -- TriggerBot ao mirar em inimigo) — não chamamos mais
+                -- _sendKill diretamente. Assim o tiro sai como um MB1
+                -- real, passa pelo hook do Silent Aim e é redirecionado
+                -- pro alvo visível mais próximo.
                 local rate = math.clamp(tonumber(Config.Misc.AutoSkillSpeed) or 6, 1, 8)
                 task.wait(1 / rate)
 
@@ -17579,7 +17542,8 @@ end)
                     if _isMeleeWeapon(w) then _lockedTarget=nil; task.wait(0.4); break end
                     local rounds = rawget(w, "Rounds") or 0
                     if rounds <= 0 then pcall(_tryRefill, w); break end
-                    -- Reuse cached lock while target still visible+alive.
+
+                    -- Reutiliza lock enquanto alvo continuar visível+vivo.
                     local best = _lockedTarget
                     local keep = false
                     if best and best.Parent and best.Character then
@@ -17588,7 +17552,26 @@ end)
                     end
                     if not keep then best = _pickTarget(); _lockedTarget = best end
                     if not best then break end
-                    pcall(_sendKill, best, w)
+
+                    -- DISPARO VIA MOUSE (igual ao clique real do usuário).
+                    -- O hook do Silent Aim intercepta esse tiro e joga
+                    -- a bala no `best`. Nada de _sendKill aqui.
+                    _G.EclipseMB1Virtual = true
+                    local ok = false
+                    if mouse1press and mouse1release then
+                        pcall(mouse1press)
+                        task.wait(0.05)
+                        pcall(mouse1release)
+                        ok = true
+                    elseif mouse1click then
+                        pcall(mouse1click); ok = true
+                    end
+                    task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
+                    if not ok then
+                        -- Fallback extremo se runtime não expõe mouse*.
+                        pcall(_sendKill, best, w)
+                    end
+
                     task.delay(0.10, function()
                         if _lockedTarget == best and best.Character then
                             local h = best.Character:FindFirstChildOfClass("Humanoid")
@@ -17599,6 +17582,7 @@ end)
                 until true
             end
         end)
+
     end
     _G.EclipseSilent = true
 
