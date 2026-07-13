@@ -12215,26 +12215,42 @@ do
         local _NS_CACHE = {}   -- name -> { Data=table, Orig={Spread={..}, FireModes={n={..}}}, IsSniper=bool }
         local _NS_INIT  = false
 
-        local function _nsSetSpread(dst, src, zero)
-            if type(dst) ~= "table" or type(src) ~= "table" then return end
-            local ok = pcall(function() if setreadonly then setreadonly(dst, false) end end)
-            if src.Range               ~= nil then dst.Range               = zero and 0 or src.Range               end
-            if src.PerShot             ~= nil then dst.PerShot             = zero and 0 or src.PerShot             end
-            if src.MovementMultiplier  ~= nil then dst.MovementMultiplier  = zero and 0 or src.MovementMultiplier  end
-            if src.JumpShotMinimum     ~= nil then dst.JumpShotMinimum     = zero and 0 or src.JumpShotMinimum     end
-            pcall(function() if setreadonly then setreadonly(dst, true) end end)
-            if ok then end
-        end
-
+        -- Deep snapshot: numbers are copied; nested tables (e.g. {Min=,Max=})
+        -- are cloned recursively so we can restore the original structure.
         local function _nsSnapshotSpread(sp)
             if type(sp) ~= "table" then return nil end
-            return {
-                Range              = sp.Range,
-                PerShot            = sp.PerShot,
-                MovementMultiplier = sp.MovementMultiplier,
-                JumpShotMinimum    = sp.JumpShotMinimum,
-            }
+            local out = {}
+            for k, v in pairs(sp) do
+                if type(v) == "number" then
+                    out[k] = v
+                elseif type(v) == "table" then
+                    out[k] = _nsSnapshotSpread(v)
+                end
+            end
+            return out
         end
+
+        -- Deep apply: keeps sub-tables intact and only zeroes numeric leaves.
+        -- Avoids "attempt to index number with 'Min'" when Spread fields are
+        -- tables like {Min=..., Max=...}.
+        local function _nsSetSpread(dst, src, zero)
+            if type(dst) ~= "table" or type(src) ~= "table" then return end
+            pcall(function() if setreadonly then setreadonly(dst, false) end end)
+            for k, v in pairs(src) do
+                if type(v) == "number" then
+                    local dv = dst[k]
+                    if type(dv) == "number" or dv == nil then
+                        dst[k] = zero and 0 or v
+                    end
+                elseif type(v) == "table" then
+                    if type(dst[k]) == "table" then
+                        _nsSetSpread(dst[k], v, zero)
+                    end
+                end
+            end
+            pcall(function() if setreadonly then setreadonly(dst, true) end end)
+        end
+
 
         local function _nsInit()
             if _NS_INIT then return end
@@ -13366,7 +13382,7 @@ do
     end
 
     local function _applyR6Body(model, cfg)
-        -- Clean any prior mesh instances on body parts.
+        -- Clean any prior mesh/CharacterMesh instances.
         for _, d in ipairs(model:GetDescendants()) do
             if d:IsA("CharacterMesh") then pcall(function() d:Destroy() end) end
             if d:IsA("SpecialMesh") and (d.Name == "EclipseWomanMesh" or d.Name == "EclipseWomanHead") then
@@ -13375,33 +13391,24 @@ do
         end
         if cfg.bodyType ~= "female" then return end
 
-        -- Official R6 Woman package raw MeshIds (classic Roblox Woman body).
-        local WOMAN = {
-            ["Torso"]     = "634010143",
-            ["Left Arm"]  = "634011680",
-            ["Right Arm"] = "634012480",
-            ["Left Leg"]  = "634013009",
-            ["Right Leg"] = "634013530",
+        -- Official R6 Woman package — applied as CharacterMesh (parented to the
+        -- Model, NOT to each BasePart). Using these IDs as SpecialMesh.MeshId
+        -- loads an empty mesh and makes the body invisible.
+        local WOMAN_CM = {
+            { BodyPart = Enum.BodyPart.Torso,    MeshId = 27111894 },
+            { BodyPart = Enum.BodyPart.LeftArm,  MeshId = 27111419 },
+            { BodyPart = Enum.BodyPart.RightArm, MeshId = 27111864 },
+            { BodyPart = Enum.BodyPart.LeftLeg,  MeshId = 27111857 },
+            { BodyPart = Enum.BodyPart.RightLeg, MeshId = 27111882 },
         }
-
-        local function _applyMesh(part, meshId, name)
-            if not (part and part:IsA("BasePart")) then return end
-            for _, m in ipairs(part:GetChildren()) do
-                if m:IsA("SpecialMesh") then pcall(function() m:Destroy() end) end
-            end
-            local sm = Instance.new("SpecialMesh")
-            sm.Name = name or "EclipseWomanMesh"
-            sm.MeshType = Enum.MeshType.FileMesh
-            pcall(function() sm.MeshId = "rbxassetid://" .. meshId end)
-            sm.Scale = Vector3.new(1, 1, 1)
-            sm.Parent = part
+        for _, info in ipairs(WOMAN_CM) do
+            local cm = Instance.new("CharacterMesh")
+            cm.BodyPart = info.BodyPart
+            pcall(function() cm.MeshId = info.MeshId end)
+            cm.Parent = model
         end
 
-        for partName, meshId in pairs(WOMAN) do
-            _applyMesh(model:FindFirstChild(partName), meshId, "EclipseWomanMesh")
-        end
-
-        -- Head: classic block head with default head mesh type (scale 1.25).
+        -- Head: keep classic head mesh (default block head with head mesh).
         local head = model:FindFirstChild("Head")
         if head and head:IsA("BasePart") then
             for _, m in ipairs(head:GetChildren()) do
@@ -13414,6 +13421,7 @@ do
             hm.Parent = head
         end
     end
+
 
 
 
