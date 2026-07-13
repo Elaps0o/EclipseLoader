@@ -5587,7 +5587,8 @@ function updateAimbot()
         end
         AimState.frameN = (AimState.frameN or 0) + 1
 
-        local t = math.clamp(AimState.frameN / 2, 0, 1)
+        -- Faster acquisition ramp: full strength in 1 frame instead of 2.
+        local t = math.clamp(AimState.frameN / 1, 0, 1)
         local ramp = 1 - (1 - t) * (1 - t)
 
         local s = math.clamp(ActiveAimSmooth() or 0.35, 0.05, 1.0)
@@ -5598,7 +5599,8 @@ function updateAimbot()
         if scoped then
             k = 240
         else
-            k = 3 + s * 20
+            -- Stronger snap: base 12 (was 3) + s*30 (was s*20).
+            k = 12 + s * 30
         end
         local alpha = 1 - math.exp(-dt * k)
         alpha = alpha * ramp
@@ -5608,12 +5610,16 @@ function updateAimbot()
         local delta = tp - mp
         local mag = delta.Magnitude
 
-        if mag < 5 then alpha = math.min(1, alpha * 1.5) end
+        -- Stickiness: when crosshair is already near the target, boost pull
+        -- so it "grudinha" instead of hovering.
+        if mag < 20 then alpha = math.min(1, alpha * 2.2)
+        elseif mag < 60 then alpha = math.min(1, alpha * 1.5) end
         if scoped then alpha = 1 end
 
         local dx = delta.X * alpha
         local dy = delta.Y * alpha
         if mousemoverel then mousemoverel(dx, dy) end
+
     else
         AimState.lastTarget = nil
         AimState.frameN     = 0
@@ -5716,72 +5722,11 @@ function updateTriggerBot()
         return true
     end
 
-    -- ==============================================================
-    -- INTEGRAÇÃO SILENT + TRIGGER
-    -- Com Silent ativo, o Trigger não exige mirar em parte do corpo:
-    -- basta existir 1 inimigo visível. O click é convertido pelo Silent
-    -- em um hit real na cabeça do inimigo mais próximo/visível.
-    -- ==============================================================
-    if Config.Misc and Config.Misc.SilentAim then
-        local cam = Camera
-        local origin = cam and cam.CFrame.Position or Vector3.new()
-        local function _validCached(pl)
-            local ch = pl and pl.Character
-            local h = ch and ch:FindFirstChildOfClass("Humanoid")
-            return pl and pl ~= LocalPlayer and ch and h and h.Health > 0
-                and not (not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl))
-        end
-        local best = (_validCached(_trigSilentCached) and _trigSilentCached) or nil
+    -- (Silent Aim integration removed — TriggerBot is now pure crosshair
+    -- raycast to avoid multi-player raycast storms that were tanking FPS,
+    -- especially while holding a knife.)
 
-        -- Heavy visibility raycasts are cached at ~12Hz and only run against the
-        -- nearest small candidate set.  TriggerBot still fires with the selected
-        -- delay, but it no longer raycasts every enemy every frame.
-        if (now - _trigSilentLastScan) >= 0.085 or not best then
-            _trigSilentLastScan = now
-            _trigSilentCached = nil
-            local candidates = {}
-            local function pushCandidate(pl, dist)
-                local item = { pl = pl, dist = dist }
-                local inserted = false
-                for i = 1, #candidates do
-                    if dist < candidates[i].dist then
-                        table.insert(candidates, i, item)
-                        inserted = true
-                        break
-                    end
-                end
-                if not inserted then candidates[#candidates + 1] = item end
-                if #candidates > 8 then table.remove(candidates) end
-            end
-            for _, pl in ipairs(Players:GetPlayers()) do
-                if pl ~= LocalPlayer and not (not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl)) then
-                    local ch = pl.Character
-                    local h  = ch and ch:FindFirstChildOfClass("Humanoid")
-                    local hd = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart"))
-                    if h and h.Health > 0 and hd then
-                        pushCandidate(pl, (hd.Position - origin).Magnitude)
-                    end
-                end
-            end
-            local rp = _trigSetIgnore(cam)
-            for _, item in ipairs(candidates) do
-                local pl = item.pl
-                local ch = pl and pl.Character
-                local hd = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart"))
-                if hd then
-                    local dir = hd.Position - origin
-                    local res = Workspace:Raycast(origin, dir, rp)
-                    if (not res) or (res.Instance and res.Instance:IsDescendantOf(ch)) then
-                        best = pl
-                        _trigSilentCached = pl
-                        break
-                    end
-                end
-            end
-        end
-        if best then _tryFireOnPlayer(best) end
-        return
-    end
+
 
     -- Fluxo tradicional: raycast pela mira.
     local vp = Camera.ViewportSize
@@ -12049,28 +11994,12 @@ task.spawn(function()
         local tog = Library.Toggles and Library.Toggles[togName]
         if not (opt and tog) then return end
         local now = tick()
-        if _kbDeb[optName] and (now - _kbDeb[optName]) < 0.25 then return end
+        if _kbDeb[optName] and (now - _kbDeb[optName]) < 0.20 then return end
         _kbDeb[optName] = now
-        local before = tog.Value == true
-        -- Defer a frame so the neverlose KeyPicker's own InputBegan (when
-        -- SyncToggleState=true) can flip the toggle first. If it already
-        -- toggled, we just mirror the callback; otherwise we perform the flip
-        -- ourselves. This prevents the classic double-toggle bug where the
-        -- picker turns Bhop ON and the failsafe immediately turns it OFF.
-        task.defer(function()
-            local after = tog.Value == true
-            if after ~= before then
-                -- picker handled the flip natively; just make sure the
-                -- callback side-effects ran (they already did via SetValue).
-                pcall(cb, after)
-                if extra then pcall(extra, after) end
-            else
-                local new = not before
-                pcall(function() tog:SetValue(new) end)
-                pcall(cb, new)
-                if extra then pcall(extra, new) end
-            end
-        end)
+        local new = not (tog.Value == true)
+        pcall(function() tog:SetValue(new) end)
+        pcall(cb, new)
+        if extra then pcall(extra, new) end
     end
     UIS.InputBegan:Connect(function(input, gp)
         if not scriptRunning then return end
@@ -12695,7 +12624,10 @@ do
                 rec.fill = Instance.new("Highlight")
                 rec.fill.Name = "EclipseWH"
                 rec.fill.Adornee = model
-                rec.fill.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                -- Occluded so the real weapon mesh is visible; without this the
+                -- always-on-top fill covers the deagle/knife and they appear to
+                -- "disappear" behind a colored silhouette.
+                rec.fill.DepthMode = Enum.HighlightDepthMode.Occluded
                 rec.fill.Parent = model
             end
         end
@@ -13137,6 +13069,12 @@ do
             baseUserId  = 1,
             bodyType    = "female",
             bodyTypeScale = 1.00,
+            -- Cute Girl was rendering way too tall vs. LP. Shrink the whole
+            -- avatar so the head sits at LP head height instead of floating.
+            heightScale = 0.88,
+            widthScale  = 0.90,
+            depthScale  = 0.90,
+            headScale   = 0.95,
             skinColor   = Color3.fromRGB(255, 204, 221),
             bodyAssets  = {
                 -- Roblox Woman bundle 239: classic Woman body, not square R6.
@@ -13272,8 +13210,11 @@ do
             end
             -- Both Woman and Mickey are real bundle bodies -> BodyTypeScale=1.00
             -- so Roblox emits the package meshes instead of blocky R15 limbs.
-            desc.HeightScale, desc.WidthScale, desc.DepthScale = 1.00, 1.00, 1.00
-            desc.HeadScale, desc.ProportionScale = 1.00, 0.00
+            desc.HeightScale = cfg.heightScale or 1.00
+            desc.WidthScale  = cfg.widthScale  or 1.00
+            desc.DepthScale  = cfg.depthScale  or 1.00
+            desc.HeadScale   = cfg.headScale   or 1.00
+            desc.ProportionScale = 0.00
             desc.BodyTypeScale = cfg.bodyTypeScale or (bundleBody and 1.00 or 0.00)
         end)
         return desc
@@ -13836,23 +13777,26 @@ do
         -- lag, no falling pieces, no inverted weld solving, and the dummy copies
         -- the LocalPlayer pose every frame exactly as seen in third person.
         local syncParts = {}
+        local heightScale = tonumber(model:GetAttribute("EclipseCPMHeightScale")) or 1.0
         local function _offsetFor(dummyName, target)
             local tn = target and target.Name or ""
+            local o
             if dummyName == tn then return CFrame.new() end
-            if dummyName == "Torso" and tn == "UpperTorso" then return CFrame.new(0, -0.35, 0) end
-            if dummyName == "UpperTorso" and tn == "Torso" then return CFrame.new(0, 0.45, 0) end
-            if dummyName == "LowerTorso" and tn == "Torso" then return CFrame.new(0, -0.45, 0) end
-            if dummyName:find("UpperArm") and tn:find(" Arm") then return CFrame.new(0, 0.35, 0) end
-            if dummyName:find("LowerArm") and tn:find(" Arm") then return CFrame.new(0, -0.25, 0) end
-            if dummyName:find("Hand") and tn:find(" Arm") then return CFrame.new(0, -0.85, 0) end
-            if dummyName:find("UpperLeg") and tn:find(" Leg") then return CFrame.new(0, 0.35, 0) end
-            if dummyName:find("LowerLeg") and tn:find(" Leg") then return CFrame.new(0, -0.25, 0) end
-            if dummyName:find("Foot") and tn:find(" Leg") then return CFrame.new(0, -0.85, 0) end
-            if (dummyName == "Left Arm" or dummyName == "Right Arm") and tn:find("UpperArm") then
-                return CFrame.new(0, -0.50, 0)
+            if dummyName == "Torso" and tn == "UpperTorso" then o = Vector3.new(0, -0.35, 0)
+            elseif dummyName == "UpperTorso" and tn == "Torso" then o = Vector3.new(0, 0.45, 0)
+            elseif dummyName == "LowerTorso" and tn == "Torso" then o = Vector3.new(0, -0.45, 0)
+            elseif dummyName:find("UpperArm") and tn:find(" Arm") then o = Vector3.new(0, 0.35, 0)
+            elseif dummyName:find("LowerArm") and tn:find(" Arm") then o = Vector3.new(0, -0.25, 0)
+            elseif dummyName:find("Hand") and tn:find(" Arm") then o = Vector3.new(0, -0.85, 0)
+            elseif dummyName:find("UpperLeg") and tn:find(" Leg") then o = Vector3.new(0, 0.35, 0)
+            elseif dummyName:find("LowerLeg") and tn:find(" Leg") then o = Vector3.new(0, -0.25, 0)
+            elseif dummyName:find("Foot") and tn:find(" Leg") then o = Vector3.new(0, -0.85, 0)
+            elseif (dummyName == "Left Arm" or dummyName == "Right Arm") and tn:find("UpperArm") then
+                o = Vector3.new(0, -0.50, 0)
             elseif (dummyName == "Left Leg" or dummyName == "Right Leg") and tn:find("UpperLeg") then
-                return CFrame.new(0, -0.50, 0)
+                o = Vector3.new(0, -0.50, 0)
             end
+            if o then return CFrame.new(o * heightScale) end
             return CFrame.new()
         end
         if not useMotorMirror then
@@ -13916,6 +13860,13 @@ do
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
         if not (ch and hum and hum.Health > 0) then return end
         local model = _buildModel(name); if not model then return end
+        -- Uniform final resize so limb offsets scale with the overall height.
+        local cfg = OUTFITS[name]
+        local hs = (cfg and tonumber(cfg.heightScale)) or 1.0
+        if hs ~= 1.0 and model.ScaleTo then
+            pcall(function() model:ScaleTo(hs) end)
+        end
+        model:SetAttribute("EclipseCPMHeightScale", hs)
         _overlay = model
         _cpmActive = true
         _G.EclipseCPMActive = true
@@ -14421,6 +14372,35 @@ do
     local function _refresh()
         pcall(function() if cfgDD and cfgDD.SetValues then cfgDD:SetValues(_listConfigs()) end end)
     end
+    -- Combined save/load: NL config (toggles/sliders/dropdowns) + Eclipse
+    -- snapshot (color pickers + keybinds via _ecfgControlSnapshot).
+    local function _combinedSave()
+        local nlCfg  = ""
+        pcall(function() nlCfg = NLLib:GetConfig() or "" end)
+        local ecJson = ""
+        pcall(function() ecJson = _ecfgSnapshotJson() or "" end)
+        local payload = { NL = nlCfg, Eclipse = ecJson }
+        local ok, enc = pcall(function() return HttpService:JSONEncode(payload) end)
+        return ok and enc or nlCfg
+    end
+    local function _combinedLoad(raw)
+        local ok, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+        if ok and type(decoded) == "table" and (decoded.NL or decoded.Eclipse) then
+            if decoded.NL and decoded.NL ~= "" then
+                pcall(function() NLLib:LoadConfig(decoded.NL) end)
+            end
+            if decoded.Eclipse and decoded.Eclipse ~= "" then
+                pcall(function()
+                    local ec = HttpService:JSONDecode(decoded.Eclipse)
+                    _EclipseAutoConfig.loaded = ec
+                    _ecfgApplyLoadedControls()
+                end)
+            end
+        else
+            pcall(function() NLLib:LoadConfig(raw) end)
+        end
+    end
+
     CfgGB:AddButton({ Text = "Create", Func = function()
         local name = currentInput
         if not name or name == "" then
@@ -14429,20 +14409,18 @@ do
         if name:sub(-5) ~= ".json" then name = name .. ".json" end
         pcall(function()
             if not isfolder(CFG_FOLDER) then makefolder(CFG_FOLDER) end
-            writefile(CFG_FOLDER .. "/" .. name, NLLib:GetConfig())
+            writefile(CFG_FOLDER .. "/" .. name, _combinedSave())
         end)
         _refresh()
         Library:Notify({Title="Configs", Description="Created <b>"..name.."</b>", Time=3})
     end })
     CfgGB:AddButton({ Text = "Save", Func = function()
         if not selectedName then Library:Notify({Title="Configs", Description="Select a config.", Time=3}); return end
-        pcall(function() writefile(CFG_FOLDER .. "/" .. selectedName, NLLib:GetConfig()) end)
-        Library:Notify({Title="Configs", Description="Saved <b>"..selectedName.."</b>", Time=3})
+        pcall(function() writefile(CFG_FOLDER .. "/" .. selectedName, _combinedSave()) end)
+        Library:Notify({Title="Configs", Description="Saved <b>"..selectedName.."</b> (colors + keybinds)", Time=3})
     end })
     CfgGB:AddButton({ Text = "Load", Func = function()
         if not selectedName then Library:Notify({Title="Configs", Description="Select a config.", Time=3}); return end
-        -- Run load on a background thread so the UI + all callback chains don't
-        -- freeze the main thread while every toggle/slider re-fires.
         local name = selectedName
         Library:Notify({Title="Configs", Description="Loading <b>"..name.."</b>...", Time=2})
         task.spawn(function()
@@ -14451,8 +14429,8 @@ do
             if not okR or not data then
                 Library:Notify({Title="Configs", Description="Read failed", Time=3}); return
             end
-            task.wait() -- yield a frame before firing hundreds of callbacks
-            local okL = pcall(function() NLLib:LoadConfig(data) end)
+            task.wait()
+            local okL = pcall(_combinedLoad, data)
             task.wait()
             Library:Notify({Title="Configs", Description=okL and ("Loaded <b>"..name.."</b>") or "Load failed", Time=3})
         end)
@@ -17502,25 +17480,25 @@ end)
         task.spawn(function()
             local _lockedTarget, _lockCleared = nil, 0
             while scriptRunning do
-                -- Silent Aim uses a slower, controlled cadence than autoskill so it doesn't
-                -- one-shot 3 enemies per press. Cap to 6 shots/sec regardless of AutoSkillSpeed.
+                -- Silent Aim alone NEVER auto-fires anymore — the raycast
+                -- hook (Testing stuff) already redirects real bullets.
+                -- The auto-fire loop only engages when TriggerBot is ALSO
+                -- enabled: on visible enemy → fire once, Silent redirects.
                 local rate = math.clamp(tonumber(Config.Misc.AutoSkillSpeed) or 6, 1, 8)
                 task.wait(1 / rate)
 
                 repeat
                     if not Config.Misc.SilentAim then _lockedTarget=nil; break end
-                    local pressed = _mb1Held
-                        or (UIS.IsMouseButtonPressed and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1))
-                        or _G.EclipseMB1Virtual
-                    if not pressed then _lockedTarget=nil; break end
+                    if not (Config.TriggerBot and Config.TriggerBot.Enabled) then
+                        _lockedTarget=nil; break
+                    end
                     if not _alive() then break end
                     if _isBuyPeriod() then break end
                     local w = _findEquippedWeapon(); if not w then break end
                     if _isMeleeWeapon(w) then _lockedTarget=nil; task.wait(0.4); break end
                     local rounds = rawget(w, "Rounds") or 0
                     if rounds <= 0 then pcall(_tryRefill, w); break end
-                    -- Lock onto the closest visible enemy; keep firing at THAT target while
-                    -- they're still alive+visible so we don't spray across multiple players.
+                    -- Reuse cached lock while target still visible+alive.
                     local best = _lockedTarget
                     local keep = false
                     if best and best.Parent and best.Character then
@@ -17530,13 +17508,13 @@ end)
                     if not keep then best = _pickTarget(); _lockedTarget = best end
                     if not best then break end
                     pcall(_sendKill, best, w)
-                    -- If the target likely died from this shot, drop the lock so we pick anew.
                     task.delay(0.10, function()
                         if _lockedTarget == best and best.Character then
                             local h = best.Character:FindFirstChildOfClass("Humanoid")
                             if not h or h.Health <= 0 then _lockedTarget = nil end
                         end
                     end)
+
                 until true
             end
         end)
