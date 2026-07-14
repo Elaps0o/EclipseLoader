@@ -2326,6 +2326,8 @@ local Config = {
         -- 3D BULLET TRACER (hooks outgoing ShootWeapon packets)
         BulletTracer      = false,
         BulletTracerColor = Color3.fromRGB(170, 90, 255),
+        BulletTracerDuration = 4.0,
+        BulletTracerRainbow = false,
 
     },
 
@@ -11439,6 +11441,8 @@ function _drawTracer() end
 -- Engine (v8 safe) is at bottom of file — no remotes/hooks, hard-capped.
 Config.Visuals.BulletTracer      = Config.Visuals.BulletTracer      or false
 Config.Visuals.BulletTracerColor = Config.Visuals.BulletTracerColor or Color3.fromRGB(170, 90, 255)
+Config.Visuals.BulletTracerDuration = Config.Visuals.BulletTracerDuration or 4.0
+Config.Visuals.BulletTracerRainbow = Config.Visuals.BulletTracerRainbow or false
 PVGB:AddToggle("PV_BulletTracer", { Text="BULLET TRACER", Default=false,
     Callback=function(v)
         Config.Visuals.BulletTracer = v and true or false
@@ -11451,6 +11455,11 @@ PVGB:AddToggle("PV_BulletTracer", { Text="BULLET TRACER", Default=false,
     :AddColorPicker("PV_BulletTracerColor", {
         Default=Config.Visuals.BulletTracerColor,
         Callback=function(c) Config.Visuals.BulletTracerColor = c end })
+PVGB:AddSlider("PV_BulletTracerDuration", { Text="DURATION", Default=Config.Visuals.BulletTracerDuration, Min=0.5, Max=10, Rounding=1, Suffix="s",
+    Callback=function(v) Config.Visuals.BulletTracerDuration = v end })
+PVGB:AddButton({ Text="RAINBOW", Func=function()
+    Config.Visuals.BulletTracerRainbow = not (Config.Visuals.BulletTracerRainbow == true)
+end })
 -- SHOW IMPACT (2D X) active — see block above.
 
 -- GLASS ARMS removed per user request.
@@ -18202,10 +18211,30 @@ end)
         return true
     end
 
+    local function _isHeldMelee()
+        local ch = LP and LP.Character
+        local tool = ch and ch:FindFirstChildOfClass("Tool")
+        if not tool then return false end
+        local isMelee = _G.EclipseAS_IsMelee
+        if type(isMelee) == "function" then
+            local ok, res = pcall(isMelee, tool)
+            if ok and res == true then return true end
+        end
+        local n = string.lower(tool.Name or "")
+        if n:find("knife", 1, true) or n:find("bayonet", 1, true) or n:find("melee", 1, true)
+            or n:find("kukri", 1, true) or n:find("karambit", 1, true) or n:find("butterfly", 1, true)
+            or n:find("gut", 1, true) or n:find("flip", 1, true) or n:find("stiletto", 1, true)
+            or n:find("skeleton", 1, true) or n:find("huntsman", 1, true) or n:find("falchion", 1, true) then
+            return true
+        end
+        return false
+    end
+
     local function _canShowTracer()
         if not S.enabled then return false end
         local ch = LocalPlayer and LocalPlayer.Character
         if not ch then return false end
+        if _isHeldMelee() then return false end
         local hum = ch:FindFirstChildOfClass("Humanoid")
         if not (hum and hum.Health > 0) then return false end
         return true
@@ -18253,6 +18282,12 @@ end)
         end)
     end
 
+    local function _rainbowColor(t)
+        local hue = (t * 0.35 + os.clock() * 0.25) % 1
+        if hue < 0 then hue = hue + 1 end
+        return Color3.fromHSV(hue, 0.85, 1)
+    end
+
     local function _draw(origin, hitPos)
         if not S.enabled or typeof(origin) ~= "Vector3" or typeof(hitPos) ~= "Vector3" then return end
         local delta = hitPos - origin
@@ -18262,9 +18297,13 @@ end)
 
         pcall(function()
             local f = _folder()
-            local color = Config and Config.Visuals and Config.Visuals.BulletTracerColor
-            if typeof(color) ~= "Color3" then color = Color3.fromRGB(170, 90, 255) end
+            local baseColor = Config and Config.Visuals and Config.Visuals.BulletTracerColor
+            if typeof(baseColor) ~= "Color3" then baseColor = Color3.fromRGB(170, 90, 255) end
             local life = 4.0
+            local duration = Config and Config.Visuals and Config.Visuals.BulletTracerDuration
+            if type(duration) == "number" and duration > 0 then
+                life = math.clamp(duration, 0.5, 10)
+            end
 
             local item = { life = life, _dead = false }
 
@@ -18301,7 +18340,7 @@ end)
             beam.Name = "EclipseBulletBeam"
             beam.Attachment0 = aa
             beam.Attachment1 = bb
-            beam.Color = ColorSequence.new(color)
+            beam.Color = ColorSequence.new(baseColor)
             beam.LightEmission = 0.9
             beam.LightInfluence = 0
             beam.Brightness = 2.2
@@ -18327,6 +18366,8 @@ end)
                 while os.clock() - start < life and not item._dead do
                     local t = (os.clock() - start) / life
                     local alpha = 1 - math.clamp(t, 0, 1)
+                    local rainbow = Config and Config.Visuals and Config.Visuals.BulletTracerRainbow == true
+                    local color = rainbow and _rainbowColor(t) or baseColor
                     pcall(function()
                         beam.Transparency = NumberSequence.new({
                             NumberSequenceKeypoint.new(0, 0.0),
@@ -18335,6 +18376,7 @@ end)
                             NumberSequenceKeypoint.new(0.72, 0.65 * alpha),
                             NumberSequenceKeypoint.new(1, 1),
                         })
+                        beam.Color = ColorSequence.new(color)
                     end)
                     RunService.Heartbeat:Wait()
                 end
