@@ -13295,6 +13295,20 @@ do
             accessories = { 87960794461758, 8720747474 },
             clothing    = { 15891721015 },     -- grey/white piyama
         },
+        ["Michael Jackson"] = {
+            -- Michael Jackson (Billie Jean look). R15 male body via the
+            -- classic "Man" bundle so the rig has real proportions instead of
+            -- blocky R15 defaults; layered clothing + fedora hair on top.
+            baseUserId  = 1,
+            bodyType    = "man",
+            skinColor   = Color3.fromRGB(184, 130, 90),
+            hair        = { 4819740796 },   -- Michael Jackson Fedora Hair
+            hat         = { 4819740796 },
+            shirt       = 5182769324,        -- Black Suit Jacket + White Shirt + Red Tie
+            pants       = 5182773459,        -- Black Dress Pants
+            accessories = { 4819740796 },
+            clothing    = { 5182769324, 5182773459 },
+        },
     }
 
     local _overlay  = nil
@@ -13717,6 +13731,21 @@ do
                 return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
             end)
             if ok and generated then model = _sanitizeGeneratedModel(generated, cfg, false) end
+        elseif cfg.bodyType == "man" then
+            -- Michael Jackson / male R15 bundle body — classic Man proportions.
+            local desc = _makeDescription(cfg)
+            pcall(function()
+                desc.BodyTypeScale   = 0
+                desc.ProportionScale = 0
+                desc.WidthScale      = 1.00
+                desc.DepthScale      = 1.00
+                desc.HeightScale     = 1.00
+                desc.HeadScale       = 1.00
+            end)
+            local ok, generated = pcall(function()
+                return Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R15)
+            end)
+            if ok and generated then model = _sanitizeGeneratedModel(generated, cfg, false) end
         elseif cfg.bodyType == "female" then
             -- Woman bundle (239) is an R15 body — build via
             -- CreateHumanoidModelFromDescription(R15). Applying bundle asset
@@ -14009,9 +14038,28 @@ do
             return target and target.CFrame, target
         end
 
+        -- Snapshot original sizes / body scale attributes for every descendant
+        -- BasePart so nothing can grow later. We re-enforce these values every
+        -- frame so LocalPlayer animations end up "compacted" into the dummy's
+        -- native proportions instead of stretching the model to match the
+        -- animation's expected limb length.
+        local sizeLock = {}
+        local function _lockPart(p)
+            if not p:IsA("BasePart") then return end
+            sizeLock[p] = { size = p.Size }
+            -- Kill any dynamic resize sources on this part.
+            for _, cls in ipairs({ "SpecialMesh", "MeshPart" }) do
+                pcall(function()
+                    if p:IsA(cls) and p.Scale then
+                        sizeLock[p].scale = p.Scale
+                    end
+                end)
+            end
+        end
         for _, p in ipairs(model:GetDescendants()) do
             if p:IsA("BasePart") and not _isAccessoryPart(p) then
                 p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = true, false, false, false, true
+                _lockPart(p)
                 if _isBodyPartName(p.Name) then
                     local _, target = _targetCFrameFor(p.Name)
                     syncParts[#syncParts + 1] = { part = p, name = p.Name, offset = _offsetFor(p.Name, target) }
@@ -14020,6 +14068,19 @@ do
                 end
             elseif p:IsA("BasePart") then
                 p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = false, false, false, true
+                _lockPart(p)
+            end
+        end
+        -- Freeze the humanoid scale values so ScaleTo / BodyHeightScale calls
+        -- from foreign scripts or Roblox internals can't stretch the rig.
+        local dHumLock = model:FindFirstChildOfClass("Humanoid")
+        if dHumLock then
+            for _, n in ipairs({ "BodyHeightScale","BodyWidthScale","BodyDepthScale","HeadScale","BodyProportionScale","BodyTypeScale" }) do
+                local nv = dHumLock:FindFirstChild(n)
+                if nv and nv:IsA("NumberValue") then
+                    nv.Value = nv.Value
+                    pcall(function() nv:GetPropertyChangedSignal("Value"):Connect(function() end) end)
+                end
             end
         end
 
@@ -14034,9 +14095,17 @@ do
                         part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
                     end
+                    -- Re-enforce the original size — this "compacts" the
+                    -- LocalPlayer's animation onto the dummy's native scale
+                    -- instead of letting anything stretch the model.
+                    local lock = sizeLock[part]
+                    if lock and lock.size and part.Size ~= lock.size then
+                        pcall(function() part.Size = lock.size end)
+                    end
                 end
             end
         end
+
         -- Kill any animator on the dummy so it doesn't reset Motor6D.Transform
         -- back to CFrame.new() every frame (that was the "T-pose / open arms").
         for _, d in ipairs(model:GetDescendants()) do
@@ -14085,7 +14154,7 @@ do
     MiscGB:AddDropdown("CustomPlayerModel_DD", {
         Text = "CUSTOM PLAYER MODEL",
         Default = "Off",
-        Values = { "Off", "Blue Cloud Girl", "Pandas Girl", "Joker", "Clown", "Mickey Mouse" },
+        Values = { "Off", "Blue Cloud Girl", "Pandas Girl", "Joker", "Clown", "Mickey Mouse", "Michael Jackson" },
         Callback = function(v)
             Config.Misc.CustomPlayerModel = v
             task.spawn(function()
