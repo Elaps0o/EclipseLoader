@@ -14059,6 +14059,24 @@ do
         end
         local hasR6AnimatedSource = _charBodyPart("Torso") and _charBodyPart("Left Arm") and _charBodyPart("Right Arm")
             and _charBodyPart("Left Leg") and _charBodyPart("Right Leg")
+        local sourceJoints = {}
+        for _, m in ipairs(ch:GetDescendants()) do
+            if m:IsA("Motor6D") and not sourceJoints[m.Name] then sourceJoints[m.Name] = m end
+        end
+        local hasR6MotorSource = sourceJoints["RootJoint"] and sourceJoints["Neck"]
+            and sourceJoints["Left Shoulder"] and sourceJoints["Right Shoulder"]
+            and sourceJoints["Left Hip"] and sourceJoints["Right Hip"]
+
+        local dummyIsR15 = model:FindFirstChild("UpperTorso") ~= nil
+        local lpIsR15    = ch:FindFirstChild("UpperTorso") ~= nil
+
+        -- Real fix for R6-animation games: many Counter Blox style characters
+        -- keep a visible R15 rig frozen in idle while an R6 adapter rig/motors
+        -- carry the actual knife/walk/jump pose.  Prefer those R6 motors and
+        -- retarget them onto the dummy's own joints, so proportions stay intact.
+        local r6MotorRetarget = dummyIsR15 and hasR6MotorSource
+        local forceR6VisualRetarget = dummyIsR15 and hasR6AnimatedSource and not hasR6MotorSource
+        local forceExactR6PartRelay = (not dummyIsR15) and hasR6AnimatedSource
         local heightScale = tonumber(model:GetAttribute("EclipseCPMHeightScale")) or 1.0
         local function _offsetFor(dummyName, target)
             local tn = target and target.Name or ""
@@ -14157,13 +14175,38 @@ do
         -- own limb sizes/proportions, so it follows animations without stretching
         -- the real model.  We copy ROTATION ONLY; animation translation keys from
         -- R6 packs are what used to pull R15 package limbs apart/freeze them.
-        local dummyIsR15 = model:FindFirstChild("UpperTorso") ~= nil
-        local lpIsR15    = ch:FindFirstChild("UpperTorso") ~= nil
-        local forceR6VisualRetarget = dummyIsR15 and hasR6AnimatedSource
-
         -- Map: dummy joint name -> list of LP joint names to try (in order).
         local JOINT_ALIAS
-        if dummyIsR15 and lpIsR15 then
+        if dummyIsR15 and hasR6MotorSource then
+            -- R6 animation -> R15 visual.  Drive only the major R15 joints and
+            -- leave elbows/knees/wrists/ankles neutral.  That makes the lower
+            -- segments inherit the upper segment pose instead of double-rotating
+            -- or stretching the package skeleton.
+            JOINT_ALIAS = {
+                ["Root"]          = { "RootJoint" },
+                ["Waist"]         = { "RootJoint" },
+                ["Neck"]          = { "Neck" },
+                ["RightShoulder"] = { "Right Shoulder" },
+                ["LeftShoulder"]  = { "Left Shoulder" },
+                ["RightHip"]      = { "Right Hip" },
+                ["LeftHip"]       = { "Left Hip" },
+                ["RightElbow"]    = {}, ["LeftElbow"] = {},
+                ["RightWrist"]    = {}, ["LeftWrist"] = {},
+                ["RightKnee"]     = {}, ["LeftKnee"] = {},
+                ["RightAnkle"]    = {}, ["LeftAnkle"] = {},
+            }
+        elseif (not dummyIsR15) and hasR6MotorSource then
+            -- R6 dummy -> R6 source motors.  This fixes Joker/Clown legs being
+            -- mirrored when the visible R15 idle rig was chosen by mistake.
+            JOINT_ALIAS = {
+                ["RootJoint"]      = { "RootJoint" },
+                ["Neck"]           = { "Neck" },
+                ["Right Shoulder"] = { "Right Shoulder" },
+                ["Left Shoulder"]  = { "Left Shoulder" },
+                ["Right Hip"]      = { "Right Hip" },
+                ["Left Hip"]       = { "Left Hip" },
+            }
+        elseif dummyIsR15 and lpIsR15 then
             JOINT_ALIAS = nil -- direct name match is fine
         elseif (not dummyIsR15) and lpIsR15 then
             JOINT_ALIAS = {
@@ -14187,11 +14230,8 @@ do
             JOINT_ALIAS = nil -- both R6 -> direct match
         end
 
-        if not forceR6VisualRetarget then
-            local lpJoints = {}
-            for _, m in ipairs(ch:GetDescendants()) do
-                if m:IsA("Motor6D") then lpJoints[m.Name] = m end
-            end
+        if not forceR6VisualRetarget and not forceExactR6PartRelay then
+            local lpJoints = sourceJoints
             local dJoints = {}
             for _, m in ipairs(model:GetDescendants()) do
                 if m:IsA("Motor6D") then dJoints[#dJoints + 1] = m end
@@ -14212,7 +14252,9 @@ do
                             local s = lpJoints[n]
                             if s then return s end
                         end
+                        return nil
                     end
+                    if r6MotorRetarget then return nil end
                 end
                 return lpJoints[dm.Name]
             end
@@ -14260,7 +14302,8 @@ do
             if dHum then pcall(function() dHum.EvaluateStateMachine = false end) end
             _syncPose()
             if _syncConn then pcall(function() _syncConn:Disconnect() end) end
-            _syncConn = connectSignal(RunService.RenderStepped:Connect(function()
+            local poseSignal = RunService.PreSimulation or RunService.Stepped or RunService.RenderStepped
+            _syncConn = connectSignal(poseSignal:Connect(function()
                 pcall(_syncPose)
             end))
             return
