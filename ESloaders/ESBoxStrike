@@ -14037,9 +14037,28 @@ do
         -- animation; the overlay simply draws on top of those exact poses.
         local syncParts = {}
         local sourceParts = {}
-        for _, p in ipairs(ch:GetDescendants()) do
-            if p:IsA("BasePart") then sourceParts[p.Name] = p end
+        local function _validSourcePart(p)
+            if not (p and p:IsA("BasePart")) then return false end
+            local a = p.Parent
+            while a and a ~= ch and a ~= workspace do
+                if a:IsA("Accessory") or a:IsA("Tool") then return false end
+                a = a.Parent
+            end
+            return true
         end
+        local function _charBodyPart(name)
+            local direct = ch:FindFirstChild(name)
+            if _validSourcePart(direct) then return direct end
+            for _, d in ipairs(ch:GetDescendants()) do
+                if d.Name == name and _validSourcePart(d) then return d end
+            end
+            return nil
+        end
+        for _, p in ipairs(ch:GetDescendants()) do
+            if _validSourcePart(p) and not sourceParts[p.Name] then sourceParts[p.Name] = p end
+        end
+        local hasR6AnimatedSource = _charBodyPart("Torso") and _charBodyPart("Left Arm") and _charBodyPart("Right Arm")
+            and _charBodyPart("Left Leg") and _charBodyPart("Right Leg")
         local heightScale = tonumber(model:GetAttribute("EclipseCPMHeightScale")) or 1.0
         local function _offsetFor(dummyName, target)
             local tn = target and target.Name or ""
@@ -14065,7 +14084,7 @@ do
 
         local function _firstPart(names)
             for _, n in ipairs(names or {}) do
-                local p = sourceParts[n] or (ch and ch:FindFirstChild(n))
+                local p = sourceParts[n] or _charBodyPart(n)
                 if p and p:IsA("BasePart") and p.Parent then return p end
             end
             return nil
@@ -14080,7 +14099,34 @@ do
 
         local function _targetCFrameFor(dummyName)
             local exact = sourceParts[dummyName]
-            if exact and exact.Parent then return exact.CFrame, nil end
+            if exact and exact.Parent and not (model:FindFirstChild("UpperTorso") and hasR6AnimatedSource) then return exact.CFrame, nil end
+
+            -- R15 dummy in an R6-animation game/adapter. The real R15 joints often
+            -- stay idle, while invisible/adapter R6 parts carry the actual pose.
+            -- Retarget each R15 visual segment to the animated R6 body part plus a
+            -- local offset, so package meshes keep their own shape and never
+            -- stretch, but no longer freeze in idle.
+            if model:FindFirstChild("UpperTorso") and hasR6AnimatedSource then
+                if dummyName == "UpperTorso" or dummyName == "LowerTorso" or dummyName == "Torso" then
+                    local p = _firstPart({ "Torso" })
+                    return p and p.CFrame, p
+                elseif dummyName == "LeftUpperArm" or dummyName == "LeftLowerArm" or dummyName == "LeftHand" or dummyName == "Left Arm" then
+                    local p = _firstPart({ "Left Arm" })
+                    return p and p.CFrame, p
+                elseif dummyName == "RightUpperArm" or dummyName == "RightLowerArm" or dummyName == "RightHand" or dummyName == "Right Arm" then
+                    local p = _firstPart({ "Right Arm" })
+                    return p and p.CFrame, p
+                elseif dummyName == "LeftUpperLeg" or dummyName == "LeftLowerLeg" or dummyName == "LeftFoot" or dummyName == "Left Leg" then
+                    local p = _firstPart({ "Left Leg" })
+                    return p and p.CFrame, p
+                elseif dummyName == "RightUpperLeg" or dummyName == "RightLowerLeg" or dummyName == "RightFoot" or dummyName == "Right Leg" then
+                    local p = _firstPart({ "Right Leg" })
+                    return p and p.CFrame, p
+                elseif dummyName == "Head" then
+                    local p = _firstPart({ "Head" })
+                    return p and p.CFrame, p
+                end
+            end
 
             -- R6 overlay on an R15 local character.  Pick the closest animated
             -- rendered limb, not the raw Motor6D, so right/left sides stay sane.
@@ -14113,6 +14159,7 @@ do
         -- R6 packs are what used to pull R15 package limbs apart/freeze them.
         local dummyIsR15 = model:FindFirstChild("UpperTorso") ~= nil
         local lpIsR15    = ch:FindFirstChild("UpperTorso") ~= nil
+        local forceR6VisualRetarget = dummyIsR15 and hasR6AnimatedSource
 
         -- Map: dummy joint name -> list of LP joint names to try (in order).
         local JOINT_ALIAS
@@ -14140,7 +14187,7 @@ do
             JOINT_ALIAS = nil -- both R6 -> direct match
         end
 
-        do
+        if not forceR6VisualRetarget then
             local lpJoints = {}
             for _, m in ipairs(ch:GetDescendants()) do
                 if m:IsA("Motor6D") then lpJoints[m.Name] = m end
