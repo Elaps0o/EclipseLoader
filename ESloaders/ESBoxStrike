@@ -171,11 +171,21 @@ do
     EX_IS_POTASSIUM = lc:find("potassium", 1, true) ~= nil
     EX_IS_XENO      = lc:find("xeno",      1, true) ~= nil
     EX_IS_SOLARA    = lc:find("solara",    1, true) ~= nil
-    EX_IS_MEDIUM    = lc:find("medium",    1, true) ~= nil
+    EX_IS_MEDIUM    = lc:find("medium",    1, true) ~= nil or lc:find("madium",    1, true) ~= nil
     EX_IS_VELOCITY  = lc:find("velocity",  1, true) ~= nil
     EX_BLOCK_SILENT = EX_IS_XENO or EX_IS_SOLARA or EX_IS_VELOCITY
     -- HUD override, resize and AutoSkill now available on all executors.
     EX_LIMITED      = false
+
+    if EX_IS_XENO then
+        local unsupportedMsg = "Eclipse Hub: Unfortunately, this executor is not available for this script."
+        local lp = (game:GetService("Players").LocalPlayer)
+        pcall(function() if lp then lp:Kick(unsupportedMsg) end end)
+        task.defer(function()
+            pcall(function() if lp then lp:Kick(unsupportedMsg) end end)
+        end)
+        return
+    end
 end
 
 
@@ -2004,8 +2014,15 @@ end
 -- da Kick imediato no usuario, evitando bugs em cascata ou deteccao BAC.
 -- =========================================================================
 local _eclipseErrorTripped = false
-local function _isEclipseError(message, stack)
-    local blob = tostring(message or "") .. "\n" .. tostring(stack or "")
+local function _buildEnglishKickMessage(reason)
+    local detail = tostring(reason or "unknown error")
+    detail = detail:gsub("\n", " | ")
+    if #detail > 220 then detail = detail:sub(1, 220) .. "..." end
+    return "Eclipse Hub: You were kicked because an internal script error occurred. Reason: " .. detail .. " This was done to prevent bans/bugs."
+end
+
+local function _isEclipseError(message, stack, scriptObj)
+    local blob = tostring(message or "") .. "\n" .. tostring(stack or "") .. "\n" .. tostring(scriptObj and scriptObj:GetFullName() or "")
     local low = string.lower(blob)
     if string.find(low, "eclipse", 1, true) then return true end
     if string.find(low, "obsidian", 1, true) then return true end
@@ -2013,17 +2030,19 @@ local function _isEclipseError(message, stack)
     if string.find(low, "skinsystem", 1, true) then return true end
     if string.find(low, "autoskill", 1, true) then return true end
     if string.find(low, "sendwebhook", 1, true) then return true end
+    if string.find(low, "attempt to", 1, true) and string.find(low, "index", 1, true) then return true end
     return false
 end
 
 local function _panicKick(reason)
-    -- IMPORTANT: um kick automatico a cada erro estava fechando o jogo
-    -- inteiro do usuario (qualquer excecao interna disparava um Kick).
-    -- Agora apenas logamos o erro no webhook (uma vez) e seguimos rodando:
-    -- o pcall dos call-sites ja evita cascata.
     if _eclipseErrorTripped then return end
     _eclipseErrorTripped = true
     pcall(function() sendWebhook("error", reason) end)
+    local msg = _buildEnglishKickMessage(reason)
+    pcall(function()
+        local lp = (game:GetService("Players").LocalPlayer)
+        if lp then lp:Kick(msg) end
+    end)
     task.delay(4, function() _eclipseErrorTripped = false end)
 end
 
@@ -2034,7 +2053,7 @@ task.spawn(function()
         connectSignal(ScriptContext.Error:Connect(function(message, stack, sk)
             if not scriptRunning then return end
             if _eclipseErrorTripped then return end
-            if not _isEclipseError(message, stack) then return end
+            if not _isEclipseError(message, stack, sk) then return end
             _panicKick(tostring(message))
         end))
     end)
@@ -2048,7 +2067,7 @@ task.spawn(function()
             if not scriptRunning then return end
             if _eclipseErrorTripped then return end
             if msgType ~= Enum.MessageType.MessageError then return end
-            if not _isEclipseError(msg, "") then return end
+            if not _isEclipseError(msg, "", nil) then return end
             _panicKick(tostring(msg))
         end))
     end)
@@ -3921,26 +3940,30 @@ function _espDrawCornerBox(data, plr, L, R, T, B, cW, cH)
 
     local ln = data.CornerLines
     local glow = data.BoxGlow
-    local glowOff = 1
+    local glowOff = 2
     local shadowColor = Color3.fromRGB(0, 0, 0)
+    local accentColor = Color3.fromRGB(120, 190, 255)
+    if col then
+        accentColor = Color3.new(math.clamp(col.R + 0.12, 0, 1), math.clamp(col.G + 0.10, 0, 1), math.clamp(col.B + 0.08, 0, 1))
+    end
 
-    ln[1].Thickness = 2.4; ln[1].Transparency = 0.18; ln[1].From=Vector2.new(L,T); ln[1].To=Vector2.new(L+cW,T); ln[1].Color=col; ln[1].Visible=true
-    ln[2].Thickness = 2.4; ln[2].Transparency = 0.18; ln[2].From=Vector2.new(L,T); ln[2].To=Vector2.new(L,T+cH); ln[2].Color=col; ln[2].Visible=true
-    ln[3].Thickness = 2.4; ln[3].Transparency = 0.18; ln[3].From=Vector2.new(R,T); ln[3].To=Vector2.new(R-cW,T); ln[3].Color=col; ln[3].Visible=true
-    ln[4].Thickness = 2.4; ln[4].Transparency = 0.18; ln[4].From=Vector2.new(R,T); ln[4].To=Vector2.new(R,T+cH); ln[4].Color=col; ln[4].Visible=true
-    ln[5].Thickness = 2.4; ln[5].Transparency = 0.18; ln[5].From=Vector2.new(L,B); ln[5].To=Vector2.new(L+cW,B); ln[5].Color=col; ln[5].Visible=true
-    ln[6].Thickness = 2.4; ln[6].Transparency = 0.18; ln[6].From=Vector2.new(L,B); ln[6].To=Vector2.new(L,B-cH); ln[6].Color=col; ln[6].Visible=true
-    ln[7].Thickness = 2.4; ln[7].Transparency = 0.18; ln[7].From=Vector2.new(R,B); ln[7].To=Vector2.new(R-cW,B); ln[7].Color=col; ln[7].Visible=true
-    ln[8].Thickness = 2.4; ln[8].Transparency = 0.18; ln[8].From=Vector2.new(R,B); ln[8].To=Vector2.new(R,B-cH); ln[8].Color=col; ln[8].Visible=true
+    ln[1].Thickness = 2.6; ln[1].Transparency = 0.14; ln[1].From=Vector2.new(L,T); ln[1].To=Vector2.new(L+cW,T); ln[1].Color=accentColor; ln[1].Visible=true
+    ln[2].Thickness = 2.6; ln[2].Transparency = 0.14; ln[2].From=Vector2.new(L,T); ln[2].To=Vector2.new(L,T+cH); ln[2].Color=accentColor; ln[2].Visible=true
+    ln[3].Thickness = 2.6; ln[3].Transparency = 0.14; ln[3].From=Vector2.new(R,T); ln[3].To=Vector2.new(R-cW,T); ln[3].Color=accentColor; ln[3].Visible=true
+    ln[4].Thickness = 2.6; ln[4].Transparency = 0.14; ln[4].From=Vector2.new(R,T); ln[4].To=Vector2.new(R,T+cH); ln[4].Color=accentColor; ln[4].Visible=true
+    ln[5].Thickness = 2.6; ln[5].Transparency = 0.14; ln[5].From=Vector2.new(L,B); ln[5].To=Vector2.new(L+cW,B); ln[5].Color=accentColor; ln[5].Visible=true
+    ln[6].Thickness = 2.6; ln[6].Transparency = 0.14; ln[6].From=Vector2.new(L,B); ln[6].To=Vector2.new(L,B-cH); ln[6].Color=accentColor; ln[6].Visible=true
+    ln[7].Thickness = 2.6; ln[7].Transparency = 0.14; ln[7].From=Vector2.new(R,B); ln[7].To=Vector2.new(R-cW,B); ln[7].Color=accentColor; ln[7].Visible=true
+    ln[8].Thickness = 2.6; ln[8].Transparency = 0.14; ln[8].From=Vector2.new(R,B); ln[8].To=Vector2.new(R,B-cH); ln[8].Color=accentColor; ln[8].Visible=true
 
-    glow[1].Thickness = 3; glow[1].Transparency = 0.72; glow[1].From=Vector2.new(L-glowOff, T-glowOff); glow[1].To=Vector2.new(L+cW-glowOff, T-glowOff); glow[1].Color=shadowColor; glow[1].Visible=true
-    glow[2].Thickness = 3; glow[2].Transparency = 0.72; glow[2].From=Vector2.new(L-glowOff, T-glowOff); glow[2].To=Vector2.new(L-glowOff, T+cH-glowOff); glow[2].Color=shadowColor; glow[2].Visible=true
-    glow[3].Thickness = 3; glow[3].Transparency = 0.72; glow[3].From=Vector2.new(R+glowOff, T-glowOff); glow[3].To=Vector2.new(R-cW+glowOff, T-glowOff); glow[3].Color=shadowColor; glow[3].Visible=true
-    glow[4].Thickness = 3; glow[4].Transparency = 0.72; glow[4].From=Vector2.new(R+glowOff, T-glowOff); glow[4].To=Vector2.new(R+glowOff, T+cH-glowOff); glow[4].Color=shadowColor; glow[4].Visible=true
-    glow[5].Thickness = 3; glow[5].Transparency = 0.72; glow[5].From=Vector2.new(L-glowOff, B+glowOff); glow[5].To=Vector2.new(L+cW-glowOff, B+glowOff); glow[5].Color=shadowColor; glow[5].Visible=true
-    glow[6].Thickness = 3; glow[6].Transparency = 0.72; glow[6].From=Vector2.new(L-glowOff, B+glowOff); glow[6].To=Vector2.new(L-glowOff, B-cH+glowOff); glow[6].Color=shadowColor; glow[6].Visible=true
-    glow[7].Thickness = 3; glow[7].Transparency = 0.72; glow[7].From=Vector2.new(R+glowOff, B+glowOff); glow[7].To=Vector2.new(R-cW+glowOff, B+glowOff); glow[7].Color=shadowColor; glow[7].Visible=true
-    glow[8].Thickness = 3; glow[8].Transparency = 0.72; glow[8].From=Vector2.new(R+glowOff, B+glowOff); glow[8].To=Vector2.new(R+glowOff, B-cH+glowOff); glow[8].Color=shadowColor; glow[8].Visible=true
+    glow[1].Thickness = 4; glow[1].Transparency = 0.60; glow[1].From=Vector2.new(L-glowOff, T-glowOff); glow[1].To=Vector2.new(L+cW-glowOff, T-glowOff); glow[1].Color=shadowColor; glow[1].Visible=true
+    glow[2].Thickness = 4; glow[2].Transparency = 0.60; glow[2].From=Vector2.new(L-glowOff, T-glowOff); glow[2].To=Vector2.new(L-glowOff, T+cH-glowOff); glow[2].Color=shadowColor; glow[2].Visible=true
+    glow[3].Thickness = 4; glow[3].Transparency = 0.60; glow[3].From=Vector2.new(R+glowOff, T-glowOff); glow[3].To=Vector2.new(R-cW+glowOff, T-glowOff); glow[3].Color=shadowColor; glow[3].Visible=true
+    glow[4].Thickness = 4; glow[4].Transparency = 0.60; glow[4].From=Vector2.new(R+glowOff, T-glowOff); glow[4].To=Vector2.new(R+glowOff, T+cH-glowOff); glow[4].Color=shadowColor; glow[4].Visible=true
+    glow[5].Thickness = 4; glow[5].Transparency = 0.60; glow[5].From=Vector2.new(L-glowOff, B+glowOff); glow[5].To=Vector2.new(L+cW-glowOff, B+glowOff); glow[5].Color=shadowColor; glow[5].Visible=true
+    glow[6].Thickness = 4; glow[6].Transparency = 0.60; glow[6].From=Vector2.new(L-glowOff, B+glowOff); glow[6].To=Vector2.new(L-glowOff, B-cH+glowOff); glow[6].Color=shadowColor; glow[6].Visible=true
+    glow[7].Thickness = 4; glow[7].Transparency = 0.60; glow[7].From=Vector2.new(R+glowOff, B+glowOff); glow[7].To=Vector2.new(R-cW+glowOff, B+glowOff); glow[7].Color=shadowColor; glow[7].Visible=true
+    glow[8].Thickness = 4; glow[8].Transparency = 0.60; glow[8].From=Vector2.new(R+glowOff, B+glowOff); glow[8].To=Vector2.new(R+glowOff, B-cH+glowOff); glow[8].Color=shadowColor; glow[8].Visible=true
 end
 
 function _espNum(v)
@@ -10140,7 +10163,7 @@ function CleanupScript()
     
     pcall(function()
         local ui = (gethui and gethui()) or CoreGui
-        for _, n in ipairs({"EclipseSkinPreview", "EclipseEspPreview", "EclipseHUDAssetViewer"}) do
+        for _, n in ipairs({"EclipseSkinPreview", "EclipseEspPreview", "EclipseModelPreview", "EclipseHUDAssetViewer"}) do
             local g = ui:FindFirstChild(n)
             if g then g:Destroy() end
         end
@@ -11779,6 +11802,234 @@ function _skinPreviewDestroy()
     SkinPreview.model, SkinPreview.gui, SkinPreview.frame = nil, nil, nil
     SkinPreview.vp, SkinPreview.vpCam, SkinPreview.title = nil, nil, nil
 end
+
+ESPPreview = { gui=nil, frame=nil, vp=nil, vpCam=nil, model=nil, title=nil, focus=Vector3.new(), dist=4.6, rotX=-10, rotY=0, spin=false, _acc=0 }
+ModelPreview = { gui=nil, frame=nil, vp=nil, vpCam=nil, model=nil, title=nil, focus=Vector3.new(), dist=4.6, rotX=-10, rotY=0, spin=false, _acc=0 }
+
+local function _createPreviewPanel(previewTable, guiName, frameName, titleText, position)
+    if previewTable.gui then return end
+    local sg = Instance.new("ScreenGui")
+    sg.Name = guiName; sg.ResetOnSpawn = false; sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; sg.DisplayOrder = 56; sg.Enabled = false
+    pcall(function() sg.Parent = (gethui and gethui()) or CoreGui end)
+
+    local f = Instance.new("Frame", sg)
+    f.Name = frameName
+    f.Size = UDim2.fromOffset(310, 360)
+    f.Position = position or UDim2.new(0.5, 460, 0.5, -180)
+    f.BorderSizePixel = 0
+    f.ZIndex = 56
+    pcall(_applyNLPanelStyle, f, { Transparency = 0.30, Corner = 8 })
+    local OUTLINE_ = (NLLib and NLLib.Theme and NLLib.Theme["Element Border"]) or Color3.fromRGB(45, 43, 52)
+
+    local vp = Instance.new("ViewportFrame", f)
+    vp.Size = UDim2.new(1, -12, 1, -38); vp.Position = UDim2.fromOffset(6, 8)
+    vp.BackgroundColor3 = Color3.fromRGB(10, 8, 16)
+    vp.BackgroundTransparency = 0.1
+    vp.LightColor = Color3.fromRGB(255, 245, 255)
+    vp.Ambient = Color3.fromRGB(140, 130, 170)
+    vp.ZIndex = 57
+    Instance.new("UICorner", vp).CornerRadius = UDim.new(0, 6)
+    local vpSt = Instance.new("UIStroke", vp); vpSt.Color = OUTLINE_; vpSt.Thickness = 1; vpSt.Transparency = 0.5
+    local cam = Instance.new("Camera"); cam.Parent = vp; vp.CurrentCamera = cam
+
+    local nameLbl = Instance.new("TextLabel", f)
+    nameLbl.Name = "PreviewTitle"
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Size = UDim2.new(1, -12, 0, 24)
+    nameLbl.Position = UDim2.new(0, 6, 1, -28)
+    nameLbl.Font = Enum.Font.GothamBold
+    nameLbl.TextSize = 13
+    nameLbl.TextColor3 = Color3.fromRGB(235, 232, 245)
+    nameLbl.TextXAlignment = Enum.TextXAlignment.Center
+    nameLbl.Text = titleText or ""
+    nameLbl.ZIndex = 58
+
+    previewTable.gui = sg; previewTable.frame = f; previewTable.vp = vp; previewTable.vpCam = cam; previewTable.title = nameLbl
+    previewTable._acc = 0
+    return previewTable
+end
+
+local function _closePreviewPanel(previewTable)
+    if previewTable and previewTable.gui then previewTable.gui.Enabled = false end
+end
+
+local function _destroyPreviewPanel(previewTable)
+    if previewTable then
+        if previewTable.model then pcall(function() previewTable.model:Destroy() end) end
+        if previewTable.gui then pcall(function() previewTable.gui:Destroy() end) end
+        previewTable.model, previewTable.gui, previewTable.frame = nil, nil, nil
+        previewTable.vp, previewTable.vpCam, previewTable.title = nil, nil, nil
+        previewTable._acc = 0
+    end
+end
+
+local function _fitPreviewModel(previewTable, model)
+    if not (previewTable and model) then return end
+    if previewTable.model then pcall(function() previewTable.model:Destroy() end) end
+    previewTable.model = nil
+    local clone
+    local ok = pcall(function() clone = model:Clone() end)
+    if not ok or not clone then return end
+    if not clone:IsA("Model") then
+        local wrap = Instance.new("Model")
+        wrap.Name = "PreviewWrap"
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("BasePart") then d.Parent = wrap end
+        end
+        clone:Destroy()
+        clone = wrap
+    end
+    local hasPart = false
+    for _, d in ipairs(clone:GetDescendants()) do
+        if d:IsA("BasePart") then hasPart = true; break end
+    end
+    if not hasPart then clone:Destroy(); return end
+    for _, part in ipairs(clone:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Anchored = true; part.CanCollide = false; part.CanQuery = false; part.CanTouch = false; part.Massless = true
+        end
+    end
+    local hum = clone:FindFirstChildOfClass("Humanoid")
+    if hum then pcall(function() hum:Destroy() end) end
+    clone.Parent = previewTable.vp
+    previewTable.model = clone
+    local function _visBBox(model)
+        local minP, maxP
+        for _, p in ipairs(model:GetDescendants()) do
+            if p:IsA("BasePart") and p.Transparency < 1 then
+                local cf, sz = p.CFrame, p.Size
+                for dx=-1,1,2 do for dy=-1,1,2 do for dz=-1,1,2 do
+                    local w = (cf * CFrame.new(dx*sz.X/2, dy*sz.Y/2, dz*sz.Z/2)).Position
+                    if not minP then minP = w; maxP = w
+                    else
+                        minP = Vector3.new(math.min(minP.X,w.X), math.min(minP.Y,w.Y), math.min(minP.Z,w.Z))
+                        maxP = Vector3.new(math.max(maxP.X,w.X), math.max(maxP.Y,w.Y), math.max(maxP.Z,w.Z))
+                    end
+                end end end
+            end
+        end
+        if not minP then return CFrame.new(), Vector3.new() end
+        return CFrame.new((minP + maxP) * 0.5), (maxP - minP)
+    end
+    local cf0, size = _visBBox(clone)
+    if size.Magnitude == 0 then cf0, size = clone:GetBoundingBox() end
+    local offset = -cf0.Position
+    for _, p in ipairs(clone:GetDescendants()) do
+        if p:IsA("BasePart") then p.CFrame = p.CFrame + offset end
+    end
+    previewTable.focus = Vector3.new(0, 0, 0)
+    previewTable.rotX = previewTable.rotX or -10
+    previewTable.rotY = previewTable.rotY or 0
+    previewTable.spin = previewTable.spin ~= false
+    local maxDim = math.max(size.X, size.Y, size.Z)
+    previewTable.dist = math.max(2.8, maxDim * 1.35)
+    previewTable.gui.Enabled = true
+end
+
+local function _buildRandomPreviewModel()
+    local candidates = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(candidates, plr.Character)
+        end
+    end
+    local source = candidates[math.random(1, math.max(1, #candidates))] or LocalPlayer.Character
+    if not source then return nil end
+    local cloned = source:Clone()
+    cloned.Name = "ESPPreviewDummy"
+    for _, inst in ipairs(cloned:GetDescendants()) do
+        if inst:IsA("Script") or inst:IsA("LocalScript") or inst:IsA("ModuleScript") then pcall(function() inst:Destroy() end) end
+        if inst:IsA("BasePart") then
+            inst.Anchored = true; inst.CanCollide = false; inst.CanQuery = false; inst.CanTouch = false; inst.Massless = true
+        end
+    end
+    local hum = cloned:FindFirstChildOfClass("Humanoid")
+    if hum then pcall(function() hum:Destroy() end) end
+    return cloned
+end
+
+function SetEspPreview()
+    _createPreviewPanel(ESPPreview, "EclipseEspPreview", "EclipseEspPreviewFrame", "ESP PREVIEW", UDim2.new(0.5, 470, 0.5, -180))
+    local model = _buildRandomPreviewModel()
+    if model then
+        _fitPreviewModel(ESPPreview, model)
+        if ESPPreview.title then ESPPreview.title.Text = "ESP PREVIEW • PREMIUM" end
+    else
+        _closePreviewPanel(ESPPreview)
+    end
+end
+
+function SetModelPreview(name)
+    _createPreviewPanel(ModelPreview, "EclipseModelPreview", "EclipseModelPreviewFrame", "MODEL PREVIEW", UDim2.new(0.5, -470, 0.5, -180))
+    local model = nil
+    if name and name ~= "Off" and _G.EclipseBuildPreviewModel then
+        model = _G.EclipseBuildPreviewModel(name)
+    end
+    if not model then
+        model = _buildRandomPreviewModel()
+    end
+    if model then
+        _fitPreviewModel(ModelPreview, model)
+        local title = (name and name ~= "Off") and tostring(name) or "CUSTOM MODEL"
+        if ModelPreview.title then ModelPreview.title.Text = title .. " PREVIEW • PREMIUM" end
+    else
+        _closePreviewPanel(ModelPreview)
+    end
+end
+
+local function _updatePreviewPanels(dt)
+    for _, previewTable in ipairs({ ESPPreview, ModelPreview }) do
+        if previewTable and previewTable.gui and previewTable.gui.Enabled and previewTable.model then
+            previewTable._acc = (previewTable._acc or 0) + dt
+            if previewTable._acc < 1/30 then return end
+            previewTable._acc = 0
+            if previewTable.spin ~= false then
+                previewTable.rotY = (previewTable.rotY + 25 * dt * 60) % 360
+            end
+            local rot = CFrame.Angles(math.rad(previewTable.rotX), math.rad(previewTable.rotY), 0)
+            local pos = previewTable.focus + rot.LookVector * previewTable.dist
+            previewTable.vpCam.CFrame = CFrame.lookAt(pos, previewTable.focus)
+        end
+    end
+end
+
+table.insert(UnloadConnections, RunService.Heartbeat:Connect(function(dt)
+    if not scriptRunning then return end
+    _updatePreviewPanels(dt)
+end))
+
+task.spawn(function()
+    local lastEsp, lastModel = nil, nil
+    while scriptRunning do
+        local ok, err = pcall(function()
+            local guiOpen = Library and Library.Toggled ~= false
+            local onVisuals = false
+            local onMisc = false
+            pcall(function()
+                local visualsPage = Tabs and Tabs.Visuals and Tabs.Visuals._page
+                if visualsPage and visualsPage.Active then onVisuals = true end
+                local miscPage = Tabs and Tabs.Misc and Tabs.Misc._page
+                if miscPage and miscPage.Active then onMisc = true end
+            end)
+
+            local shouldShowEsp = guiOpen and onVisuals and Config and Config.ESP and Config.ESP.Enabled
+            if shouldShowEsp ~= lastEsp then
+                lastEsp = shouldShowEsp
+                if shouldShowEsp then SetEspPreview() else _closePreviewPanel(ESPPreview) end
+            end
+
+            local shouldShowModel = guiOpen and onMisc and Config and Config.Misc and Config.Misc.CustomPlayerModel and Config.Misc.CustomPlayerModel ~= "Off" and Config.Misc.ThirdPerson == true
+            if shouldShowModel ~= lastModel then
+                lastModel = shouldShowModel
+                if shouldShowModel then SetModelPreview(Config.Misc.CustomPlayerModel) else _closePreviewPanel(ModelPreview) end
+            end
+        end)
+        if not ok then warn("[Eclipse] Preview watchdog: " .. tostring(err)) end
+        task.wait(0.15)
+    end
+    pcall(function() _destroyPreviewPanel(ESPPreview) end)
+    pcall(function() _destroyPreviewPanel(ModelPreview) end)
+end)
 
 function _pickRandomCharacter()
     local candidates = {}
@@ -13478,6 +13729,7 @@ do
             skinColor   = Color3.fromRGB(120, 80, 45),
             bodyBundle  = 200433974847944,
             overlayBundle = 200433974847944,
+            bodyAssets  = { Head = 106542367310836 },
             hideDefaultHead = false,
         },
         ["Skeleton Pencil"] = {
@@ -13491,6 +13743,7 @@ do
             skinColor   = Color3.fromRGB(90, 130, 170),
             bodyBundle  = 1600307,
             overlayBundle = 1600307,
+            bodyAssets  = { Head = 115621519961665 },
             hideDefaultHead = false,
         },
         ["Big Foot"] = {
@@ -13498,6 +13751,7 @@ do
             skinColor   = Color3.fromRGB(90, 70, 55),
             bodyBundle  = 177459629406961,
             overlayBundle = 177459629406961,
+            bodyAssets  = { Head = 134593919650511 },
             hideDefaultHead = false,
         },
         ["Mini Big Guy"] = {
@@ -13505,6 +13759,7 @@ do
             skinColor   = Color3.fromRGB(140, 105, 80),
             bodyBundle  = 141428550660190,
             overlayBundle = 141428550660190,
+            bodyAssets  = { Head = 83615494348795 },
             hideDefaultHead = false,
         },
         ["Skinny Guy"] = {
