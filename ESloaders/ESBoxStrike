@@ -13990,160 +13990,172 @@ do
     local function _weldOverlay(ch, model)
         local hrp = ch:FindFirstChild("HumanoidRootPart"); if not hrp then return end
 
-        -- CPM animation v4: direct Motor6D.Transform mirror.
-        -- Copies the LocalPlayer's animated joint transforms straight into the
-        -- dummy's matching joints. Works for R6->R6, R15->R15, and R6->R15
-        -- via a name-alias map. No CFrame retarget, no scaling: the dummy
-        -- keeps its skeleton/proportions and simply follows the pose.
+        -- CPM animation v5: visual part binding.
+        -- The old Motor6D-retarget path copied transforms between different
+        -- skeletons (R6 adapter <-> R15 bundle), which made limbs stretch/fly.
+        -- This version binds every dummy body part to the REAL animated LP part
+        -- once, stores the dummy's local offset, then replays the source part's
+        -- CFrame every frame. No resizing, no Motor6D scale math, no physics.
         pcall(function() model:PivotTo(hrp.CFrame) end)
 
-        -- Alias groups. Every name inside a group is considered equivalent
-        -- and their Motor6D.Transform values are mirrored between src<->dst.
-        local ALIAS = {
-            Root      = { "RootJoint", "Root", "Root Joint" },
-            Neck      = { "Neck" },
-            Waist     = { "Waist" },
-            LShoulder = { "Left Shoulder", "LeftShoulder" },
-            RShoulder = { "Right Shoulder", "RightShoulder" },
-            LHip      = { "Left Hip", "LeftHip" },
-            RHip      = { "Right Hip", "RightHip" },
-            LElbow    = { "LeftElbow" },
-            RElbow    = { "RightElbow" },
-            LWrist    = { "LeftWrist" },
-            RWrist    = { "RightWrist" },
-            LKnee     = { "LeftKnee" },
-            RKnee     = { "RightKnee" },
-            LAnkle    = { "LeftAnkle" },
-            RAnkle    = { "RightAnkle" },
-        }
-        local NAME_TO_GROUP = {}
-        for g, names in pairs(ALIAS) do
-            for _, n in ipairs(names) do NAME_TO_GROUP[n] = g end
-        end
-
-        local function _validSourcePart(p)
-            if not (p and p:IsA("BasePart")) then return false end
-            local a = p.Parent
-            while a and a ~= ch and a ~= workspace do
-                if a:IsA("Accessory") or a:IsA("Tool") then return false end
-                if a:IsA("Model") and a:GetAttribute("EclipseCPMOverlay") then return false end
-                a = a.Parent
-            end
-            return true
-        end
-
-        -- Freeze dummy animations so it does not fight our Transform writes.
+        local srcHum = ch:FindFirstChildOfClass("Humanoid")
         local hum = model:FindFirstChildOfClass("Humanoid")
         if hum then
             pcall(function()
-                hum.PlatformStand = true
-                hum.EvaluateStateMachine = false
+                hum.PlatformStand = false
                 hum.AutoRotate = false
                 hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
             end)
         end
+
+        local rootPart = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Torso") or model:FindFirstChild("LowerTorso") or model:FindFirstChild("UpperTorso")
+        if rootPart and rootPart:IsA("BasePart") then model.PrimaryPart = rootPart end
+
         for _, d in ipairs(model:GetDescendants()) do
-            if d:IsA("Animator") or d:IsA("AnimationController") or d.Name == "Animate" then
+            if d:IsA("AnimationController") or d.Name == "Animate" then
                 pcall(function() d:Destroy() end)
             elseif d:IsA("Motor6D") then
                 pcall(function() d.Transform = CFrame.new() end)
             elseif d:IsA("BasePart") then
                 pcall(function()
-                    d.Anchored = false
                     d.CanCollide = false
                     d.CanQuery = false
                     d.CanTouch = false
                     d.Massless = true
+                    -- Anchor only visual body parts. Accessory handles stay
+                    -- unanchored so their welds follow the anchored body part.
+                    d.Anchored = not _isAccessoryPart(d)
                 end)
             end
         end
 
-        local rootPart = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Torso") or model:FindFirstChild("LowerTorso") or model:FindFirstChild("UpperTorso")
-        if rootPart and rootPart:IsA("BasePart") then
-            model.PrimaryPart = rootPart
-            rootPart.Anchored = true
-        end
         model.Name = "EclipseCPMOverlay"
         model:SetAttribute("EclipseCPMOverlay", true)
         model.Parent = workspace
 
-        -- Collect ALL source Motor6Ds per group (R6 adapter games have both
-        -- an R6 motor set on invisible adapter parts AND an idle R15 motor
-        -- set; we keep both and pick the animated one per frame).
-        local R6_PARTS = { Torso=true, Head=true, ["Left Arm"]=true, ["Right Arm"]=true, ["Left Leg"]=true, ["Right Leg"]=true, HumanoidRootPart=true }
-        local sourceMotors = {}
-        for _, d in ipairs(ch:GetDescendants()) do
-            if d:IsA("Motor6D") and NAME_TO_GROUP[d.Name] and _validSourcePart(d.Part0) and _validSourcePart(d.Part1) then
-                local g = NAME_TO_GROUP[d.Name]
-                sourceMotors[g] = sourceMotors[g] or {}
-                -- Prefer motors whose Part1 is an R6 body part (adapter path).
-                if d.Part1 and R6_PARTS[d.Part1.Name] then
-                    table.insert(sourceMotors[g], 1, d)
-                else
-                    table.insert(sourceMotors[g], d)
+        local function _part(name)
+            local p = ch:FindFirstChild(name, true)
+            return (p and p:IsA("BasePart")) and p or nil
+        end
+
+        local hasR6Adapter = (_part("Torso") and _part("Left Arm") and _part("Right Arm") and _part("Left Leg") and _part("Right Leg")) ~= nil
+        local function _driverPart(dummyName)
+            if dummyName == "HumanoidRootPart" then return _part("HumanoidRootPart") or _part("Torso") or _part("UpperTorso") end
+            if dummyName == "Head" then return _part("Head") end
+
+            -- In R6-adapter games, visible R15 parts may stay idle while hidden
+            -- R6 parts are the animated truth. Prefer those R6 drivers for all
+            -- R15 bundle limbs so Mickey/Panda/MJ do not freeze in idle.
+            if hasR6Adapter then
+                if dummyName == "Torso" or dummyName == "UpperTorso" or dummyName == "LowerTorso" then return _part("Torso") or _part("UpperTorso") end
+                if dummyName == "Left Arm" or dummyName == "LeftUpperArm" or dummyName == "LeftLowerArm" or dummyName == "LeftHand" then return _part("Left Arm") end
+                if dummyName == "Right Arm" or dummyName == "RightUpperArm" or dummyName == "RightLowerArm" or dummyName == "RightHand" then return _part("Right Arm") end
+                if dummyName == "Left Leg" or dummyName == "LeftUpperLeg" or dummyName == "LeftLowerLeg" or dummyName == "LeftFoot" then return _part("Left Leg") end
+                if dummyName == "Right Leg" or dummyName == "RightUpperLeg" or dummyName == "RightLowerLeg" or dummyName == "RightFoot" then return _part("Right Leg") end
+            end
+
+            -- Native R15 source: exact per-segment drivers preserve knees,
+            -- elbows, wrists and ankles instead of forcing a blocky R6 pose.
+            return _part(dummyName) or _lpLimb(ch, dummyName)
+        end
+
+        local bodyBindings = {}
+        for _, p in ipairs(model:GetDescendants()) do
+            if p:IsA("BasePart") and not _isAccessoryPart(p) then
+                local driver = _driverPart(p.Name)
+                if driver and driver.Parent then
+                    bodyBindings[#bodyBindings + 1] = {
+                        part = p,
+                        driver = driver,
+                        offset = driver.CFrame:ToObjectSpace(p.CFrame),
+                    }
                 end
             end
         end
 
-        -- Collect target Motor6Ds in the dummy grouped by alias.
-        local targetMotors = {}
-        for _, d in ipairs(model:GetDescendants()) do
-            if d:IsA("Motor6D") and NAME_TO_GROUP[d.Name] then
-                local g = NAME_TO_GROUP[d.Name]
-                targetMotors[g] = targetMotors[g] or {}
-                table.insert(targetMotors[g], d)
-            end
+        -- Optional animation relay: lets Roblox's own animator retarget any
+        -- playable tracks to the dummy. The CFrame bindings above remain the
+        -- authority for adapter/procedural weapon poses, so no idle freeze.
+        local srcAnimator = srcHum and srcHum:FindFirstChildOfClass("Animator")
+        local dstAnimator = hum and hum:FindFirstChildOfClass("Animator")
+        if hum and not dstAnimator then
+            dstAnimator = Instance.new("Animator")
+            dstAnimator.Parent = hum
         end
+        local relayedTracks, relayClock = {}, 0
+        local function _syncAnimationTracks(dt)
+            if not (srcAnimator and dstAnimator) then return end
+            relayClock = relayClock + (tonumber(dt) or 0.033)
+            if relayClock < 0.08 then return end
+            relayClock = 0
 
-        -- Per-frame pick the source motor with the largest transform delta:
-        -- in R6-adapter games only the R6 motor is animated; the R15 twin
-        -- stays at identity. This automatically routes the animated one.
-        local function _routedPose(group)
-            local list = sourceMotors[group]
-            if not list then return nil end
-            local best, bestMag = nil, -1
-            for _, m in ipairs(list) do
-                if m and m.Parent then
-                    local ok, t = pcall(function() return m.Transform end)
-                    if ok and t then
-                        local mag = t.Position.Magnitude + (t - CFrame.new(t.Position)).LookVector:Dot(Vector3.new(0,0,-1))
-                        -- Simpler heuristic: any non-identity wins over identity.
-                        local isId = (t.Position.Magnitude < 1e-4) and (math.abs(t.LookVector.Z + 1) < 1e-3) and (math.abs(t.UpVector.Y - 1) < 1e-3)
-                        local score = isId and 0 or (1 + t.Position.Magnitude)
-                        if score > bestMag then best, bestMag = t, score end
-                    end
-                end
-            end
-            return best
-        end
-
-
-        local function _syncPose()
-            if not (scriptRunning and _cpmActive and _overlay == model and ch and ch.Parent and hrp and hrp.Parent) then return end
-            if rootPart and rootPart.Parent then
-                rootPart.CFrame = hrp.CFrame
-                rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-            else
-                pcall(function() model:PivotTo(hrp.CFrame) end)
-            end
-            for g, motors in pairs(targetMotors) do
-                local pose = _routedPose(g)
-                if pose then
-                    for _, m in ipairs(motors) do
-                        if m and m.Parent then
-                            pcall(function() m.Transform = pose end)
+            local ok, tracks = pcall(function() return srcAnimator:GetPlayingAnimationTracks() end)
+            if not (ok and tracks) then return end
+            local seen = {}
+            for _, srcTrack in ipairs(tracks) do
+                local anim = nil
+                pcall(function() anim = srcTrack.Animation end)
+                local id = anim and anim.AnimationId
+                if id and id ~= "" then
+                    seen[id] = true
+                    local rec = relayedTracks[id]
+                    if not rec then
+                        local a = Instance.new("Animation")
+                        a.AnimationId = id
+                        local okLoad, dstTrack = pcall(function() return dstAnimator:LoadAnimation(a) end)
+                        if okLoad and dstTrack then
+                            rec = { track = dstTrack, anim = a }
+                            relayedTracks[id] = rec
+                        else
+                            pcall(function() a:Destroy() end)
                         end
                     end
+                    if rec and rec.track then
+                        pcall(function() rec.track.Priority = srcTrack.Priority end)
+                        local speed, weight, timePos = 1, 1, 0
+                        pcall(function() speed = srcTrack.Speed end)
+                        pcall(function() weight = srcTrack.WeightCurrent end)
+                        pcall(function() timePos = srcTrack.TimePosition end)
+                        pcall(function()
+                            if not rec.track.IsPlaying then rec.track:Play(0.04, math.max(weight, 0.01), speed) end
+                            rec.track:AdjustSpeed(speed)
+                            rec.track:AdjustWeight(math.max(weight, 0.01), 0.04)
+                            if math.abs((rec.track.TimePosition or 0) - timePos) > 0.12 then
+                                rec.track.TimePosition = timePos
+                            end
+                        end)
+                    end
+                end
+            end
+            for id, rec in pairs(relayedTracks) do
+                if not seen[id] then
+                    pcall(function() rec.track:Stop(0.08) end)
+                    pcall(function() rec.anim:Destroy() end)
+                    relayedTracks[id] = nil
                 end
             end
         end
 
-        _syncPose()
+        local function _syncPose(dt)
+            if not (scriptRunning and _cpmActive and _overlay == model and ch and ch.Parent and hrp and hrp.Parent) then return end
+            _syncAnimationTracks(dt)
+            for _, bind in ipairs(bodyBindings) do
+                local p, driver = bind.part, bind.driver
+                if p and p.Parent and driver and driver.Parent then
+                    pcall(function()
+                        p.CFrame = driver.CFrame * bind.offset
+                        p.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        p.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                    end)
+                end
+            end
+        end
+
+        _syncPose(0)
         if _syncConn then pcall(function() _syncConn:Disconnect() end) end
-        local poseSignal = RunService.PreSimulation or RunService.Stepped or RunService.Heartbeat
-        _syncConn = connectSignal(poseSignal:Connect(function()
-            pcall(_syncPose)
+        local poseSignal = RunService.RenderStepped or RunService.Heartbeat or RunService.Stepped
+        _syncConn = connectSignal(poseSignal:Connect(function(dt)
+            pcall(_syncPose, dt)
         end))
     end
 
