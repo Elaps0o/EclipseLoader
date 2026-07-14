@@ -13300,8 +13300,19 @@ do
             bodyType    = "bundle",
             bundleId    = 186049441345950,
             skinColor   = Color3.fromRGB(197, 148, 108),
-            -- Billie Jean Outfit 3/3 (shirt+pants combo asset).
-            clothing    = { 134487061084377 },
+            bodyAssets  = {
+                LeftLeg  = 118522915084794,
+                Head     = 128017983057525,
+                RightLeg = 112341620439396,
+                Torso    = 101847211951960,
+                LeftArm  = 78482336686522,
+                RightArm = 85131668136140,
+            },
+            -- Correct Billie Jean Outfit 3/3 UGC layered clothing asset.
+            -- The old id (134487061084377) is the Moonwalk link from the bundle
+            -- description and returns invalid/no texture in-game.
+            clothing    = { 101936090451959 },
+            accessories = { 116379004085349 },
         },
     }
 
@@ -13474,6 +13485,24 @@ do
         if not (model and accessory and accessory:IsA("Accessory")) then return false end
         local handle = accessory:FindFirstChild("Handle") or accessory:FindFirstChildWhichIsA("BasePart")
         if not handle then pcall(function() accessory:Destroy() end); return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        if hum then
+            local okAdd = pcall(function()
+                hum:AddAccessory(accessory)
+            end)
+            if okAdd and accessory.Parent == model then
+                for _, p in ipairs(accessory:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.Anchored = false
+                        p.CanCollide = false
+                        p.CanQuery = false
+                        p.CanTouch = false
+                        p.Massless = true
+                    end
+                end
+                return true
+            end
+        end
         accessory.Parent = model
         for _, p in ipairs(accessory:GetDescendants()) do
             if p:IsA("BasePart") then
@@ -13737,19 +13766,46 @@ do
                 if not (ok and details) then
                     ok, details = pcall(function() return AES:GetBundleDetails(cfg.bundleId) end)
                 end
-                if ok and details and details.BundledItems then
-                    for _, it in ipairs(details.BundledItems) do
+                local items = ok and details and (details.BundledItems or details.Items or details.items)
+                local descAcc = {}
+                local function _pushAcc(id, accType, layered, order)
+                    if id and accType then
+                        descAcc[#descAcc + 1] = {
+                            AssetId = id,
+                            AccessoryType = accType,
+                            IsLayered = layered == true,
+                            Order = order or #descAcc,
+                        }
+                    end
+                end
+                if items then
+                    for _, it in ipairs(items) do
                         local id = it.Id or it.id
-                        local ty = tostring(it.Type or it.AssetType or "")
-                        if     ty == "Head"       then desc.Head       = id
-                        elseif ty == "Torso"      then desc.Torso      = id
-                        elseif ty == "LeftArm"    then desc.LeftArm    = id
-                        elseif ty == "RightArm"   then desc.RightArm   = id
-                        elseif ty == "LeftLeg"    then desc.LeftLeg    = id
-                        elseif ty == "RightLeg"   then desc.RightLeg   = id
-                        elseif ty == "DynamicHead" then desc.Head      = id
+                        local ty = tostring(it.Type or it.type or it.AssetType or it.assetType or "")
+                        local at = tonumber(it.AssetType or it.assetType or it.AssetTypeId or it.assetTypeId)
+                        if     ty == "Head" or ty == "DynamicHead" or at == 17 or at == 79 then desc.Head = id
+                        elseif ty == "Torso"   or at == 27 then desc.Torso = id
+                        elseif ty == "RightArm" or at == 28 then desc.RightArm = id
+                        elseif ty == "LeftArm"  or at == 29 then desc.LeftArm = id
+                        elseif ty == "LeftLeg"  or at == 30 then desc.LeftLeg = id
+                        elseif ty == "RightLeg" or at == 31 then desc.RightLeg = id
+                        elseif at == 41 then _pushAcc(id, Enum.AccessoryType.Hair, false)
+                        elseif at == 42 then _pushAcc(id, Enum.AccessoryType.Face, false)
+                        elseif at == 43 then _pushAcc(id, Enum.AccessoryType.Neck, false)
+                        elseif at == 44 then _pushAcc(id, Enum.AccessoryType.Shoulder, false)
+                        elseif at == 45 then _pushAcc(id, Enum.AccessoryType.Front, false)
+                        elseif at == 46 then _pushAcc(id, Enum.AccessoryType.Back, false)
+                        elseif at == 47 then _pushAcc(id, Enum.AccessoryType.Waist, false)
                         end
                     end
+                end
+                -- Apply the Billie Jean layered bodysuit through HumanoidDescription
+                -- first; _applyLoadedAssets below remains as executor fallback.
+                for i, id in ipairs(cfg.clothing or {}) do
+                    _pushAcc(id, Enum.AccessoryType.Jacket, true, i)
+                end
+                if #descAcc > 0 then
+                    pcall(function() desc:SetAccessories(descAcc, true) end)
                 end
                 desc.BodyTypeScale   = 1
                 desc.ProportionScale = 1
@@ -14051,10 +14107,10 @@ do
             return target and target.CFrame, target
         end
 
-        -- Prefer Motor6D-transform mirroring whenever possible: the dummy keeps
-        -- its own limb sizes/proportions, so it never distorts.  Works for
-        -- R15<->R15 directly, and for R6 dummies on an R15 LP via a joint-name
-        -- alias map (fixes Joker/Clown right arm pointing sideways with knife).
+        -- Prefer Motor6D pose mirroring whenever possible: the dummy keeps its
+        -- own limb sizes/proportions, so it follows animations without stretching
+        -- the real model.  We copy ROTATION ONLY; animation translation keys from
+        -- R6 packs are what used to pull R15 package limbs apart/freeze them.
         local dummyIsR15 = model:FindFirstChild("UpperTorso") ~= nil
         local lpIsR15    = ch:FindFirstChild("UpperTorso") ~= nil
 
@@ -14113,13 +14169,39 @@ do
                 end
                 return lpJoints[dm.Name]
             end
+            local function _rotOnly(cf)
+                if typeof(cf) ~= "CFrame" then return CFrame.new() end
+                return CFrame.fromMatrix(Vector3.new(), cf.XVector, cf.YVector, cf.ZVector)
+            end
+            local function _jointPose(src)
+                if not src then return nil end
+                local ok, pose = pcall(function()
+                    if src.Part0 and src.Part1 then
+                        -- Reconstruct the currently rendered joint transform from
+                        -- the source parts. This catches animations that modify
+                        -- parts/C0 instead of leaving useful Motor6D.Transform data.
+                        return src.C0:Inverse() * src.Part0.CFrame:ToObjectSpace(src.Part1.CFrame) * src.C1
+                    end
+                    return src.Transform
+                end)
+                if ok and pose then return _rotOnly(pose) end
+                return nil
+            end
             local function _syncPose()
                 if not (scriptRunning and _cpmActive and _overlay == model and ch and ch.Parent) then return end
                 local lpHRP = ch:FindFirstChild("HumanoidRootPart")
                 if dRoot and lpHRP then dRoot.CFrame = lpHRP.CFrame end
                 for _, dm in ipairs(dJoints) do
                     local src = _resolveSrc(dm)
-                    if src then dm.Transform = src.Transform end
+                    local pose = _jointPose(src)
+                    if pose then
+                        dm.Transform = pose
+                    elseif JOINT_ALIAS then
+                        -- Mixed R6/R15: lower arms/legs/wrists often have no R6
+                        -- source joint. Keep them neutral so they inherit the
+                        -- upper limb pose instead of locking in a bad cached pose.
+                        dm.Transform = CFrame.new()
+                    end
                 end
             end
             for _, d in ipairs(model:GetDescendants()) do
