@@ -13990,7 +13990,12 @@ do
     local function _weldOverlay(ch, model)
         local hrp = ch:FindFirstChild("HumanoidRootPart"); if not hrp then return end
 
-        -- Position dummy at LP before doing anything else.
+        -- Full CPM remake: do not copy R6 Motor6D transforms into an R15
+        -- skeleton.  Counter Blox/R6-adapter characters keep the visible R15
+        -- motors idle while hidden R6 parts carry the real pose.  We therefore
+        -- render the dummy as a CFrame overlay: every visual part follows the
+        -- final animated body-part CFrame plus a stored local position offset.
+        -- This makes R15 models move again without stretching/distorting them.
         pcall(function() model:PivotTo(hrp.CFrame) end)
 
         local function _isBodyPartName(n)
@@ -14004,322 +14009,122 @@ do
                 or n == "RightUpperLeg" or n == "RightLowerLeg" or n == "RightFoot"
         end
 
-        -- Keep Humanoid alive (accessories/clothing need it to render), but
-        -- freeze it so it doesn't try to walk/fall/play idle animations.
-        local dHum = model:FindFirstChildOfClass("Humanoid")
-        if dHum then
+        local function _freezeHumanoid(hum)
+            if not hum then return end
             pcall(function()
-                dHum.PlatformStand      = true
-                dHum.EvaluateStateMachine = false
-                dHum.AutoRotate         = false
-                dHum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                hum.PlatformStand = true
+                hum.EvaluateStateMachine = false
+                hum.AutoRotate = false
+                hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
             end)
-            local anim = dHum:FindFirstChildOfClass("Animator")
+            local anim = hum:FindFirstChildOfClass("Animator")
             if anim then
                 for _, t in ipairs(anim:GetPlayingAnimationTracks()) do pcall(function() t:Stop() end) end
             end
-            local defaultAnim = model:FindFirstChild("Animate")
-            if defaultAnim then pcall(function() defaultAnim:Destroy() end) end
+        end
+
+        _freezeHumanoid(model:FindFirstChildOfClass("Humanoid"))
+        for _, d in ipairs(model:GetDescendants()) do
+            if d:IsA("Animator") or d:IsA("AnimationController") or d.Name == "Animate" then
+                pcall(function() d:Destroy() end)
+            end
         end
 
         model.Name = "EclipseCPMOverlay"
         model:SetAttribute("EclipseCPMOverlay", true)
         model.Parent = workspace
 
-        local dummyRoot = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-            or model:FindFirstChild("Torso") or model:FindFirstChild("UpperTorso")
-
-        -- Visual pose relay: copy the FINAL rendered BasePart CFrames from the
-        -- LocalPlayer instead of trying to replay Motor6D.Transform on a mixed
-        -- R6/R15 rig.  This fixes the frozen R15 Woman/Mickey bodies and also
-        -- fixes Joker/Clown R6 right-arm inversion caused by R15 shoulder motor
-        -- orientation differences.  The original character still plays every
-        -- animation; the overlay simply draws on top of those exact poses.
-        local syncParts = {}
-        local sourceParts = {}
         local function _validSourcePart(p)
             if not (p and p:IsA("BasePart")) then return false end
             local a = p.Parent
             while a and a ~= ch and a ~= workspace do
                 if a:IsA("Accessory") or a:IsA("Tool") then return false end
+                if a:IsA("Model") and a:GetAttribute("EclipseCPMOverlay") then return false end
                 a = a.Parent
             end
             return true
         end
+
+        local function _scorePart(p, wanted)
+            local score = 0
+            if p.Parent == ch then score = score + 100 end
+            if p.Name == wanted then score = score + 50 end
+            if p.Transparency >= 0.95 then score = score + 8 end -- R6 adapter parts are usually hidden
+            if p.CanCollide then score = score + 2 end
+            return score
+        end
+
         local function _charBodyPart(name)
+            local best, bestScore = nil, -math.huge
             local direct = ch:FindFirstChild(name)
-            if _validSourcePart(direct) then return direct end
+            if _validSourcePart(direct) then
+                best, bestScore = direct, _scorePart(direct, name)
+            end
             for _, d in ipairs(ch:GetDescendants()) do
-                if d.Name == name and _validSourcePart(d) then return d end
-            end
-            return nil
-        end
-        for _, p in ipairs(ch:GetDescendants()) do
-            if _validSourcePart(p) and not sourceParts[p.Name] then sourceParts[p.Name] = p end
-        end
-        local hasR6AnimatedSource = _charBodyPart("Torso") and _charBodyPart("Left Arm") and _charBodyPart("Right Arm")
-            and _charBodyPart("Left Leg") and _charBodyPart("Right Leg")
-        local sourceJoints = {}
-        for _, m in ipairs(ch:GetDescendants()) do
-            if m:IsA("Motor6D") and not sourceJoints[m.Name] then sourceJoints[m.Name] = m end
-        end
-        local hasR6MotorSource = sourceJoints["RootJoint"] and sourceJoints["Neck"]
-            and sourceJoints["Left Shoulder"] and sourceJoints["Right Shoulder"]
-            and sourceJoints["Left Hip"] and sourceJoints["Right Hip"]
-
-        local dummyIsR15 = model:FindFirstChild("UpperTorso") ~= nil
-        local lpIsR15    = ch:FindFirstChild("UpperTorso") ~= nil
-
-        -- Real fix for R6-animation games: many Counter Blox style characters
-        -- keep a visible R15 rig frozen in idle while an R6 adapter rig/motors
-        -- carry the actual knife/walk/jump pose.  Prefer those R6 motors and
-        -- retarget them onto the dummy's own joints, so proportions stay intact.
-        local r6MotorRetarget = dummyIsR15 and hasR6MotorSource
-        local forceR6VisualRetarget = dummyIsR15 and hasR6AnimatedSource and not hasR6MotorSource
-        local forceExactR6PartRelay = (not dummyIsR15) and hasR6AnimatedSource
-        local heightScale = tonumber(model:GetAttribute("EclipseCPMHeightScale")) or 1.0
-        local function _offsetFor(dummyName, target)
-            local tn = target and target.Name or ""
-            local o
-            if dummyName == tn then return CFrame.new() end
-            if dummyName == "Torso" and tn == "UpperTorso" then o = Vector3.new(0, -0.35, 0)
-            elseif dummyName == "UpperTorso" and tn == "Torso" then o = Vector3.new(0, 0.45, 0)
-            elseif dummyName == "LowerTorso" and tn == "Torso" then o = Vector3.new(0, -0.45, 0)
-            elseif dummyName:find("UpperArm") and tn:find(" Arm") then o = Vector3.new(0, 0.35, 0)
-            elseif dummyName:find("LowerArm") and tn:find(" Arm") then o = Vector3.new(0, -0.25, 0)
-            elseif dummyName:find("Hand") and tn:find(" Arm") then o = Vector3.new(0, -0.85, 0)
-            elseif dummyName:find("UpperLeg") and tn:find(" Leg") then o = Vector3.new(0, 0.35, 0)
-            elseif dummyName:find("LowerLeg") and tn:find(" Leg") then o = Vector3.new(0, -0.25, 0)
-            elseif dummyName:find("Foot") and tn:find(" Leg") then o = Vector3.new(0, -0.85, 0)
-            elseif (dummyName == "Left Arm" or dummyName == "Right Arm") and tn:find("UpperArm") then
-                o = Vector3.new(0, -0.50, 0)
-            elseif (dummyName == "Left Leg" or dummyName == "Right Leg") and tn:find("UpperLeg") then
-                o = Vector3.new(0, -0.50, 0)
-            end
-            if o then return CFrame.new(o * heightScale) end
-            return CFrame.new()
-        end
-
-        local function _firstPart(names)
-            for _, n in ipairs(names or {}) do
-                local p = sourceParts[n] or _charBodyPart(n)
-                if p and p:IsA("BasePart") and p.Parent then return p end
-            end
-            return nil
-        end
-
-        local function _blendCF(a, b, alpha)
-            if a and b then return a.CFrame:Lerp(b.CFrame, alpha or 0.5) end
-            if a then return a.CFrame end
-            if b then return b.CFrame end
-            return nil
-        end
-
-        local function _targetCFrameFor(dummyName)
-            local exact = sourceParts[dummyName]
-            if exact and exact.Parent and not (model:FindFirstChild("UpperTorso") and hasR6AnimatedSource) then return exact.CFrame, nil end
-
-            -- R15 dummy in an R6-animation game/adapter. The real R15 joints often
-            -- stay idle, while invisible/adapter R6 parts carry the actual pose.
-            -- Retarget each R15 visual segment to the animated R6 body part plus a
-            -- local offset, so package meshes keep their own shape and never
-            -- stretch, but no longer freeze in idle.
-            if model:FindFirstChild("UpperTorso") and hasR6AnimatedSource then
-                if dummyName == "UpperTorso" or dummyName == "LowerTorso" or dummyName == "Torso" then
-                    local p = _firstPart({ "Torso" })
-                    return p and p.CFrame, p
-                elseif dummyName == "LeftUpperArm" or dummyName == "LeftLowerArm" or dummyName == "LeftHand" or dummyName == "Left Arm" then
-                    local p = _firstPart({ "Left Arm" })
-                    return p and p.CFrame, p
-                elseif dummyName == "RightUpperArm" or dummyName == "RightLowerArm" or dummyName == "RightHand" or dummyName == "Right Arm" then
-                    local p = _firstPart({ "Right Arm" })
-                    return p and p.CFrame, p
-                elseif dummyName == "LeftUpperLeg" or dummyName == "LeftLowerLeg" or dummyName == "LeftFoot" or dummyName == "Left Leg" then
-                    local p = _firstPart({ "Left Leg" })
-                    return p and p.CFrame, p
-                elseif dummyName == "RightUpperLeg" or dummyName == "RightLowerLeg" or dummyName == "RightFoot" or dummyName == "Right Leg" then
-                    local p = _firstPart({ "Right Leg" })
-                    return p and p.CFrame, p
-                elseif dummyName == "Head" then
-                    local p = _firstPart({ "Head" })
-                    return p and p.CFrame, p
+                if d.Name == name and _validSourcePart(d) then
+                    local s = _scorePart(d, name)
+                    if s > bestScore then best, bestScore = d, s end
                 end
             end
-
-            -- R6 overlay on an R15 local character.  Pick the closest animated
-            -- rendered limb, not the raw Motor6D, so right/left sides stay sane.
-            if dummyName == "Torso" then
-                local upper = _firstPart({ "UpperTorso", "Torso" })
-                local lower = _firstPart({ "LowerTorso", "Torso" })
-                return _blendCF(upper, lower, 0.35), nil
-            elseif dummyName == "Left Arm" then
-                local p = _firstPart({ "LeftUpperArm", "LeftLowerArm", "LeftHand", "Left Arm" })
-                return p and p.CFrame, p
-            elseif dummyName == "Right Arm" then
-                local p = _firstPart({ "RightUpperArm", "RightLowerArm", "RightHand", "Right Arm" })
-                return p and p.CFrame, p
-            elseif dummyName == "Left Leg" then
-                local p = _firstPart({ "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "Left Leg" })
-                return p and p.CFrame, p
-            elseif dummyName == "Right Leg" then
-                local p = _firstPart({ "RightUpperLeg", "RightLowerLeg", "RightFoot", "Right Leg" })
-                return p and p.CFrame, p
-            end
-
-            -- R15 overlay on an R6 local character (or any missing exact part).
-            local target = _lpLimb(ch, dummyName) or hrp
-            return target and target.CFrame, target
+            return best
         end
 
-        -- Prefer Motor6D pose mirroring whenever possible: the dummy keeps its
-        -- own limb sizes/proportions, so it follows animations without stretching
-        -- the real model.  We copy ROTATION ONLY; animation translation keys from
-        -- R6 packs are what used to pull R15 package limbs apart/freeze them.
-        -- Map: dummy joint name -> list of LP joint names to try (in order).
-        local JOINT_ALIAS
-        if dummyIsR15 and hasR6MotorSource then
-            -- R6 animation -> R15 visual.  Drive only the major R15 joints and
-            -- leave elbows/knees/wrists/ankles neutral.  That makes the lower
-            -- segments inherit the upper segment pose instead of double-rotating
-            -- or stretching the package skeleton.
-            JOINT_ALIAS = {
-                ["Root"]          = { "RootJoint" },
-                ["Waist"]         = { "RootJoint" },
-                ["Neck"]          = { "Neck" },
-                ["RightShoulder"] = { "Right Shoulder" },
-                ["LeftShoulder"]  = { "Left Shoulder" },
-                ["RightHip"]      = { "Right Hip" },
-                ["LeftHip"]       = { "Left Hip" },
-                ["RightElbow"]    = {}, ["LeftElbow"] = {},
-                ["RightWrist"]    = {}, ["LeftWrist"] = {},
-                ["RightKnee"]     = {}, ["LeftKnee"] = {},
-                ["RightAnkle"]    = {}, ["LeftAnkle"] = {},
-            }
-        elseif (not dummyIsR15) and hasR6MotorSource then
-            -- R6 dummy -> R6 source motors.  This fixes Joker/Clown legs being
-            -- mirrored when the visible R15 idle rig was chosen by mistake.
-            JOINT_ALIAS = {
-                ["RootJoint"]      = { "RootJoint" },
-                ["Neck"]           = { "Neck" },
-                ["Right Shoulder"] = { "Right Shoulder" },
-                ["Left Shoulder"]  = { "Left Shoulder" },
-                ["Right Hip"]      = { "Right Hip" },
-                ["Left Hip"]       = { "Left Hip" },
-            }
-        elseif dummyIsR15 and lpIsR15 then
-            JOINT_ALIAS = nil -- direct name match is fine
-        elseif (not dummyIsR15) and lpIsR15 then
-            JOINT_ALIAS = {
-                ["RootJoint"]       = { "Root", "RootJoint" },
-                ["Neck"]            = { "Neck" },
-                ["Right Shoulder"]  = { "RightShoulder" },
-                ["Left Shoulder"]   = { "LeftShoulder" },
-                ["Right Hip"]       = { "RightHip" },
-                ["Left Hip"]        = { "LeftHip" },
-            }
-        elseif dummyIsR15 and (not lpIsR15) then
-            JOINT_ALIAS = {
-                ["Root"]          = { "RootJoint" },
-                ["Neck"]          = { "Neck" },
-                ["RightShoulder"] = { "Right Shoulder" },
-                ["LeftShoulder"]  = { "Left Shoulder" },
-                ["RightHip"]      = { "Right Hip" },
-                ["LeftHip"]       = { "Left Hip" },
-            }
-        else
-            JOINT_ALIAS = nil -- both R6 -> direct match
+        local r6Pose = {
+            Root = _charBodyPart("HumanoidRootPart") or hrp,
+            Torso = _charBodyPart("Torso"),
+            Head = _charBodyPart("Head"),
+            LeftArm = _charBodyPart("Left Arm"),
+            RightArm = _charBodyPart("Right Arm"),
+            LeftLeg = _charBodyPart("Left Leg"),
+            RightLeg = _charBodyPart("Right Leg"),
+        }
+        local hasR6Pose = r6Pose.Torso and r6Pose.LeftArm and r6Pose.RightArm and r6Pose.LeftLeg and r6Pose.RightLeg
+
+        local function _sourceFor(dummyName)
+            if hasR6Pose then
+                -- R6 adapter source always wins.  This is the path that fixes
+                -- R15 dummies stuck in idle and also fixes Joker/Clown swapped
+                -- legs because we no longer use incompatible R15/R6 motors.
+                if dummyName == "HumanoidRootPart" then return r6Pose.Root or hrp end
+                if dummyName == "Head" then return r6Pose.Head or r6Pose.Torso or hrp end
+                if dummyName == "Torso" or dummyName == "UpperTorso" or dummyName == "LowerTorso" then return r6Pose.Torso or hrp end
+                if dummyName == "Left Arm" or dummyName == "LeftUpperArm" or dummyName == "LeftLowerArm" or dummyName == "LeftHand" then return r6Pose.LeftArm end
+                if dummyName == "Right Arm" or dummyName == "RightUpperArm" or dummyName == "RightLowerArm" or dummyName == "RightHand" then return r6Pose.RightArm end
+                if dummyName == "Left Leg" or dummyName == "LeftUpperLeg" or dummyName == "LeftLowerLeg" or dummyName == "LeftFoot" then return r6Pose.LeftLeg end
+                if dummyName == "Right Leg" or dummyName == "RightUpperLeg" or dummyName == "RightLowerLeg" or dummyName == "RightFoot" then return r6Pose.RightLeg end
+                return r6Pose.Root or hrp
+            end
+            return _lpLimb(ch, dummyName) or hrp
         end
 
-        if not forceR6VisualRetarget and not forceExactR6PartRelay then
-            local lpJoints = sourceJoints
-            local dJoints = {}
-            for _, m in ipairs(model:GetDescendants()) do
-                if m:IsA("Motor6D") then dJoints[#dJoints + 1] = m end
-            end
-            local dRoot = model:FindFirstChild("HumanoidRootPart")
-            if dRoot then dRoot.Anchored = true end
-            for _, p in ipairs(model:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = false, false, false, true
-                    if p ~= dRoot then p.Anchored = false end
-                end
-            end
-            local function _resolveSrc(dm)
-                if JOINT_ALIAS then
-                    local list = JOINT_ALIAS[dm.Name]
-                    if list then
-                        for _, n in ipairs(list) do
-                            local s = lpJoints[n]
-                            if s then return s end
-                        end
-                        return nil
-                    end
-                    if r6MotorRetarget then return nil end
-                end
-                return lpJoints[dm.Name]
-            end
-            local function _rotOnly(cf)
-                if typeof(cf) ~= "CFrame" then return CFrame.new() end
-                return CFrame.fromMatrix(Vector3.new(), cf.XVector, cf.YVector, cf.ZVector)
-            end
-            local function _jointPose(src)
-                if not src then return nil end
-                local ok, pose = pcall(function()
-                    if src.Part0 and src.Part1 then
-                        -- Reconstruct the currently rendered joint transform from
-                        -- the source parts. This catches animations that modify
-                        -- parts/C0 instead of leaving useful Motor6D.Transform data.
-                        return src.C0:Inverse() * src.Part0.CFrame:ToObjectSpace(src.Part1.CFrame) * src.C1
-                    end
-                    return src.Transform
-                end)
-                if ok and pose then return _rotOnly(pose) end
-                return nil
-            end
-            local function _syncPose()
-                if not (scriptRunning and _cpmActive and _overlay == model and ch and ch.Parent) then return end
-                local lpHRP = ch:FindFirstChild("HumanoidRootPart")
-                if dRoot and lpHRP then dRoot.CFrame = lpHRP.CFrame end
-                for _, dm in ipairs(dJoints) do
-                    local src = _resolveSrc(dm)
-                    local pose = _jointPose(src)
-                    if pose then
-                        dm.Transform = pose
-                    elseif JOINT_ALIAS then
-                        -- Mixed R6/R15: lower arms/legs/wrists often have no R6
-                        -- source joint. Keep them neutral so they inherit the
-                        -- upper limb pose instead of locking in a bad cached pose.
-                        dm.Transform = CFrame.new()
-                    end
-                end
-            end
-            for _, d in ipairs(model:GetDescendants()) do
-                if d:IsA("Animator") or d:IsA("AnimationController") then
-                    pcall(function() d:Destroy() end)
-                end
-            end
-            local dHum = model:FindFirstChildOfClass("Humanoid")
-            if dHum then pcall(function() dHum.EvaluateStateMachine = false end) end
-            _syncPose()
-            if _syncConn then pcall(function() _syncConn:Disconnect() end) end
-            local poseSignal = RunService.PreSimulation or RunService.Stepped or RunService.RenderStepped
-            _syncConn = connectSignal(poseSignal:Connect(function()
-                pcall(_syncPose)
-            end))
-            return
+        local function _rotationOnly(cf)
+            return CFrame.fromMatrix(Vector3.new(), cf.XVector, cf.YVector, cf.ZVector)
         end
 
-
+        local syncParts = {}
         for _, p in ipairs(model:GetDescendants()) do
             if p:IsA("BasePart") and not _isAccessoryPart(p) then
                 p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = true, false, false, false, true
                 if _isBodyPartName(p.Name) then
-                    local _, target = _targetCFrameFor(p.Name)
-                    syncParts[#syncParts + 1] = { part = p, name = p.Name, offset = _offsetFor(p.Name, target) }
+                    local src = _sourceFor(p.Name) or hrp
+                    local localPos = Vector3.new()
+                    local localRot = CFrame.new()
+                    pcall(function()
+                        localPos = src.CFrame:PointToObjectSpace(p.Position)
+                        localRot = _rotationOnly(src.CFrame:ToObjectSpace(p.CFrame))
+                    end)
+                    syncParts[#syncParts + 1] = {
+                        part = p,
+                        name = p.Name,
+                        pos = localPos,
+                        rot = localRot,
+                    }
                 else
-                    syncParts[#syncParts + 1] = { part = p, name = "HumanoidRootPart", offset = CFrame.new() }
+                    local localPos = hrp.CFrame:PointToObjectSpace(p.Position)
+                    syncParts[#syncParts + 1] = { part = p, name = "HumanoidRootPart", pos = localPos, rot = CFrame.new() }
                 end
             elseif p:IsA("BasePart") then
+                p.Anchored = false
                 p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = false, false, false, true
             end
         end
@@ -14329,28 +14134,23 @@ do
             for _, item in ipairs(syncParts) do
                 local part = item.part
                 if part and part.Parent then
-                    local cf = _targetCFrameFor(item.name)
-                    if cf then
-                        part.CFrame = cf * (item.offset or CFrame.new())
+                    local src = _sourceFor(item.name) or hrp
+                    if src and src.Parent then
+                        -- Preserve the dummy's original limb spacing with localPos,
+                        -- but use the source limb rotation so animations actually
+                        -- play.  No Motor6D translation keys = no R15 distortion.
+                        part.CFrame = src.CFrame * CFrame.new(item.pos or Vector3.new()) * (item.rot or CFrame.new())
                         part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
                     end
                 end
             end
         end
-        -- Kill any animator on the dummy so it doesn't reset Motor6D.Transform
-        -- back to CFrame.new() every frame (that was the "T-pose / open arms").
-        for _, d in ipairs(model:GetDescendants()) do
-            if d:IsA("Animator") or d:IsA("AnimationController") then
-                pcall(function() d:Destroy() end)
-            end
-        end
-        local dHum = model:FindFirstChildOfClass("Humanoid")
-        if dHum then pcall(function() dHum.EvaluateStateMachine = false end) end
 
         _syncPose()
         if _syncConn then pcall(function() _syncConn:Disconnect() end) end
-        _syncConn = connectSignal(RunService.RenderStepped:Connect(function()
+        local poseSignal = RunService.RenderStepped or RunService.Stepped
+        _syncConn = connectSignal(poseSignal:Connect(function()
             pcall(_syncPose)
         end))
     end
