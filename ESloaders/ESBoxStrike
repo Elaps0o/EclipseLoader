@@ -13478,34 +13478,34 @@ do
             skinColor   = Color3.fromRGB(120, 80, 45),
             bodyBundle  = 200433974847944,
             overlayBundle = 200433974847944,
-            hideDefaultHead = true,
+            hideDefaultHead = false,
         },
         ["Skeleton Pencil"] = {
             bodyType    = "bundle",
             skinColor   = Color3.fromRGB(240, 240, 235),
             bodyBundle  = 29539540487130,
-            hideDefaultHead = true,
+            hideDefaultHead = false,
         },
         ["Shark Man"] = {
             bodyType    = "bundle",
             skinColor   = Color3.fromRGB(90, 130, 170),
             bodyBundle  = 1600307,
             overlayBundle = 1600307,
-            hideDefaultHead = true,
+            hideDefaultHead = false,
         },
         ["Big Foot"] = {
             bodyType    = "bundle",
             skinColor   = Color3.fromRGB(90, 70, 55),
             bodyBundle  = 177459629406961,
             overlayBundle = 177459629406961,
-            hideDefaultHead = true,
+            hideDefaultHead = false,
         },
         ["Mini Big Guy"] = {
             bodyType    = "bundle",
             skinColor   = Color3.fromRGB(140, 105, 80),
             bodyBundle  = 141428550660190,
             overlayBundle = 141428550660190,
-            hideDefaultHead = true,
+            hideDefaultHead = false,
         },
         ["Skinny Guy"] = {
             bodyType    = "r15",
@@ -14055,23 +14055,16 @@ do
             end
         end
 
-        -- Optional head-hide: hide ONLY the default R15 sphere head (and its
-        -- own Decal/Mesh children) so the bundle's cosmetic head accessory
-        -- remains visible on its own. We DO NOT destroy Hat/Hair/Face
-        -- accessories anymore — that was wiping the skin's real head too.
+        -- Keep the generated/model-provided head visible. Bundle-backed outfits
+        -- should render the loaded head asset instead of hiding the default R15 head.
         if cfg.hideDefaultHead or cfg.hideHead then
             for _, d in ipairs(model:GetDescendants()) do
                 if d:IsA("BasePart") and d.Name == "Head" then
                     pcall(function()
-                        d.Transparency = 1
-                        d.LocalTransparencyModifier = 1
+                        d.Transparency = 0
+                        d.LocalTransparencyModifier = 0
                         d.CanCollide = false
                     end)
-                    for _, ch in ipairs(d:GetChildren()) do
-                        if ch:IsA("Decal") or ch:IsA("Texture") or ch:IsA("SpecialMesh") then
-                            pcall(function() ch:Destroy() end)
-                        end
-                    end
                 end
             end
         end
