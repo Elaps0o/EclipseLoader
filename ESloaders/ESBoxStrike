@@ -1408,6 +1408,16 @@ function Library:CreateWindow(cfg)
     end)
     -- Category ("Main") intentionally omitted per user request.
     pcall(function() NLLib:KeybindList("Keybinds") end)
+    task.delay(0.2, function()
+        pcall(function()
+            local holder = (NLLib and NLLib.Holder and NLLib.Holder.Instance) or Library.ScreenGui
+            local frame = _findGuiChildByHint(holder, {"Keybind", "Keybinds", "KeybindList", "KeybindsList"})
+            if frame and frame:IsA("GuiObject") then
+                _bindPanelPosition("KeybindListPanel", frame)
+            end
+            _reapplyAllPanelPositions()
+        end)
+    end)
     pcall(_applyEclipseLogo)
     pcall(_repairNeverloseInput)
     -- NOTE: Do NOT hook the neverlose "X" close button to CleanupScript().
@@ -2379,6 +2389,31 @@ function _applyPanelSavedPosition(name, frame)
     end
 end
 
+function _findGuiChildByHint(root, hints)
+    if not root or typeof(root) ~= "Instance" then return nil end
+    local seen = {}
+    local function walk(inst)
+        if not inst or typeof(inst) ~= "Instance" or seen[inst] then return nil end
+        seen[inst] = true
+        if inst:IsA("GuiObject") then
+            local name = tostring(inst.Name or "")
+            local lname = string.lower(name)
+            for _, hint in ipairs(hints or {}) do
+                local h = tostring(hint or "")
+                if h ~= "" and (name == h or lname:find(string.lower(h), 1, true)) then
+                    return inst
+                end
+            end
+        end
+        for _, child in ipairs(inst:GetChildren()) do
+            local found = walk(child)
+            if found then return found end
+        end
+        return nil
+    end
+    return walk(root)
+end
+
 function _bindPanelPosition(name, frame)
     if not frame or type(name) ~= "string" then return end
     Config.UI = Config.UI or {}
@@ -2396,6 +2431,15 @@ function _bindPanelPosition(name, frame)
             }
         end))
     end)
+end
+
+function _tryBindNamedPanel(name, root, hints)
+    local frame = _findGuiChildByHint(root, hints)
+    if frame and frame:IsA("GuiObject") then
+        _bindPanelPosition(name, frame)
+        return frame
+    end
+    return nil
 end
 
 function _reapplyAllPanelPositions()
@@ -2604,6 +2648,7 @@ function _ecfgLoadIntoConfig()
         Config.UI = Config.UI or {}
         _ecfgMerge(Config.UI, cfg.UI)
     end
+    pcall(function() _reapplyAllPanelPositions() end)
 end
 
 
@@ -2751,6 +2796,10 @@ function _ecfgApplyLoadedControls()
     pcall(function() if _syncKnifeLock then _syncKnifeLock() end end)
     pcall(function() if _postSkinConfigLoadApply then _postSkinConfigLoadApply() end end)
     pcall(function() if UpdateWeather then UpdateWeather(Config.World.Weather) end end)
+    pcall(function() _reapplyAllPanelPositions() end)
+    task.delay(0.2, function()
+        pcall(function() _reapplyAllPanelPositions() end)
+    end)
     for _, delayT in ipairs({0.4, 1.2, 2.5}) do
         task.delay(delayT, function()
             pcall(function() if UpdateWeather then UpdateWeather(Config.World.Weather or "None") end end)
@@ -11480,9 +11529,8 @@ PVGB:AddToggle("PV_BulletTracer", { Text="BULLET TRACER", Default=false,
         Callback=function(c) Config.Visuals.BulletTracerColor = c end })
 PVGB:AddSlider("PV_BulletTracerDuration", { Text="DURATION", Default=Config.Visuals.BulletTracerDuration, Min=0.5, Max=10, Rounding=1, Suffix="s",
     Callback=function(v) Config.Visuals.BulletTracerDuration = v end })
-PVGB:AddButton({ Text="RAINBOW", Func=function()
-    Config.Visuals.BulletTracerRainbow = not (Config.Visuals.BulletTracerRainbow == true)
-end })
+PVGB:AddToggle("PV_BulletTracerRainbow", { Text="RAINBOW", Default=Config.Visuals.BulletTracerRainbow == true,
+    Callback=function(v) Config.Visuals.BulletTracerRainbow = v and true or false end })
 -- SHOW IMPACT (2D X) active — see block above.
 
 -- GLASS ARMS removed per user request.
@@ -11949,46 +11997,17 @@ local function _buildRandomPreviewModel()
 end
 
 function SetEspPreview()
-    _createPreviewPanel(ESPPreview, "EclipseEspPreview", "EclipseEspPreviewFrame", "ESP PREVIEW", UDim2.new(0.5, 470, 0.5, -180))
-    local model = _buildRandomPreviewModel()
-    if model then
-        _fitPreviewModel(ESPPreview, model)
-        if ESPPreview.title then ESPPreview.title.Text = "ESP PREVIEW • PREMIUM" end
-    else
-        _closePreviewPanel(ESPPreview)
-    end
+    _closePreviewPanel(ESPPreview)
 end
 
 function SetModelPreview(name)
-    _createPreviewPanel(ModelPreview, "EclipseModelPreview", "EclipseModelPreviewFrame", "MODEL PREVIEW", UDim2.new(0.5, -470, 0.5, -180))
-    local model = nil
-    if name and name ~= "Off" and _G.EclipseBuildPreviewModel then
-        model = _G.EclipseBuildPreviewModel(name)
-    end
-    if not model then
-        model = _buildRandomPreviewModel()
-    end
-    if model then
-        _fitPreviewModel(ModelPreview, model)
-        local title = (name and name ~= "Off") and tostring(name) or "CUSTOM MODEL"
-        if ModelPreview.title then ModelPreview.title.Text = title .. " PREVIEW • PREMIUM" end
-    else
-        _closePreviewPanel(ModelPreview)
-    end
+    _closePreviewPanel(ModelPreview)
 end
 
 local function _updatePreviewPanels(dt)
     for _, previewTable in ipairs({ ESPPreview, ModelPreview }) do
         if previewTable and previewTable.gui and previewTable.gui.Enabled and previewTable.model then
-            previewTable._acc = (previewTable._acc or 0) + dt
-            if previewTable._acc < 1/30 then return end
-            previewTable._acc = 0
-            if previewTable.spin ~= false then
-                previewTable.rotY = (previewTable.rotY + 25 * dt * 60) % 360
-            end
-            local rot = CFrame.Angles(math.rad(previewTable.rotX), math.rad(previewTable.rotY), 0)
-            local pos = previewTable.focus + rot.LookVector * previewTable.dist
-            previewTable.vpCam.CFrame = CFrame.lookAt(pos, previewTable.focus)
+            previewTable.gui.Enabled = false
         end
     end
 end
@@ -12012,16 +12031,16 @@ task.spawn(function()
                 if miscPage and miscPage.Active then onMisc = true end
             end)
 
-            local shouldShowEsp = guiOpen and onVisuals and Config and Config.ESP and Config.ESP.Enabled
+            local shouldShowEsp = false
             if shouldShowEsp ~= lastEsp then
                 lastEsp = shouldShowEsp
-                if shouldShowEsp then SetEspPreview() else _closePreviewPanel(ESPPreview) end
+                _closePreviewPanel(ESPPreview)
             end
 
-            local shouldShowModel = guiOpen and onMisc and Config and Config.Misc and Config.Misc.CustomPlayerModel and Config.Misc.CustomPlayerModel ~= "Off" and Config.Misc.ThirdPerson == true
+            local shouldShowModel = false
             if shouldShowModel ~= lastModel then
                 lastModel = shouldShowModel
-                if shouldShowModel then SetModelPreview(Config.Misc.CustomPlayerModel) else _closePreviewPanel(ModelPreview) end
+                _closePreviewPanel(ModelPreview)
             end
         end)
         if not ok then warn("[Eclipse] Preview watchdog: " .. tostring(err)) end
@@ -13736,6 +13755,7 @@ do
             bodyType    = "bundle",
             skinColor   = Color3.fromRGB(240, 240, 235),
             bodyBundle  = 29539540487130,
+            bodyAssets  = { Head = 114932814714863 },
             hideDefaultHead = false,
         },
         ["Shark Man"] = {
@@ -13930,6 +13950,9 @@ do
                 if cfg.bodyAssets.LeftArm  then desc.LeftArm  = _bodyAssetId(cfg.bodyAssets.LeftArm) end
                 if cfg.bodyAssets.LeftLeg  then desc.LeftLeg  = _bodyAssetId(cfg.bodyAssets.LeftLeg) end
                 if cfg.bodyAssets.RightLeg then desc.RightLeg = _bodyAssetId(cfg.bodyAssets.RightLeg) end
+            end
+            if cfg.bodyAssets and cfg.bodyAssets.Head then
+                desc.Head = _bodyAssetId(cfg.bodyAssets.Head)
             end
             if bundleData then
                 if bundleData.body.Torso    then desc.Torso    = bundleData.body.Torso end
