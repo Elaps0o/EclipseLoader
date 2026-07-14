@@ -2306,7 +2306,7 @@ local Config = {
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, FreezeOnBuy=false, AutoStop=false, QuickStopOptions={} },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=60, AutoSkillSmooth=0, AutoSkillDistance=1200, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=140, AutoSkillSmooth=0, AutoSkillDistance=999999, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -12391,14 +12391,13 @@ do
         ASGB:AddToggle("AS_Enable", { Text = "AUTOSKILL", Default = false,
             Callback = function(v) Config.Misc.AutoSkill = (v and not EX_BLOCK_SILENT) end })
             :AddKeyPicker("AS_Key", { Default = "K", SyncToggleState = true, Mode = "Toggle", Text = "Auto Kill" })
-        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYL SPEED", Default = 60, Min = 1, Max = 120, Rounding = 0, Suffix = "",
+        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYL SPEED", Default = 140, Min = 1, Max = 220, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSpeed = v end })
-        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYL SMOOTH", Default = 0, Min = 0, Max = 0.2, Rounding = 2, Suffix = "",
+        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYL SMOOTH", Default = 0, Min = 0, Max = 0.1, Rounding = 2, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSmooth = v end })
-        Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 1200
+        Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 999999
         Config.Misc.AutoSkillPart     = Config.Misc.AutoSkillPart or "Head"
-        ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 1400, Rounding = 0, Suffix = "",
-            Callback = function(v) Config.Misc.AutoSkillDistance = v end })
+        ASGB:AddLabel("RANGE: UNLIMITED")
         -- AutoSkill segue o TEAM CHECK global (Config.TeamCheck); sem toggle próprio.
         -- SILENT AIM lives in Aim tab now; keep config keys here for shared state.
         Config.Misc.SilentAim         = false
@@ -13465,16 +13464,9 @@ do
             },
         },
         ["Tung Tung Sahur"] = {
-            bodyType    = "mickey",
+            bodyType    = "bundle",
             skinColor   = Color3.fromRGB(120, 80, 45),
-            bodyAssets  = {
-                Torso    = 15872749347,
-                RightArm = 15872746109,
-                LeftArm  = 15872746095,
-                LeftLeg  = 15872746204,
-                RightLeg = 15872749396,
-                Head     = 15872749227,
-            },
+            bodyBundle  = 200433974847944,
             overlayBundle = 200433974847944,
         },
         ["Skeleton Pencil"] = {
@@ -13484,16 +13476,9 @@ do
             hideDefaultHead = true,
         },
         ["Shark Man"] = {
-            bodyType    = "mickey",
+            bodyType    = "bundle",
             skinColor   = Color3.fromRGB(90, 130, 170),
-            bodyAssets  = {
-                Torso    = 15872749347,
-                RightArm = 15872746109,
-                LeftArm  = 15872746095,
-                LeftLeg  = 15872746204,
-                RightLeg = 15872749396,
-                Head     = 15872749227,
-            },
+            bodyBundle  = 1600307,
             overlayBundle = 1600307,
         },
         ["Skinny Guy"] = {
@@ -17766,7 +17751,8 @@ end)
                 if rounds <= 0 then pcall(_tryRefill, w); break end
 
                 local myKey  = _asTeamKey(LocalPlayer)
-                local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 1200
+                local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 999999
+                if maxD <= 0 then maxD = 999999 end
                 local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
                 local killed = 0
                 local skipTeam = _IS_DEATHMATCH or (not Config.TeamCheck)
@@ -17789,7 +17775,7 @@ end)
                         _sendKill(pl, w)
                         killed = killed + 1
                         if killed < 3 then
-                            task.wait(0.01)
+                            task.wait(0.001)
                         end
                     until true
 
@@ -18205,10 +18191,7 @@ end)
         if not ch then return false end
         local hum = ch:FindFirstChildOfClass("Humanoid")
         if not (hum and hum.Health > 0) then return false end
-        for _, child in ipairs(ch:GetChildren()) do
-            if child:IsA("Tool") then return true end
-        end
-        return false
+        return true
     end
 
     local function _destroyEffect(item)
