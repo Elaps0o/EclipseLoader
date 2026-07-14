@@ -13990,78 +13990,35 @@ do
     local function _weldOverlay(ch, model)
         local hrp = ch:FindFirstChild("HumanoidRootPart"); if not hrp then return end
 
-        -- CPM animation remake v2:
-        --  * Source pose is read from the REAL animated player joints/parts.
-        --  * Target parts keep their own original local offsets from apply time.
-        --  * R15 meshes are grouped onto R6 body drivers, so R6 animations move
-        --    Mickey/Panda/MJ/Woman bodies without stretching their skeletons.
-        --  * Accessories/layered clothes are driven too; no more welded pieces
-        --    freezing while the body moves.
+        -- CPM animation v4: direct Motor6D.Transform mirror.
+        -- Copies the LocalPlayer's animated joint transforms straight into the
+        -- dummy's matching joints. Works for R6->R6, R15->R15, and R6->R15
+        -- via a name-alias map. No CFrame retarget, no scaling: the dummy
+        -- keeps its skeleton/proportions and simply follows the pose.
         pcall(function() model:PivotTo(hrp.CFrame) end)
 
-        local GROUP_NAMES = { "Root", "Torso", "Head", "LeftArm", "RightArm", "LeftLeg", "RightLeg" }
-        local TARGET_GROUP = {
-            HumanoidRootPart = "Root",
-            Torso = "Torso", UpperTorso = "Torso", LowerTorso = "Torso",
-            Head = "Head",
-            ["Left Arm"] = "LeftArm", LeftUpperArm = "LeftArm", LeftLowerArm = "LeftArm", LeftHand = "LeftArm",
-            ["Right Arm"] = "RightArm", RightUpperArm = "RightArm", RightLowerArm = "RightArm", RightHand = "RightArm",
-            ["Left Leg"] = "LeftLeg", LeftUpperLeg = "LeftLeg", LeftLowerLeg = "LeftLeg", LeftFoot = "LeftLeg",
-            ["Right Leg"] = "RightLeg", RightUpperLeg = "RightLeg", RightLowerLeg = "RightLeg", RightFoot = "RightLeg",
+        -- Alias groups. Every name inside a group is considered equivalent
+        -- and their Motor6D.Transform values are mirrored between src<->dst.
+        local ALIAS = {
+            Root      = { "RootJoint", "Root", "Root Joint" },
+            Neck      = { "Neck" },
+            Waist     = { "Waist" },
+            LShoulder = { "Left Shoulder", "LeftShoulder" },
+            RShoulder = { "Right Shoulder", "RightShoulder" },
+            LHip      = { "Left Hip", "LeftHip" },
+            RHip      = { "Right Hip", "RightHip" },
+            LElbow    = { "LeftElbow" },
+            RElbow    = { "RightElbow" },
+            LWrist    = { "LeftWrist" },
+            RWrist    = { "RightWrist" },
+            LKnee     = { "LeftKnee" },
+            RKnee     = { "RightKnee" },
+            LAnkle    = { "LeftAnkle" },
+            RAnkle    = { "RightAnkle" },
         }
-        local SOURCE_NAMES = {
-            Root = { "HumanoidRootPart", "Torso", "UpperTorso" },
-            Torso = { "Torso", "UpperTorso", "LowerTorso", "HumanoidRootPart" },
-            Head = { "Head" },
-            LeftArm = { "Left Arm", "LeftUpperArm", "LeftLowerArm", "LeftHand" },
-            RightArm = { "Right Arm", "RightUpperArm", "RightLowerArm", "RightHand" },
-            LeftLeg = { "Left Leg", "LeftUpperLeg", "LeftLowerLeg", "LeftFoot" },
-            RightLeg = { "Right Leg", "RightUpperLeg", "RightLowerLeg", "RightFoot" },
-        }
-        local MOTOR_NAMES = {
-            Torso = { "RootJoint", "Root Joint", "Root", "Waist" },
-            Head = { "Neck" },
-            LeftArm = { "Left Shoulder", "LeftShoulder" },
-            RightArm = { "Right Shoulder", "RightShoulder" },
-            LeftLeg = { "Left Hip", "LeftHip" },
-            RightLeg = { "Right Hip", "RightHip" },
-        }
-
-        local function _freezeHumanoid(hum)
-            if not hum then return end
-            pcall(function()
-                hum.PlatformStand = true
-                hum.EvaluateStateMachine = false
-                hum.AutoRotate = false
-                hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
-            end)
-            local anim = hum:FindFirstChildOfClass("Animator")
-            if anim then
-                for _, t in ipairs(anim:GetPlayingAnimationTracks()) do pcall(function() t:Stop() end) end
-            end
-        end
-
-        _freezeHumanoid(model:FindFirstChildOfClass("Humanoid"))
-        for _, d in ipairs(model:GetDescendants()) do
-            if d:IsA("Animator") or d:IsA("AnimationController") or d.Name == "Animate" then
-                pcall(function() d:Destroy() end)
-            elseif d:IsA("Motor6D") then
-                pcall(function() d.Transform = CFrame.new() end)
-            end
-        end
-
-        model.Name = "EclipseCPMOverlay"
-        model:SetAttribute("EclipseCPMOverlay", true)
-        model.Parent = workspace
-
-        local function _has(list, value)
-            for _, v in ipairs(list or {}) do if v == value then return true end end
-            return false
-        end
-
-        local function _validCF(cf)
-            local ok, pos = pcall(function() return cf.Position end)
-            return ok and pos and pos.X == pos.X and pos.Y == pos.Y and pos.Z == pos.Z and pos.Magnitude < 1e7
+        local NAME_TO_GROUP = {}
+        for g, names in pairs(ALIAS) do
+            for _, n in ipairs(names) do NAME_TO_GROUP[n] = g end
         end
 
         local function _validSourcePart(p)
@@ -14075,173 +14032,108 @@ do
             return true
         end
 
-        local function _sideScore(p, group)
-            if not (p and hrp and hrp.Parent) then return 0 end
-            local ok, rel = pcall(function() return hrp.CFrame:PointToObjectSpace(p.Position) end)
-            if not ok or not rel then return 0 end
-            if group == "LeftArm" or group == "LeftLeg" then
-                return (rel.X <= 0.1) and 8 or -8
-            elseif group == "RightArm" or group == "RightLeg" then
-                return (rel.X >= -0.1) and 8 or -8
-            end
-            return 0
-        end
-
-        local function _scoreSourcePart(p, group)
-            local names = SOURCE_NAMES[group] or {}
-            local score = 0
-            if p.Name == names[1] then score = score + 70 elseif _has(names, p.Name) then score = score + 35 end
-            if p.Parent == ch then score = score + 18 end
-            if p.Transparency >= 0.95 then score = score + 10 end -- hidden R6 adapter usually has the real pose
-            score = score + _sideScore(p, group)
-            return score
-        end
-
-        local function _findSourcePart(group)
-            local best, bestScore = nil, -math.huge
-            local seen = {}
-            local function consider(p)
-                if p and not seen[p] and _validSourcePart(p) then
-                    seen[p] = true
-                    local s = _scoreSourcePart(p, group)
-                    if s > bestScore then best, bestScore = p, s end
-                end
-            end
-            for _, n in ipairs(SOURCE_NAMES[group] or {}) do consider(ch:FindFirstChild(n)) end
-            for _, d in ipairs(ch:GetDescendants()) do
-                if d:IsA("BasePart") and _has(SOURCE_NAMES[group] or {}, d.Name) then consider(d) end
-            end
-            return best
-        end
-
-        local sourceParts = { Root = hrp }
-        for _, group in ipairs(GROUP_NAMES) do
-            sourceParts[group] = (group == "Root" and hrp) or _findSourcePart(group) or sourceParts.Root
-        end
-
-        local function _scoreMotor(m, group)
-            local names = MOTOR_NAMES[group] or {}
-            local score = 0
-            if m.Name == names[1] then score = score + 90 elseif _has(names, m.Name) then score = score + 55 end
-            if m.Part1 and _has(SOURCE_NAMES[group] or {}, m.Part1.Name) then
-                score = score + ((m.Part1.Name == (SOURCE_NAMES[group] or {})[1]) and 35 or 18)
-                score = score + _sideScore(m.Part1, group)
-                if m.Part1.Transparency >= 0.95 then score = score + 10 end
-            end
-            if m.Part0 and m.Part0.Parent == ch then score = score + 5 end
-            return score
-        end
-
-        local function _findMotor(group)
-            local best, bestScore = nil, -math.huge
-            for _, d in ipairs(ch:GetDescendants()) do
-                if d:IsA("Motor6D") and d.Part0 and d.Part1 and _validSourcePart(d.Part0) and _validSourcePart(d.Part1) then
-                    if _has(MOTOR_NAMES[group] or {}, d.Name) or _has(SOURCE_NAMES[group] or {}, d.Part1.Name) then
-                        local s = _scoreMotor(d, group)
-                        if s > bestScore then best, bestScore = d, s end
-                    end
-                end
-            end
-            return best
-        end
-
-        local sourceMotors = {}
-        for _, group in ipairs({ "Torso", "Head", "LeftArm", "RightArm", "LeftLeg", "RightLeg" }) do
-            sourceMotors[group] = _findMotor(group)
-        end
-
-        local function _motorWorld(m)
-            if not (m and m.Part0 and m.Part1 and m.Part0.Parent and m.Part1.Parent) then return nil end
-            local ok, cf = pcall(function()
-                local transform = m.Transform or CFrame.new()
-                return m.Part0.CFrame * m.C0 * transform * m.C1:Inverse()
+        -- Freeze dummy animations so it does not fight our Transform writes.
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        if hum then
+            pcall(function()
+                hum.PlatformStand = true
+                hum.EvaluateStateMachine = false
+                hum.AutoRotate = false
+                hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
             end)
-            if ok and _validCF(cf) then return cf end
-            return nil
         end
-
-        local function _sourceCF(group)
-            if group == "Root" then return hrp.CFrame end
-            local mcf = _motorWorld(sourceMotors[group])
-            if mcf then return mcf end
-            local p = sourceParts[group]
-            if p and p.Parent then return p.CFrame end
-            return hrp.CFrame
-        end
-
-        local baseCF = {}
-        for _, group in ipairs(GROUP_NAMES) do
-            baseCF[group] = _sourceCF(group) or hrp.CFrame
-        end
-
-        local bodyParts = {}
-        for _, p in ipairs(model:GetDescendants()) do
-            if p:IsA("BasePart") and TARGET_GROUP[p.Name] then bodyParts[#bodyParts + 1] = p end
-        end
-
-        local function _ancestorAccessory(inst)
-            local a = inst and inst.Parent
-            while a and a ~= model and a ~= workspace do
-                if a:IsA("Accessory") then return a end
-                a = a.Parent
+        for _, d in ipairs(model:GetDescendants()) do
+            if d:IsA("Animator") or d:IsA("AnimationController") or d.Name == "Animate" then
+                pcall(function() d:Destroy() end)
+            elseif d:IsA("Motor6D") then
+                pcall(function() d.Transform = CFrame.new() end)
+            elseif d:IsA("BasePart") then
+                pcall(function()
+                    d.Anchored = false
+                    d.CanCollide = false
+                    d.CanQuery = false
+                    d.CanTouch = false
+                    d.Massless = true
+                end)
             end
-            return nil
         end
 
-        local function _attachmentGroup(part)
-            local acc = _ancestorAccessory(part)
-            for _, att in ipairs(part:GetChildren()) do
-                if att:IsA("Attachment") then
-                    for _, d in ipairs(model:GetDescendants()) do
-                        if d:IsA("Attachment") and d.Name == att.Name and d ~= att and d.Parent and d.Parent:IsA("BasePart") then
-                            if (not acc or not d:IsDescendantOf(acc)) and TARGET_GROUP[d.Parent.Name] then
-                                return TARGET_GROUP[d.Parent.Name]
-                            end
-                        end
+        local rootPart = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChild("Torso") or model:FindFirstChild("LowerTorso") or model:FindFirstChild("UpperTorso")
+        if rootPart and rootPart:IsA("BasePart") then
+            model.PrimaryPart = rootPart
+            rootPart.Anchored = true
+        end
+        model.Name = "EclipseCPMOverlay"
+        model:SetAttribute("EclipseCPMOverlay", true)
+        model.Parent = workspace
+
+        -- Collect ALL source Motor6Ds per group (R6 adapter games have both
+        -- an R6 motor set on invisible adapter parts AND an idle R15 motor
+        -- set; we keep both and pick the animated one per frame).
+        local R6_PARTS = { Torso=true, Head=true, ["Left Arm"]=true, ["Right Arm"]=true, ["Left Leg"]=true, ["Right Leg"]=true, HumanoidRootPart=true }
+        local sourceMotors = {}
+        for _, d in ipairs(ch:GetDescendants()) do
+            if d:IsA("Motor6D") and NAME_TO_GROUP[d.Name] and _validSourcePart(d.Part0) and _validSourcePart(d.Part1) then
+                local g = NAME_TO_GROUP[d.Name]
+                sourceMotors[g] = sourceMotors[g] or {}
+                -- Prefer motors whose Part1 is an R6 body part (adapter path).
+                if d.Part1 and R6_PARTS[d.Part1.Name] then
+                    table.insert(sourceMotors[g], 1, d)
+                else
+                    table.insert(sourceMotors[g], d)
+                end
+            end
+        end
+
+        -- Collect target Motor6Ds in the dummy grouped by alias.
+        local targetMotors = {}
+        for _, d in ipairs(model:GetDescendants()) do
+            if d:IsA("Motor6D") and NAME_TO_GROUP[d.Name] then
+                local g = NAME_TO_GROUP[d.Name]
+                targetMotors[g] = targetMotors[g] or {}
+                table.insert(targetMotors[g], d)
+            end
+        end
+
+        -- Per-frame pick the source motor with the largest transform delta:
+        -- in R6-adapter games only the R6 motor is animated; the R15 twin
+        -- stays at identity. This automatically routes the animated one.
+        local function _routedPose(group)
+            local list = sourceMotors[group]
+            if not list then return nil end
+            local best, bestMag = nil, -1
+            for _, m in ipairs(list) do
+                if m and m.Parent then
+                    local ok, t = pcall(function() return m.Transform end)
+                    if ok and t then
+                        local mag = t.Position.Magnitude + (t - CFrame.new(t.Position)).LookVector:Dot(Vector3.new(0,0,-1))
+                        -- Simpler heuristic: any non-identity wins over identity.
+                        local isId = (t.Position.Magnitude < 1e-4) and (math.abs(t.LookVector.Z + 1) < 1e-3) and (math.abs(t.UpVector.Y - 1) < 1e-3)
+                        local score = isId and 0 or (1 + t.Position.Magnitude)
+                        if score > bestMag then best, bestMag = t, score end
                     end
                 end
             end
-            return nil
+            return best
         end
 
-        local function _nearestBodyGroup(part)
-            local g = TARGET_GROUP[part.Name]
-            if g then return g end
-            g = _attachmentGroup(part)
-            if g then return g end
-            local bestGroup, bestDist = "Torso", math.huge
-            for _, bp in ipairs(bodyParts) do
-                local bg = TARGET_GROUP[bp.Name]
-                if bg then
-                    local dist = (bp.Position - part.Position).Magnitude
-                    if dist < bestDist then bestGroup, bestDist = bg, dist end
-                end
-            end
-            return bestGroup or "Torso"
-        end
-
-        local syncParts = {}
-        for _, p in ipairs(model:GetDescendants()) do
-            if p:IsA("BasePart") then
-                p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.Massless = true, false, false, false, true
-                local group = _nearestBodyGroup(p)
-                local base = baseCF[group] or baseCF.Root or hrp.CFrame
-                local offset = CFrame.new()
-                pcall(function() offset = base:ToObjectSpace(p.CFrame) end)
-                syncParts[#syncParts + 1] = { part = p, group = group, offset = offset }
-            end
-        end
 
         local function _syncPose()
             if not (scriptRunning and _cpmActive and _overlay == model and ch and ch.Parent and hrp and hrp.Parent) then return end
-            for _, item in ipairs(syncParts) do
-                local part = item.part
-                if part and part.Parent then
-                    local src = _sourceCF(item.group)
-                    if _validCF(src) then
-                        part.CFrame = src * (item.offset or CFrame.new())
-                        part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                        part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            if rootPart and rootPart.Parent then
+                rootPart.CFrame = hrp.CFrame
+                rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            else
+                pcall(function() model:PivotTo(hrp.CFrame) end)
+            end
+            for g, motors in pairs(targetMotors) do
+                local pose = _routedPose(g)
+                if pose then
+                    for _, m in ipairs(motors) do
+                        if m and m.Parent then
+                            pcall(function() m.Transform = pose end)
+                        end
                     end
                 end
             end
@@ -14249,11 +14141,12 @@ do
 
         _syncPose()
         if _syncConn then pcall(function() _syncConn:Disconnect() end) end
-        local poseSignal = RunService.Heartbeat or RunService.RenderStepped or RunService.Stepped
+        local poseSignal = RunService.PreSimulation or RunService.Stepped or RunService.Heartbeat
         _syncConn = connectSignal(poseSignal:Connect(function()
             pcall(_syncPose)
         end))
     end
+
 
 
 
@@ -14266,13 +14159,9 @@ do
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
         if not (ch and hum and hum.Health > 0) then return end
         local model = _buildModel(name); if not model then return end
-        -- Uniform final resize so limb offsets scale with the overall height.
-        local cfg = OUTFITS[name]
-        local hs = (cfg and tonumber(cfg.heightScale)) or 1.0
-        if hs ~= 1.0 and model.ScaleTo then
-            pcall(function() model:ScaleTo(hs) end)
-        end
-        model:SetAttribute("EclipseCPMHeightScale", hs)
+        -- Never resize the dummy here. Animations are copied into the model's
+        -- current skeleton size; changing height/scale is what caused distortion.
+        model:SetAttribute("EclipseCPMHeightScale", 1)
         _overlay = model
         _cpmActive = true
         _G.EclipseCPMActive = true
