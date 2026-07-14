@@ -2306,7 +2306,7 @@ local Config = {
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, FreezeOnBuy=false, AutoStop=false, QuickStopOptions={} },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=25, AutoSkillSmooth=0.05, AutoSkillDistance=600, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=60, AutoSkillSmooth=0, AutoSkillDistance=1200, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -11411,8 +11411,6 @@ ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=fu
 
 
 Config.Extras = Config.Extras or {}
-Config.Extras.AutoEmote = Config.Extras.AutoEmote or Config.Extras.AutoFarpar or false
-Config.Extras.AutoFarpar = Config.Extras.AutoFarpar or Config.Extras.AutoEmote or false
 Config.Visuals.BulletImpact      = false
 Config.Visuals.BulletImpactColor = Color3.fromRGB(255, 255, 255)
 
@@ -12393,13 +12391,13 @@ do
         ASGB:AddToggle("AS_Enable", { Text = "AUTOSKILL", Default = false,
             Callback = function(v) Config.Misc.AutoSkill = (v and not EX_BLOCK_SILENT) end })
             :AddKeyPicker("AS_Key", { Default = "K", SyncToggleState = true, Mode = "Toggle", Text = "Auto Kill" })
-        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYL SPEED", Default = 25, Min = 1, Max = 60, Rounding = 0, Suffix = "",
+        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYL SPEED", Default = 60, Min = 1, Max = 120, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSpeed = v end })
-        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYL SMOOTH", Default = 0.05, Min = 0, Max = 1, Rounding = 2, Suffix = "",
+        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYL SMOOTH", Default = 0, Min = 0, Max = 0.2, Rounding = 2, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSmooth = v end })
-        Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 600
+        Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 1200
         Config.Misc.AutoSkillPart     = Config.Misc.AutoSkillPart or "Head"
-        ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 600, Rounding = 0, Suffix = "",
+        ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 1400, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillDistance = v end })
         -- AutoSkill segue o TEAM CHECK global (Config.TeamCheck); sem toggle próprio.
         -- SILENT AIM lives in Aim tab now; keep config keys here for shared state.
@@ -13467,8 +13465,16 @@ do
             },
         },
         ["Tung Tung Sahur"] = {
-            bodyType    = "r15",
+            bodyType    = "mickey",
             skinColor   = Color3.fromRGB(120, 80, 45),
+            bodyAssets  = {
+                Torso    = 15872749347,
+                RightArm = 15872746109,
+                LeftArm  = 15872746095,
+                LeftLeg  = 15872746204,
+                RightLeg = 15872749396,
+                Head     = 15872749227,
+            },
             overlayBundle = 200433974847944,
         },
         ["Skeleton Pencil"] = {
@@ -13478,8 +13484,16 @@ do
             hideDefaultHead = true,
         },
         ["Shark Man"] = {
-            bodyType    = "r15",
+            bodyType    = "mickey",
             skinColor   = Color3.fromRGB(90, 130, 170),
+            bodyAssets  = {
+                Torso    = 15872749347,
+                RightArm = 15872746109,
+                LeftArm  = 15872746095,
+                LeftLeg  = 15872746204,
+                RightLeg = 15872749396,
+                Head     = 15872749227,
+            },
             overlayBundle = 1600307,
         },
         ["Skinny Guy"] = {
@@ -14127,11 +14141,18 @@ do
     local function _clearOverlay()
         if _syncConn then pcall(function() _syncConn:Disconnect() end) end
         _syncConn = nil
-        if _overlay then pcall(function() _overlay:Destroy() end) end
+        local oldOverlay = _overlay
         _overlay = nil
         _cpmActive = false
         _G.EclipseCPMActive = false
         _restoreOriginal()
+        if oldOverlay and oldOverlay.Parent then
+            pcall(function() oldOverlay:Destroy() end)
+        end
+        pcall(function()
+            local stale = workspace:FindFirstChild("EclipseCPMOverlay")
+            if stale and stale ~= oldOverlay then stale:Destroy() end
+        end)
     end
 
     local function _hideOriginal(ch)
@@ -16257,73 +16278,6 @@ end)()
         Callback=function(v) Config.KeybindList.Enabled = v end,
     })
 
-    ExtrasGB:AddToggle("AutoFarpar_Toggle", {
-        Text="AUTO EMOTE", Default=false,
-        Callback=function(v)
-            Config.Extras.AutoEmote = v
-            Config.Extras.AutoFarpar = v
-        end,
-    })
-
-    -- AUTO FARPAR — when every enemy on the server is dead, play the
-    -- Scuba Nick Wilde emote (asset 70919402339484) locally on the LP
-    -- character. Purely visual for the local user (LoadAnimation on the
-    -- LP humanoid does not replicate to other players in most cases).
-    ;(function()
-        local _emote = { anim = nil, track = nil, playing = false, lastState = nil }
-        local function _getEmote()
-            if _emote.anim then return _emote.anim end
-            local a = Instance.new("Animation")
-            a.AnimationId = "rbxassetid://70919402339484"
-            _emote.anim = a
-            return a
-        end
-        local function _enemiesAlive()
-            for _, pl in ipairs(Players:GetPlayers()) do
-                if pl ~= LocalPlayer then
-                    if _IS_DEATHMATCH or not (Config.TeamCheck and IsAlly and IsAlly(pl)) then
-                        local ch = pl.Character
-                        local h  = ch and ch:FindFirstChildOfClass("Humanoid")
-                        if h and h.Health > 0 then return true end
-                    end
-                end
-            end
-            return false
-        end
-        connectSignal(RunService.Heartbeat:Connect(function()
-            if not scriptRunning then return end
-            if not (Config.Extras.AutoEmote or Config.Extras.AutoFarpar) then
-                if _emote.track then pcall(function() _emote.track:Stop() end) end
-                _emote.playing = false; _emote.lastState = nil
-                return
-            end
-            local ch = LocalPlayer and LocalPlayer.Character
-            local h  = ch and ch:FindFirstChildOfClass("Humanoid")
-            if not h or h.Health <= 0 then
-                if _emote.track then pcall(function() _emote.track:Stop() end) end
-                _emote.playing = false; return
-            end
-            local alive = _enemiesAlive()
-            if _emote.lastState == alive then
-                if not alive and _emote.track and not _emote.track.IsPlaying then
-                    pcall(function() _emote.track:Play() end)
-                end
-                return
-            end
-            _emote.lastState = alive
-            if alive then
-                if _emote.track then pcall(function() _emote.track:Stop() end) end
-                _emote.playing = false
-            else
-                local ok, tr = pcall(function() return h:LoadAnimation(_getEmote()) end)
-                if ok and tr then
-                    _emote.track = tr
-                    pcall(function() tr.Looped = true; tr:Play() end)
-                    _emote.playing = true
-                end
-            end
-        end))
-    end)()
 
     local SoundGB = Tabs.Misc:AddLeftGroupbox("CUSTOM SHOOT SOUNDS")
     if EX_LIMITED then
@@ -17805,14 +17759,14 @@ end)
                     -- Knife equipped: back off HARD so we don't spin the loop
                     _weaponTable = nil
                     _lastTarget  = nil
-                    task.wait(0.5)
+                    task.wait(0.2)
                     break
                 end
                 local rounds = rawget(w, "Rounds") or 0
                 if rounds <= 0 then pcall(_tryRefill, w); break end
 
                 local myKey  = _asTeamKey(LocalPlayer)
-                local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 600
+                local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 1200
                 local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
                 local killed = 0
                 local skipTeam = _IS_DEATHMATCH or (not Config.TeamCheck)
@@ -17834,7 +17788,9 @@ end)
                         end
                         _sendKill(pl, w)
                         killed = killed + 1
-                        task.wait() -- yield between kills to avoid frame spikes
+                        if killed < 3 then
+                            task.wait(0.01)
+                        end
                     until true
 
                 end
@@ -18243,6 +18199,18 @@ end)
         return true
     end
 
+    local function _canShowTracer()
+        if not S.enabled then return false end
+        local ch = LocalPlayer and LocalPlayer.Character
+        if not ch then return false end
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        if not (hum and hum.Health > 0) then return false end
+        for _, child in ipairs(ch:GetChildren()) do
+            if child:IsA("Tool") then return true end
+        end
+        return false
+    end
+
     local function _destroyEffect(item)
         if not item then return end
         if typeof(item) == "Instance" then
@@ -18406,7 +18374,7 @@ end)
     end
 
     local function _cameraFallback()
-        if not S.enabled then return end
+        if not _canShowTracer() then return end
         local now = os.clock()
         if now - S.lastInputShot < 0.07 then return end
         S.lastInputShot = now
@@ -18444,6 +18412,10 @@ end)
             local vfx = nr and nr:FindFirstChild("VFX")
             local ct = vfx and vfx:FindFirstChild("CreateTracer")
             if ct and ct:IsA("RemoteEvent") then return ct end
+            local root = RS:FindFirstChild("NetworkRemotes")
+            if root and root:FindFirstChild("CreateTracer") then
+                return root:FindFirstChild("CreateTracer")
+            end
             return nil
         end)
         return ok and ev or nil
@@ -18465,11 +18437,11 @@ end)
         end
 
         S.conns[#S.conns + 1] = UIS.InputBegan:Connect(function(input, gameProcessed)
-            if not S.enabled then return end
+            if not _canShowTracer() then return end
             if gameProcessed and UIS:GetFocusedTextBox() then return end
             local t = input.UserInputType
             if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
-                _cameraFallback()
+                task.defer(_cameraFallback)
             end
         end)
 
