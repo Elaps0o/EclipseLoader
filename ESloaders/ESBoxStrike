@@ -2306,7 +2306,7 @@ local Config = {
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, FreezeOnBuy=false, AutoStop=false, QuickStopOptions={} },
     World    = { Weather="None" },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=140, AutoSkillSmooth=0, AutoSkillDistance=999999, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=140, AutoSkillSmooth=0, AutoSkillDistance=600, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -12391,13 +12391,14 @@ do
         ASGB:AddToggle("AS_Enable", { Text = "AUTOSKILL", Default = false,
             Callback = function(v) Config.Misc.AutoSkill = (v and not EX_BLOCK_SILENT) end })
             :AddKeyPicker("AS_Key", { Default = "K", SyncToggleState = true, Mode = "Toggle", Text = "Auto Kill" })
-        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYL SPEED", Default = 140, Min = 1, Max = 220, Rounding = 0, Suffix = "",
+        ASGB:AddSlider("AS_Speed", { Text = "CHERNOBYL SPEED", Default = 220, Min = 1, Max = 400, Rounding = 0, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSpeed = v end })
-        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYL SMOOTH", Default = 0, Min = 0, Max = 0.1, Rounding = 2, Suffix = "",
+        ASGB:AddSlider("AS_Smooth", { Text = "CHERNOBYL SMOOTH", Default = 0, Min = 0, Max = 0.03, Rounding = 3, Suffix = "",
             Callback = function(v) Config.Misc.AutoSkillSmooth = v end })
-        Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 999999
+        Config.Misc.AutoSkillDistance = Config.Misc.AutoSkillDistance or 600
         Config.Misc.AutoSkillPart     = Config.Misc.AutoSkillPart or "Head"
-        ASGB:AddLabel("RANGE: UNLIMITED")
+        ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 600, Rounding = 0, Suffix = "m",
+            Callback = function(v) Config.Misc.AutoSkillDistance = v end })
         -- AutoSkill segue o TEAM CHECK global (Config.TeamCheck); sem toggle próprio.
         -- SILENT AIM lives in Aim tab now; keep config keys here for shared state.
         Config.Misc.SilentAim         = false
@@ -13468,6 +13469,7 @@ do
             skinColor   = Color3.fromRGB(120, 80, 45),
             bodyBundle  = 200433974847944,
             overlayBundle = 200433974847944,
+            hideDefaultHead = true,
         },
         ["Skeleton Pencil"] = {
             bodyType    = "bundle",
@@ -13480,6 +13482,21 @@ do
             skinColor   = Color3.fromRGB(90, 130, 170),
             bodyBundle  = 1600307,
             overlayBundle = 1600307,
+            hideDefaultHead = true,
+        },
+        ["Big Foot"] = {
+            bodyType    = "bundle",
+            skinColor   = Color3.fromRGB(90, 70, 55),
+            bodyBundle  = 177459629406961,
+            overlayBundle = 177459629406961,
+            hideDefaultHead = true,
+        },
+        ["Mini Big Guy"] = {
+            bodyType    = "bundle",
+            skinColor   = Color3.fromRGB(140, 105, 80),
+            bodyBundle  = 141428550660190,
+            overlayBundle = 141428550660190,
+            hideDefaultHead = true,
         },
         ["Skinny Guy"] = {
             bodyType    = "r15",
@@ -14391,7 +14408,7 @@ do
     MiscGB:AddDropdown("CustomPlayerModel_DD", {
         Text = "CUSTOM PLAYER MODEL",
         Default = "Off",
-        Values = { "Off", "Clown", "Mickey Mouse", "Tung Tung Sahur", "Skeleton Pencil", "Shark Man", "Skinny Guy" },
+        Values = { "Off", "Clown", "Mickey Mouse", "Tung Tung Sahur", "Skeleton Pencil", "Shark Man", "Big Foot", "Mini Big Guy", "Skinny Guy" },
         Callback = function(v)
             Config.Misc.CustomPlayerModel = v
             task.spawn(function()
@@ -17725,9 +17742,9 @@ end)
 
     task.spawn(function()
         while scriptRunning do
-            local spd    = math.clamp(tonumber(Config.Misc.AutoSkillSpeed)  or 25, 1, 60)
+            local spd    = math.clamp(tonumber(Config.Misc.AutoSkillSpeed)  or 220, 1, 400)
             local smooth = math.max(0, tonumber(Config.Misc.AutoSkillSmooth) or 0)
-            local dt     = (1 / spd) + smooth
+            local dt     = math.max(0.001, (1 / spd) + smooth)
             task.wait(dt)
 
             repeat
@@ -17751,8 +17768,8 @@ end)
                 if rounds <= 0 then pcall(_tryRefill, w); break end
 
                 local myKey  = _asTeamKey(LocalPlayer)
-                local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 999999
-                if maxD <= 0 then maxD = 999999 end
+                local maxD   = tonumber(Config.Misc.AutoSkillDistance) or 600
+                if maxD <= 0 then maxD = 600 end
                 local origin = (Camera and Camera.CFrame.Position) or Vector3.new()
                 local killed = 0
                 local skipTeam = _IS_DEATHMATCH or (not Config.TeamCheck)
@@ -17774,8 +17791,8 @@ end)
                         end
                         _sendKill(pl, w)
                         killed = killed + 1
-                        if killed < 3 then
-                            task.wait(0.001)
+                        if killed < 6 then
+                            task.wait(0.0001)
                         end
                     until true
 
