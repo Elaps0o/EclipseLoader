@@ -6498,151 +6498,154 @@ function updateAimbot()
     end
 end
 
-local lastTrigger = 0
-local _trigR8Shots = 0
-local _trigLastWepId = nil
-local function _isR8Equipped()
-    local find = _G.EclipseAS_FindEquipped
-    if type(find) ~= "function" then return false, nil end
-    local ok, w = pcall(find)
-    if not ok or not w then return false, nil end
-    local id = tostring(rawget(w, "Identifier") or ""):lower()
-    return (id == "r8" or id == "revolver"), id
-end
-local _trigLastScan = 0
-local _trigSilentLastScan = 0
-local _trigSilentCached = nil
-local _trigLastTool = nil
-local _trigLastToolIsKnife = false
-local _trigRP = RaycastParams.new()
-_trigRP.FilterType = Enum.RaycastFilterType.Exclude
-local function _trigSetIgnore(cam)
-    local ig = { cam or Camera }
-    if LocalPlayer.Character then ig[#ig + 1] = LocalPlayer.Character end
-    _trigRP.FilterDescendantsInstances = ig
-    return _trigRP
-end
-function updateTriggerBot()
-    if not Config.GlobalEnable or not Config.TriggerBot.Enabled or not IsAlive() then return end
-    -- Throttle scan/raycast work to ~8Hz. Raycast + FOV loop + AutoWall stats
-    -- is the single hottest path in the script; anything faster than a human
-    -- reaction (~120ms) is wasted CPU that shows up as visible frame drops
-    -- on mid/low-end devices. 125ms keeps the bot instant-feeling while
-    -- cutting per-frame cost by ~50% vs 15Hz.
-    local now = tick()
-    if (now - _trigLastScan) < 0.20 then return end
-    _trigLastScan = now
+local updateTriggerBot
+updateTriggerBot = (function()
+    local lastTrigger = 0
+    local _trigR8Shots = 0
+    local _trigLastWepId = nil
+    local function _isR8Equipped()
+        local find = _G.EclipseAS_FindEquipped
+        if type(find) ~= "function" then return false, nil end
+        local ok, w = pcall(find)
+        if not ok or not w then return false, nil end
+        local id = tostring(rawget(w, "Identifier") or ""):lower()
+        return (id == "r8" or id == "revolver"), id
+    end
+    local _trigLastScan = 0
+    local _trigSilentLastScan = 0
+    local _trigSilentCached = nil
+    local _trigLastTool = nil
+    local _trigLastToolIsKnife = false
+    local _trigRP = RaycastParams.new()
+    _trigRP.FilterType = Enum.RaycastFilterType.Exclude
+    local function _trigSetIgnore(cam)
+        local ig = { cam or Camera }
+        if LocalPlayer.Character then ig[#ig + 1] = LocalPlayer.Character end
+        _trigRP.FilterDescendantsInstances = ig
+        return _trigRP
+    end
+    return function()
+        if not Config.GlobalEnable or not Config.TriggerBot.Enabled or not IsAlive() then return end
+        -- Throttle scan/raycast work to ~8Hz. Raycast + FOV loop + AutoWall stats
+        -- is the single hottest path in the script; anything faster than a human
+        -- reaction (~120ms) is wasted CPU that shows up as visible frame drops
+        -- on mid/low-end devices. 125ms keeps the bot instant-feeling while
+        -- cutting per-frame cost by ~50% vs 15Hz.
+        local now = tick()
+        if (now - _trigLastScan) < 0.20 then return end
+        _trigLastScan = now
 
-    -- MELEE / KNIFE GATE: TriggerBot cannot fire a bullet with a knife equipped.
-    -- Cheap cached check on the equipped Tool — no AutoSkill globals, no
-    -- string ops per frame. When a knife is out we bail immediately AND
-    -- push the next scan out 250ms so we don't burn CPU on melee.
-    do
-        local ch = LocalPlayer and LocalPlayer.Character
-        local tool = ch and ch:FindFirstChildOfClass("Tool") or nil
-        if tool ~= _trigLastTool then
-            _trigLastTool = tool
-            _trigLastToolIsKnife = false
-            if tool then
-                local n = string.lower(tool.Name or "")
-                if n:find("knife", 1, true) or n:find("bayonet", 1, true)
-                    or n:find("karambit", 1, true) or n:find("daggers", 1, true)
-                    or n:find("kukri", 1, true) or n == "melee"
-                    or (KNIVES and KNIVES[tool.Name] == true) then
-                    _trigLastToolIsKnife = true
+        -- MELEE / KNIFE GATE: TriggerBot cannot fire a bullet with a knife equipped.
+        -- Cheap cached check on the equipped Tool — no AutoSkill globals, no
+        -- string ops per frame. When a knife is out we bail immediately AND
+        -- push the next scan out 250ms so we don't burn CPU on melee.
+        do
+            local ch = LocalPlayer and LocalPlayer.Character
+            local tool = ch and ch:FindFirstChildOfClass("Tool") or nil
+            if tool ~= _trigLastTool then
+                _trigLastTool = tool
+                _trigLastToolIsKnife = false
+                if tool then
+                    local n = string.lower(tool.Name or "")
+                    if n:find("knife", 1, true) or n:find("bayonet", 1, true)
+                        or n:find("karambit", 1, true) or n:find("daggers", 1, true)
+                        or n:find("kukri", 1, true) or n == "melee"
+                        or (KNIVES and KNIVES[tool.Name] == true) then
+                        _trigLastToolIsKnife = true
+                    end
                 end
             end
+            if _trigLastToolIsKnife then
+                _trigLastScan = now + 0.25
+                return
+            end
         end
-        if _trigLastToolIsKnife then
-            _trigLastScan = now + 0.25
-            return
+
+
+        local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
+        local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
+        if not isNoSpread and (now - lastTrigger) < delay then return end
+
+        local fire = false
+        if isNoSpread then
+            fire = true
+        elseif Config.TriggerBot.Mode == "HitChance" then
+            if math.random(1,100) <= Config.TriggerBot.HitChance then fire = true end
         end
-    end
+        if not fire then return end
 
+        -- R8 REVOLVER — after the first shot, press LMB + RMB simultaneously
+        -- to trigger the alt-fire follow-up cadence used by the R8 in-game.
+        local isR8, r8Id = _isR8Equipped()
+        if r8Id ~= _trigLastWepId then _trigR8Shots = 0; _trigLastWepId = r8Id end
+        local r8DualNow = isR8 and (_trigR8Shots >= 1)
 
-    local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
-    local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
-    if not isNoSpread and (now - lastTrigger) < delay then return end
-
-    local fire = false
-    if isNoSpread then
-        fire = true
-    elseif Config.TriggerBot.Mode == "HitChance" then
-        if math.random(1,100) <= Config.TriggerBot.HitChance then fire = true end
-    end
-    if not fire then return end
-
-    -- R8 REVOLVER — after the first shot, press LMB + RMB simultaneously
-    -- to trigger the alt-fire follow-up cadence used by the R8 in-game.
-    local isR8, r8Id = _isR8Equipped()
-    if r8Id ~= _trigLastWepId then _trigR8Shots = 0; _trigLastWepId = r8Id end
-    local r8DualNow = isR8 and (_trigR8Shots >= 1)
-
-    local function _doClick()
-        -- Sinaliza para o Silent Aim que o disparo veio do TriggerBot,
-        -- para que ele conte como um MB1 real e redirecione a bala.
-        _G.EclipseMB1Virtual = true
-        if r8DualNow then
-            if mouse1press then pcall(mouse1press) end
-            if mouse2press then pcall(mouse2press) end
-            task.delay(0.08, function()
-                if mouse1release then pcall(mouse1release) end
-                if mouse2release then pcall(mouse2release) end
-                task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
-            end)
-        elseif isNoSpread then
-            if mouse1press then pcall(mouse1press) end
-            task.delay(0.08, function()
-                if mouse1release then pcall(mouse1release) end
-                task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
-            end)
-        else
-            if mouse1click then pcall(mouse1click) end
-            task.delay(0.25, function() _G.EclipseMB1Virtual = false end)
+        local function _doClick()
+            -- Sinaliza para o Silent Aim que o disparo veio do TriggerBot,
+            -- para que ele conte como um MB1 real e redirecione a bala.
+            _G.EclipseMB1Virtual = true
+            if r8DualNow then
+                if mouse1press then pcall(mouse1press) end
+                if mouse2press then pcall(mouse2press) end
+                task.delay(0.08, function()
+                    if mouse1release then pcall(mouse1release) end
+                    if mouse2release then pcall(mouse2release) end
+                    task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
+                end)
+            elseif isNoSpread then
+                if mouse1press then pcall(mouse1press) end
+                task.delay(0.08, function()
+                    if mouse1release then pcall(mouse1release) end
+                    task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
+                end)
+            else
+                if mouse1click then pcall(mouse1click) end
+                task.delay(0.25, function() _G.EclipseMB1Virtual = false end)
+            end
+            if isR8 then _trigR8Shots = _trigR8Shots + 1 end
         end
-        if isR8 then _trigR8Shots = _trigR8Shots + 1 end
-    end
-    local function _tryFireOnPlayer(pl)
-        if not pl or pl == LocalPlayer then return false end
-        if not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl) then return false end
-        local ch = pl.Character; if not ch then return false end
-        local h = ch:FindFirstChildOfClass("Humanoid"); if not h or h.Health <= 0 then return false end
-        lastTrigger = tick()
-        _doClick()
-        return true
-    end
+        local function _tryFireOnPlayer(pl)
+            if not pl or pl == LocalPlayer then return false end
+            if not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl) then return false end
+            local ch = pl.Character; if not ch then return false end
+            local h = ch:FindFirstChildOfClass("Humanoid"); if not h or h.Health <= 0 then return false end
+            lastTrigger = tick()
+            _doClick()
+            return true
+        end
 
-    -- (Silent Aim integration removed — TriggerBot is now pure crosshair
-    -- raycast to avoid multi-player raycast storms that were tanking FPS,
-    -- especially while holding a knife.)
+        -- (Silent Aim integration removed — TriggerBot is now pure crosshair
+        -- raycast to avoid multi-player raycast storms that were tanking FPS,
+        -- especially while holding a knife.)
 
 
 
-    -- Fluxo tradicional: raycast pela mira.
-    local vp = Camera.ViewportSize
-    local sp = isNoSpread and 0 or (tonumber(Config.TriggerBot.Spread) or 0)
-    local ap = Vector2.new(vp.X/2, vp.Y/2)
-    if sp > 0 then ap = ap + Vector2.new(math.random(-sp, sp), math.random(-sp, sp)) end
-    local ray = Camera:ViewportPointToRay(ap.X, ap.Y)
-    local rp = _trigSetIgnore(Camera)
-    local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
-    if r and r.Instance then
-        local m = r.Instance:FindFirstAncestorOfClass("Model")
-        if m and m:FindFirstChildOfClass("Humanoid") then
-            local plr = Players:GetPlayerFromCharacter(m)
-            if _tryFireOnPlayer(plr) then return end
-        elseif Config.TriggerBot.AutoWall then
-            local origin = ray.Origin
-            local dir = ray.Direction.Unit
-            for _, pl in ipairs(Players:GetPlayers()) do
-                if pl ~= LocalPlayer and pl.Character then
-                    local root = pl.Character:FindFirstChild("HumanoidRootPart")
-                    if root then
-                        local toRoot = (root.Position - origin)
-                        if toRoot.Magnitude > 0 and math.acos(math.clamp(dir:Dot(toRoot.Unit), -1, 1)) < math.rad(2.5) then
-                            local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
-                            if pStats and pStats.Success then
-                                if _tryFireOnPlayer(pl) then return end
+        -- Fluxo tradicional: raycast pela mira.
+        local vp = Camera.ViewportSize
+        local sp = isNoSpread and 0 or (tonumber(Config.TriggerBot.Spread) or 0)
+        local ap = Vector2.new(vp.X/2, vp.Y/2)
+        if sp > 0 then ap = ap + Vector2.new(math.random(-sp, sp), math.random(-sp, sp)) end
+        local ray = Camera:ViewportPointToRay(ap.X, ap.Y)
+        local rp = _trigSetIgnore(Camera)
+        local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
+        if r and r.Instance then
+            local m = r.Instance:FindFirstAncestorOfClass("Model")
+            if m and m:FindFirstChildOfClass("Humanoid") then
+                local plr = Players:GetPlayerFromCharacter(m)
+                if _tryFireOnPlayer(plr) then return end
+            elseif Config.TriggerBot.AutoWall then
+                local origin = ray.Origin
+                local dir = ray.Direction.Unit
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl ~= LocalPlayer and pl.Character then
+                        local root = pl.Character:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local toRoot = (root.Position - origin)
+                            if toRoot.Magnitude > 0 and math.acos(math.clamp(dir:Dot(toRoot.Unit), -1, 1)) < math.rad(2.5) then
+                                local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
+                                if pStats and pStats.Success then
+                                    if _tryFireOnPlayer(pl) then return end
+                                end
                             end
                         end
                     end
@@ -6650,7 +6653,8 @@ function updateTriggerBot()
             end
         end
     end
-end
+end)() -- close do-block isolating trigger bot upvalues
+
 
 
 
