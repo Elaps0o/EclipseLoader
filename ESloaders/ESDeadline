@@ -514,6 +514,15 @@ pcall(function()
     local info = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
     if info and info.Name then GameName = info.Name end
 end)
+do
+    local lower = string.lower(GameName or "")
+    if not (string.find(lower, "7v7", 1, true) or string.find(lower, "20v20", 1, true)) then
+        pcall(function()
+            LocalPlayer:Kick("Eclipse Hub: this loader supports Deadline 7v7 / 20v20 only. Current game: " .. tostring(GameName))
+        end)
+        error("Eclipse Hub: game name mismatch (expected 7v7 or 20v20).")
+    end
+end
 local wasKicked = false
 
 local NLLib
@@ -2101,6 +2110,8 @@ end
 local function _isEclipseError(message, stack, scriptObj)
     local blob = tostring(message or "") .. "\n" .. tostring(stack or "") .. "\n" .. tostring(scriptObj and scriptObj:GetFullName() or "")
     local low = string.lower(blob)
+    if string.find(low, "lacking capability", 1, true) then return false end
+    if string.find(low, "cannot access", 1, true) and string.find(low, "capability", 1, true) then return false end
     if string.find(low, "eclipse", 1, true) then return true end
     if string.find(low, "obsidian", 1, true) then return true end
     if string.find(low, "linoria",  1, true) then return true end
