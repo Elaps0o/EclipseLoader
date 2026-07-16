@@ -5599,7 +5599,7 @@ function updateAimbot()
     end
 end
 
-do
+;(function()
 local lastTrigger = 0
 local _trigR8Shots = 0
 local _trigLastWepId = nil
@@ -5734,7 +5734,7 @@ function updateTriggerBot()
         end
 end
 end
-end
+end)()
 
 ;(function()
 local ControllerCache = {}
