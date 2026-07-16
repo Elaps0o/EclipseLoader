@@ -11510,7 +11510,7 @@ SafeAddDropdown(PVGB, "PV_KillEffectType", {
 PVGB:AddToggle("PV_KillNameAnim", { Text="KILL NAME ANIM", Default=false,
     Callback=function(v) Config.Visuals.KillNameAnim=v end })
 SafeAddDropdown(PVGB, "PV_KillNameAnimStyle", {
-    Text="ANIM STYLE", Values={"Rainbow","Reveal","Glitch","Wave","Particles"},
+    Text="ANIM STYLE", Values={"Rainbow","Reveal","Glitch","Wave"},
     Default=Config.Visuals.KillNameAnimStyle or "Rainbow",
     Callback=function(v) Config.Visuals.KillNameAnimStyle=v end,
 })
@@ -18431,13 +18431,6 @@ end)()
                             math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255), target:sub(i, i))
                     end
                     rich = "<b>" .. table.concat(buf) .. "</b>"
-                elseif style == "Particles" then
-                    local sparks = ({"✦","✧","★","✩","·","•"})[((math.floor(t * 8)) % 6) + 1]
-                    local h = (t * 0.6) % 1
-                    local c = Color3.fromHSV(h, 1, 1)
-                    local hex = string.format("#%02X%02X%02X",
-                        math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
-                    rich = string.format('<b><font color="%s">%s %s %s</font></b>', hex, sparks, target, sparks)
                 else -- Rainbow (default RGB)
                     local h = (t * 0.6) % 1
                     local c = Color3.fromHSV(h, 1, 1)
@@ -18446,10 +18439,15 @@ end)()
                     rich = string.format('<b><font color="%s">%s</font></b>', hex, target)
                 end
                 local finalTag = iconTag .. rich
+                -- Escape %/backreferences so gsub treats finalTag as a literal.
+                local safeTag = finalTag:gsub("%%", "%%%%")
+                local safeName = lpName:gsub("(%W)", "%%%1")
                 for d, orig in pairs(originals) do
                     if type(d) == "userdata" and d.Parent and orig then
-                        local newText = orig.Text:gsub(lpName, finalTag)
-                        pcall(function() d.Text = newText end)
+                        local ok, newText = pcall(string.gsub, orig.Text, safeName, safeTag)
+                        if ok and newText then
+                            pcall(function() d.Text = newText end)
+                        end
                     end
                 end
                 task.wait(0.08)
