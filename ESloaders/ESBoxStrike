@@ -2421,10 +2421,18 @@ local function _presenceDecorateLoop()
     task.spawn(function()
         while scriptRunning do
             local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
-            local iconAsset = _resolveEclipseLogoAsset()
-            local iconTag = ""
+            local iconAsset = _resolveEclipseLogoAsset and _resolveEclipseLogoAsset() or nil
+            local pc = ECLIPSE.PresenceColor or Color3.fromRGB(160, 90, 255)
+            local hex = string.format("#%02X%02X%02X",
+                math.floor((pc.R or 0) * 255),
+                math.floor((pc.G or 0) * 255),
+                math.floor((pc.B or 0) * 255))
+            local iconTag
             if type(iconAsset) == "string" and iconAsset ~= "" then
                 iconTag = string.format('<img src="%s" width="16" height="16"/> ', iconAsset)
+            else
+                -- Fallback: colored bullet + wordmark, works even if HttpGet fails
+                iconTag = string.format('<font color="%s"><b>● </b></font>', hex)
             end
             if pg and iconTag ~= "" then
                 -- Build { name = true } set of presence users in this server
@@ -5548,7 +5556,8 @@ function updateWorldESP()
 
 end
 
-local C4Timer = {
+;(function()
+C4Timer = {
     planted     = false,
     bomb        = nil,
     endT        = 0,
@@ -5559,21 +5568,21 @@ local C4Timer = {
     hideAt      = 0,
 }
 
-local C4_FALLBACK_DURATION = 40
-local C4_ATTR_END = {
+C4_FALLBACK_DURATION = 40
+C4_ATTR_END = {
     "ExplodeTime", "ExplosionTime", "DetonationTime", "DetonateTime",
     "BombExplodeTime", "BombExplosionTime", "BombDetonateTime",
     "ExplodesAt", "DetonatesAt", "EndTime", "EndTimestamp", "FinishTime",
 }
-local C4_ATTR_START = {
+C4_ATTR_START = {
     "PlantTime", "PlantedTime", "BombPlantTime", "BombPlantedTime",
     "PlantStartTime", "BombStartedAt", "StartedAt", "StartTime", "CreatedAt", "SpawnTime",
 }
-local C4_ATTR_REMAIN = {
+C4_ATTR_REMAIN = {
     "TimeLeft", "RemainingTime", "BombTimeLeft", "DetonationTimeLeft",
     "FuseRemaining", "Timer", "Countdown",
 }
-local C4_ATTR_DURATION = {
+C4_ATTR_DURATION = {
     "BombDuration", "Duration", "FuseTime", "DetonationDuration",
     "ExplodeDuration", "ExplosionDuration", "C4Duration",
 }
@@ -5704,7 +5713,7 @@ function syncC4Timer(bomb)
     end
 end
 
-local C4UI = {}
+C4UI = {}
 function ensureC4UI()
     if C4UI.frame and C4UI.frame.Parent then return end
     local g = Instance.new("ScreenGui")
@@ -5959,7 +5968,7 @@ function isBombDefused()
     return false
 end
 
-local AutoDefuse = { remote=nil, resolved=false, lastFire=0, holding=false, VIM=nil }
+AutoDefuse = { remote=nil, resolved=false, lastFire=0, holding=false, VIM=nil }
 function resolveDefuseRemote()
     if AutoDefuse.resolved then return AutoDefuse.remote end
     AutoDefuse.resolved = true
@@ -6195,14 +6204,14 @@ function updateC4Timer()
     tryAutoDefuse()
 end
 
-local Lighting = game:GetService("Lighting")
+Lighting = game:GetService("Lighting")
 
-local SmokeHidden   = setmetatable({}, { __mode = "k" })
+SmokeHidden   = setmetatable({}, { __mode = "k" })
 
-local FlashHidden   = setmetatable({}, { __mode = "k" })
-local SmokeDestroyed = setmetatable({}, { __mode = "k" })
-local SmokeQueue = setmetatable({}, { __mode = "k" })
-local SmokeQueueRunning = false
+FlashHidden   = setmetatable({}, { __mode = "k" })
+SmokeDestroyed = setmetatable({}, { __mode = "k" })
+SmokeQueue = setmetatable({}, { __mode = "k" })
+SmokeQueueRunning = false
 
 function destroySmokeFolder(folder)
     if not folder or SmokeDestroyed[folder] then return end
@@ -6222,7 +6231,7 @@ function destroySmokeFolder(folder)
     pcall(function() folder:Destroy() end)
 end
 
-local function queueSmokeFolder(folder)
+function queueSmokeFolder(folder)
     if not folder or SmokeDestroyed[folder] or SmokeQueue[folder] then return end
     SmokeQueue[folder] = true
     if SmokeQueueRunning then return end
@@ -6350,7 +6359,7 @@ function _aimRayHitsSmoke(from, to)
     return false
 end
 
-local _FlashEffectMod
+_FlashEffectMod = nil
 function _isLocalFlashed()
     if not _FlashEffectMod then
         pcall(function()
@@ -6376,7 +6385,7 @@ function _isLocalFlashed()
     return false
 end
 
-local AimState = { lastTarget = nil, acquiredAt = 0, lastTick = 0 }
+AimState = { lastTarget = nil, acquiredAt = 0, lastTick = 0 }
 function updateAimbot()
     if not Config.GlobalEnable or not Config.Aimbot.Enabled or not Config.Aimbot.DrawFOV then
         _setAimFOVVisible(false)
@@ -6498,154 +6507,154 @@ function updateAimbot()
     end
 end
 
-local updateTriggerBot
-updateTriggerBot = (function()
-    local lastTrigger = 0
-    local _trigR8Shots = 0
-    local _trigLastWepId = nil
-    local function _isR8Equipped()
-        local find = _G.EclipseAS_FindEquipped
-        if type(find) ~= "function" then return false, nil end
-        local ok, w = pcall(find)
-        if not ok or not w then return false, nil end
-        local id = tostring(rawget(w, "Identifier") or ""):lower()
-        return (id == "r8" or id == "revolver"), id
-    end
-    local _trigLastScan = 0
-    local _trigSilentLastScan = 0
-    local _trigSilentCached = nil
-    local _trigLastTool = nil
-    local _trigLastToolIsKnife = false
-    local _trigRP = RaycastParams.new()
-    _trigRP.FilterType = Enum.RaycastFilterType.Exclude
-    local function _trigSetIgnore(cam)
-        local ig = { cam or Camera }
-        if LocalPlayer.Character then ig[#ig + 1] = LocalPlayer.Character end
-        _trigRP.FilterDescendantsInstances = ig
-        return _trigRP
-    end
-    return function()
-        if not Config.GlobalEnable or not Config.TriggerBot.Enabled or not IsAlive() then return end
-        -- Throttle scan/raycast work to ~8Hz. Raycast + FOV loop + AutoWall stats
-        -- is the single hottest path in the script; anything faster than a human
-        -- reaction (~120ms) is wasted CPU that shows up as visible frame drops
-        -- on mid/low-end devices. 125ms keeps the bot instant-feeling while
-        -- cutting per-frame cost by ~50% vs 15Hz.
-        local now = tick()
-        if (now - _trigLastScan) < 0.20 then return end
-        _trigLastScan = now
+end)() -- close IIFE isolating C4/smoke/aimbot state
 
-        -- MELEE / KNIFE GATE: TriggerBot cannot fire a bullet with a knife equipped.
-        -- Cheap cached check on the equipped Tool — no AutoSkill globals, no
-        -- string ops per frame. When a knife is out we bail immediately AND
-        -- push the next scan out 250ms so we don't burn CPU on melee.
-        do
-            local ch = LocalPlayer and LocalPlayer.Character
-            local tool = ch and ch:FindFirstChildOfClass("Tool") or nil
-            if tool ~= _trigLastTool then
-                _trigLastTool = tool
-                _trigLastToolIsKnife = false
-                if tool then
-                    local n = string.lower(tool.Name or "")
-                    if n:find("knife", 1, true) or n:find("bayonet", 1, true)
-                        or n:find("karambit", 1, true) or n:find("daggers", 1, true)
-                        or n:find("kukri", 1, true) or n == "melee"
-                        or (KNIVES and KNIVES[tool.Name] == true) then
-                        _trigLastToolIsKnife = true
-                    end
+;(function()
+local lastTrigger = 0
+local _trigR8Shots = 0
+local _trigLastWepId = nil
+local function _isR8Equipped()
+    local find = _G.EclipseAS_FindEquipped
+    if type(find) ~= "function" then return false, nil end
+    local ok, w = pcall(find)
+    if not ok or not w then return false, nil end
+    local id = tostring(rawget(w, "Identifier") or ""):lower()
+    return (id == "r8" or id == "revolver"), id
+end
+local _trigLastScan = 0
+local _trigSilentLastScan = 0
+local _trigSilentCached = nil
+local _trigLastTool = nil
+local _trigLastToolIsKnife = false
+local _trigRP = RaycastParams.new()
+_trigRP.FilterType = Enum.RaycastFilterType.Exclude
+local function _trigSetIgnore(cam)
+    local ig = { cam or Camera }
+    if LocalPlayer.Character then ig[#ig + 1] = LocalPlayer.Character end
+    _trigRP.FilterDescendantsInstances = ig
+    return _trigRP
+end
+function updateTriggerBot()
+    if not Config.GlobalEnable or not Config.TriggerBot.Enabled or not IsAlive() then return end
+    -- Throttle scan/raycast work to ~8Hz. Raycast + FOV loop + AutoWall stats
+    -- is the single hottest path in the script; anything faster than a human
+    -- reaction (~120ms) is wasted CPU that shows up as visible frame drops
+    -- on mid/low-end devices. 125ms keeps the bot instant-feeling while
+    -- cutting per-frame cost by ~50% vs 15Hz.
+    local now = tick()
+    if (now - _trigLastScan) < 0.20 then return end
+    _trigLastScan = now
+
+    -- MELEE / KNIFE GATE: TriggerBot cannot fire a bullet with a knife equipped.
+    -- Cheap cached check on the equipped Tool — no AutoSkill globals, no
+    -- string ops per frame. When a knife is out we bail immediately AND
+    -- push the next scan out 250ms so we don't burn CPU on melee.
+    do
+        local ch = LocalPlayer and LocalPlayer.Character
+        local tool = ch and ch:FindFirstChildOfClass("Tool") or nil
+        if tool ~= _trigLastTool then
+            _trigLastTool = tool
+            _trigLastToolIsKnife = false
+            if tool then
+                local n = string.lower(tool.Name or "")
+                if n:find("knife", 1, true) or n:find("bayonet", 1, true)
+                    or n:find("karambit", 1, true) or n:find("daggers", 1, true)
+                    or n:find("kukri", 1, true) or n == "melee"
+                    or (KNIVES and KNIVES[tool.Name] == true) then
+                    _trigLastToolIsKnife = true
                 end
             end
-            if _trigLastToolIsKnife then
-                _trigLastScan = now + 0.25
-                return
-            end
         end
-
-
-        local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
-        local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
-        if not isNoSpread and (now - lastTrigger) < delay then return end
-
-        local fire = false
-        if isNoSpread then
-            fire = true
-        elseif Config.TriggerBot.Mode == "HitChance" then
-            if math.random(1,100) <= Config.TriggerBot.HitChance then fire = true end
+        if _trigLastToolIsKnife then
+            _trigLastScan = now + 0.25
+            return
         end
-        if not fire then return end
+    end
 
-        -- R8 REVOLVER — after the first shot, press LMB + RMB simultaneously
-        -- to trigger the alt-fire follow-up cadence used by the R8 in-game.
-        local isR8, r8Id = _isR8Equipped()
-        if r8Id ~= _trigLastWepId then _trigR8Shots = 0; _trigLastWepId = r8Id end
-        local r8DualNow = isR8 and (_trigR8Shots >= 1)
 
-        local function _doClick()
-            -- Sinaliza para o Silent Aim que o disparo veio do TriggerBot,
-            -- para que ele conte como um MB1 real e redirecione a bala.
-            _G.EclipseMB1Virtual = true
-            if r8DualNow then
-                if mouse1press then pcall(mouse1press) end
-                if mouse2press then pcall(mouse2press) end
-                task.delay(0.08, function()
-                    if mouse1release then pcall(mouse1release) end
-                    if mouse2release then pcall(mouse2release) end
-                    task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
-                end)
-            elseif isNoSpread then
-                if mouse1press then pcall(mouse1press) end
-                task.delay(0.08, function()
-                    if mouse1release then pcall(mouse1release) end
-                    task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
-                end)
-            else
-                if mouse1click then pcall(mouse1click) end
-                task.delay(0.25, function() _G.EclipseMB1Virtual = false end)
-            end
-            if isR8 then _trigR8Shots = _trigR8Shots + 1 end
+    local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
+    local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
+    if not isNoSpread and (now - lastTrigger) < delay then return end
+
+    local fire = false
+    if isNoSpread then
+        fire = true
+    elseif Config.TriggerBot.Mode == "HitChance" then
+        if math.random(1,100) <= Config.TriggerBot.HitChance then fire = true end
+    end
+    if not fire then return end
+
+    -- R8 REVOLVER — after the first shot, press LMB + RMB simultaneously
+    -- to trigger the alt-fire follow-up cadence used by the R8 in-game.
+    local isR8, r8Id = _isR8Equipped()
+    if r8Id ~= _trigLastWepId then _trigR8Shots = 0; _trigLastWepId = r8Id end
+    local r8DualNow = isR8 and (_trigR8Shots >= 1)
+
+    local function _doClick()
+        -- Sinaliza para o Silent Aim que o disparo veio do TriggerBot,
+        -- para que ele conte como um MB1 real e redirecione a bala.
+        _G.EclipseMB1Virtual = true
+        if r8DualNow then
+            if mouse1press then pcall(mouse1press) end
+            if mouse2press then pcall(mouse2press) end
+            task.delay(0.08, function()
+                if mouse1release then pcall(mouse1release) end
+                if mouse2release then pcall(mouse2release) end
+                task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
+            end)
+        elseif isNoSpread then
+            if mouse1press then pcall(mouse1press) end
+            task.delay(0.08, function()
+                if mouse1release then pcall(mouse1release) end
+                task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
+            end)
+        else
+            if mouse1click then pcall(mouse1click) end
+            task.delay(0.25, function() _G.EclipseMB1Virtual = false end)
         end
-        local function _tryFireOnPlayer(pl)
-            if not pl or pl == LocalPlayer then return false end
-            if not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl) then return false end
-            local ch = pl.Character; if not ch then return false end
-            local h = ch:FindFirstChildOfClass("Humanoid"); if not h or h.Health <= 0 then return false end
-            lastTrigger = tick()
-            _doClick()
-            return true
-        end
+        if isR8 then _trigR8Shots = _trigR8Shots + 1 end
+    end
+    local function _tryFireOnPlayer(pl)
+        if not pl or pl == LocalPlayer then return false end
+        if not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl) then return false end
+        local ch = pl.Character; if not ch then return false end
+        local h = ch:FindFirstChildOfClass("Humanoid"); if not h or h.Health <= 0 then return false end
+        lastTrigger = tick()
+        _doClick()
+        return true
+    end
 
-        -- (Silent Aim integration removed — TriggerBot is now pure crosshair
-        -- raycast to avoid multi-player raycast storms that were tanking FPS,
-        -- especially while holding a knife.)
+    -- (Silent Aim integration removed — TriggerBot is now pure crosshair
+    -- raycast to avoid multi-player raycast storms that were tanking FPS,
+    -- especially while holding a knife.)
 
 
 
-        -- Fluxo tradicional: raycast pela mira.
-        local vp = Camera.ViewportSize
-        local sp = isNoSpread and 0 or (tonumber(Config.TriggerBot.Spread) or 0)
-        local ap = Vector2.new(vp.X/2, vp.Y/2)
-        if sp > 0 then ap = ap + Vector2.new(math.random(-sp, sp), math.random(-sp, sp)) end
-        local ray = Camera:ViewportPointToRay(ap.X, ap.Y)
-        local rp = _trigSetIgnore(Camera)
-        local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
-        if r and r.Instance then
-            local m = r.Instance:FindFirstAncestorOfClass("Model")
-            if m and m:FindFirstChildOfClass("Humanoid") then
-                local plr = Players:GetPlayerFromCharacter(m)
-                if _tryFireOnPlayer(plr) then return end
-            elseif Config.TriggerBot.AutoWall then
-                local origin = ray.Origin
-                local dir = ray.Direction.Unit
-                for _, pl in ipairs(Players:GetPlayers()) do
-                    if pl ~= LocalPlayer and pl.Character then
-                        local root = pl.Character:FindFirstChild("HumanoidRootPart")
-                        if root then
-                            local toRoot = (root.Position - origin)
-                            if toRoot.Magnitude > 0 and math.acos(math.clamp(dir:Dot(toRoot.Unit), -1, 1)) < math.rad(2.5) then
-                                local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
-                                if pStats and pStats.Success then
-                                    if _tryFireOnPlayer(pl) then return end
-                                end
+    -- Fluxo tradicional: raycast pela mira.
+    local vp = Camera.ViewportSize
+    local sp = isNoSpread and 0 or (tonumber(Config.TriggerBot.Spread) or 0)
+    local ap = Vector2.new(vp.X/2, vp.Y/2)
+    if sp > 0 then ap = ap + Vector2.new(math.random(-sp, sp), math.random(-sp, sp)) end
+    local ray = Camera:ViewportPointToRay(ap.X, ap.Y)
+    local rp = _trigSetIgnore(Camera)
+    local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
+    if r and r.Instance then
+        local m = r.Instance:FindFirstAncestorOfClass("Model")
+        if m and m:FindFirstChildOfClass("Humanoid") then
+            local plr = Players:GetPlayerFromCharacter(m)
+            if _tryFireOnPlayer(plr) then return end
+        elseif Config.TriggerBot.AutoWall then
+            local origin = ray.Origin
+            local dir = ray.Direction.Unit
+            for _, pl in ipairs(Players:GetPlayers()) do
+                if pl ~= LocalPlayer and pl.Character then
+                    local root = pl.Character:FindFirstChild("HumanoidRootPart")
+                    if root then
+                        local toRoot = (root.Position - origin)
+                        if toRoot.Magnitude > 0 and math.acos(math.clamp(dir:Dot(toRoot.Unit), -1, 1)) < math.rad(2.5) then
+                            local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
+                            if pStats and pStats.Success then
+                                if _tryFireOnPlayer(pl) then return end
                             end
                         end
                     end
@@ -6653,7 +6662,8 @@ updateTriggerBot = (function()
             end
         end
     end
-end)() -- close do-block isolating trigger bot upvalues
+end
+end)() -- close IIFE isolating trigger bot upvalues
 
 
 
@@ -18357,6 +18367,9 @@ end)()
 
     -- Each invocation spawns its OWN independent coroutine (no shared busy
     -- gate) so multiple simultaneous kills each get their own 20s animation.
+    -- Kill Name Anim: replaces every UI label containing LocalPlayer's name with
+    -- the configured KillNameText, animated in the chosen style. RichText tags
+    -- are computed each frame so RGB / Wave / Rainbow refresh smoothly.
     local function _animateLocalKillName()
         if not Config.GlobalEnable or not Config.Visuals.KillNameAnim then return end
         task.spawn(function()
@@ -18367,7 +18380,6 @@ end)()
             if lpName == "" then return end
             local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
             if not pg then return end
-            -- Cache labels only ONCE at start + poll new descendants every 1s
             local seen, originals = {}, {}
             local function collect()
                 for _, d in ipairs(pg:GetDescendants()) do
@@ -18375,7 +18387,7 @@ end)()
                         local txt = d.Text
                         if type(txt) == "string" and txt:find(lpName, 1, true) then
                             seen[d] = true
-                            originals[d] = { Text=txt, RichText=d.RichText }
+                            originals[d] = { Text = txt, RichText = d.RichText }
                             pcall(function() d.RichText = true end)
                         end
                     end
@@ -18383,25 +18395,64 @@ end)()
             end
             collect()
             local lastScan = tick()
-            local iconAsset = _resolveEclipseLogoAsset()
-            local colorHex = string.format("#%02X%02X%02X",
-                math.floor((ECLIPSE.PresenceColor.R or 0) * 255),
-                math.floor((ECLIPSE.PresenceColor.G or 0) * 255),
-                math.floor((ECLIPSE.PresenceColor.B or 0) * 255))
+            local iconAsset = _resolveEclipseLogoAsset and _resolveEclipseLogoAsset() or nil
             local iconTag = ""
             if type(iconAsset) == "string" and iconAsset ~= "" then
                 iconTag = string.format('<img src="%s" width="16" height="16"/> ', iconAsset)
             end
-            local rich = string.format('<font color="%s">%s%s</font>', colorHex, iconTag, lpName)
             while tick() < finishAt do
-                if tick() - lastScan > 1.0 then collect(); lastScan = tick() end
+                local t = tick()
+                if t - lastScan > 1.0 then collect(); lastScan = t end
+                local elapsed = t - startedAt
+                local target = tostring(Config.Visuals.KillNameText or "ECLIPSE")
+                if target == "" then target = "ECLIPSE" end
+                local style  = tostring(Config.Visuals.KillNameAnimStyle or "Rainbow")
+                local rich
+                if style == "Reveal" then
+                    local reveal = math.max(1, math.min(#target, math.floor(elapsed * (#target / 1.2))))
+                    local shown  = target:sub(1, reveal)
+                    local pad    = target:sub(reveal + 1):gsub(".", "_")
+                    rich = string.format('<b><font color="#ffffff">%s</font><font color="#444444">%s</font></b>', shown, pad)
+                elseif style == "Glitch" then
+                    local hex = ({"#ff00aa","#00ffee","#ffee00","#ffffff"})[((math.floor(t * 10)) % 4) + 1]
+                    local buf = {}
+                    for i = 1, #target do
+                        local c = target:sub(i, i)
+                        if math.random() < 0.15 then c = string.char(math.random(33, 126)) end
+                        buf[#buf + 1] = c
+                    end
+                    rich = string.format('<b><font color="%s">%s</font></b>', hex, table.concat(buf))
+                elseif style == "Wave" then
+                    local buf = {}
+                    for i = 1, #target do
+                        local h = ((t * 0.8) + i * 0.08) % 1
+                        local c = Color3.fromHSV(h, 1, 1)
+                        buf[#buf + 1] = string.format('<font color="#%02X%02X%02X">%s</font>',
+                            math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255), target:sub(i, i))
+                    end
+                    rich = "<b>" .. table.concat(buf) .. "</b>"
+                elseif style == "Particles" then
+                    local sparks = ({"✦","✧","★","✩","·","•"})[((math.floor(t * 8)) % 6) + 1]
+                    local h = (t * 0.6) % 1
+                    local c = Color3.fromHSV(h, 1, 1)
+                    local hex = string.format("#%02X%02X%02X",
+                        math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
+                    rich = string.format('<b><font color="%s">%s %s %s</font></b>', hex, sparks, target, sparks)
+                else -- Rainbow (default RGB)
+                    local h = (t * 0.6) % 1
+                    local c = Color3.fromHSV(h, 1, 1)
+                    local hex = string.format("#%02X%02X%02X",
+                        math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
+                    rich = string.format('<b><font color="%s">%s</font></b>', hex, target)
+                end
+                local finalTag = iconTag .. rich
                 for d, orig in pairs(originals) do
                     if type(d) == "userdata" and d.Parent and orig then
-                        local newText = orig.Text:gsub(lpName, rich)
+                        local newText = orig.Text:gsub(lpName, finalTag)
                         pcall(function() d.Text = newText end)
                     end
                 end
-                task.wait(0.10)
+                task.wait(0.08)
             end
             for d, orig in pairs(originals) do
                 if type(d) == "userdata" and d.Parent and orig then
@@ -19542,23 +19593,40 @@ _G.EclipseBulletTracerFire = function() end
 -- RAPID RELOAD (Misc) — reuses AutoSkill's refill helpers.
 -- Independent loop; safe when AutoSkill is disabled.
 -- ============================================================
-task.spawn(function()
-    while scriptRunning do
-        task.wait(0.25)
-        if not scriptRunning then break end
-        if Config and Config.Misc and Config.Misc.RapidReload then
-            local find = _G.EclipseAS_FindEquipped
-            local refill = _G.EclipseAS_TryRefill
-            local isMelee = _G.EclipseAS_IsMelee
-            if type(find) == "function" and type(refill) == "function" then
-                local ok, w = pcall(find)
-                if ok and w and not (type(isMelee) == "function" and isMelee(w)) then
-                    pcall(refill, w)
+-- Rapid Reload only fires while the R key is held/pressed. It never runs
+-- passively — the user must press R for a refill to be attempted.
+;(function()
+    local UIS = game:GetService("UserInputService")
+    local rDown = false
+    local function _isTextFocused()
+        local ok, res = pcall(function() return UIS:GetFocusedTextBox() end)
+        return ok and res ~= nil
+    end
+    table.insert(UnloadConnections, UIS.InputBegan:Connect(function(input, gpe)
+        if gpe or _isTextFocused() then return end
+        if input.KeyCode == Enum.KeyCode.R then rDown = true end
+    end))
+    table.insert(UnloadConnections, UIS.InputEnded:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.R then rDown = false end
+    end))
+    task.spawn(function()
+        while scriptRunning do
+            task.wait(0.15)
+            if not scriptRunning then break end
+            if rDown and Config and Config.Misc and Config.Misc.RapidReload then
+                local find = _G.EclipseAS_FindEquipped
+                local refill = _G.EclipseAS_TryRefill
+                local isMelee = _G.EclipseAS_IsMelee
+                if type(find) == "function" and type(refill) == "function" then
+                    local ok, w = pcall(find)
+                    if ok and w and not (type(isMelee) == "function" and isMelee(w)) then
+                        pcall(refill, w)
+                    end
                 end
             end
         end
-    end
-end)
+    end)
+end)()
 
 -- ============================================================
 -- BULLET TRACER v8 — SAFE OBSERVER MODE
