@@ -6874,7 +6874,10 @@ function updateMovement()
 
     if Config.Movement.BunnyHop and spaceHeld then
         if grounded and tick() - _MV.lastBhop > 0.05 then
-            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+            -- Fire both signals: some games block ChangeState via anti-cheat
+            -- but leave Humanoid.Jump = true unblocked (or vice versa).
+            pcall(function() hum.Jump = true end)
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
             _MV.lastBhop = tick()
             pcall(function()
                 local cv = root.AssemblyLinearVelocity
@@ -11339,35 +11342,54 @@ do
 
         local _tsTarget = nil
 
+        -- OLD METHOD: visibility-gated closest visible enemy head.
+        -- No 360° world-distance mode — the target must be actually visible
+        -- from the camera (raycast passes through only players / nothing).
+        local function _tsIsVisible(target)
+            local cam = Workspace.CurrentCamera
+            if not cam or not target then return false end
+            local origin = cam.CFrame
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = { LocalPlayer.Character }
+            params.IgnoreWater = true
+            local dir = (target.Position - origin.Position)
+            local result = Workspace:Raycast(origin.Position, dir, params)
+            if not result then return true end
+            local model = result.Instance:FindFirstAncestorOfClass("Model")
+            return model and Players:GetPlayerFromCharacter(model) ~= nil
+        end
+
         local function _tsClosestHead()
             local myTeam = LocalPlayer:GetAttribute("Team")
             local lchar  = LocalPlayer.Character
             local lhead  = lchar and lchar:FindFirstChild("Head")
             if not lhead then return nil end
-            local best, bestDist = nil, math.huge
             for _, v in pairs(Players:GetPlayers()) do
                 if v ~= LocalPlayer then
                     local char = v.Character
                     if char and not char:GetAttribute("Dead")
                        and v:GetAttribute("Team") ~= myTeam then
                         local head = char:FindFirstChild("Head")
-                        if head then
-                            -- 360°: closest by 3D world distance (no viewport gate).
-                            local d = (head.Position - lhead.Position).Magnitude
-                            if d < bestDist then
-                                bestDist = d
-                                best = head
-                            end
+                        if head and _tsIsVisible(head) then
+                            return head
                         end
                     end
                 end
             end
-            return best
+            return nil
+        end
+
+        local function _tsMB1Down()
+            local ok, down = pcall(function()
+                return UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            end)
+            return ok and down or false
         end
 
         connectSignal(RunService.RenderStepped:Connect(function()
             if not scriptRunning then return end
-            if Config and Config.Misc and Config.Misc.SilentAim then
+            if Config and Config.Misc and Config.Misc.SilentAim and _tsMB1Down() then
                 _tsTarget = _tsClosestHead()
             else
                 _tsTarget = nil
@@ -11790,6 +11812,31 @@ do
         for p, _ in pairs(touched) do _restorePart(p) end
         _clearOutlines()
         pcall(function() RunService:UnbindFromRenderStep("EclipseGlassHide") end)
+        -- Belt-and-suspenders sweep: after a respawn/skinchanger rebuild the
+        -- `touched` map may reference dead parts, leaving welded shell clones
+        -- and Highlights orphaned on the fresh character. Walk the LP model
+        -- and destroy anything we tagged, and force-reset transparency on
+        -- body parts that we stamped to 1.
+        pcall(function()
+            local char = LP and LP.Character
+            if not char then return end
+            for _, d in ipairs(char:GetDescendants()) do
+                if d:IsA("BasePart") and d.Name == "EclipseGlassShell" then
+                    pcall(function() d:Destroy() end)
+                elseif d:IsA("Highlight") and tostring(d.Name):sub(1, 12) == "EclipseGlass" then
+                    pcall(function() d:Destroy() end)
+                elseif d:IsA("BasePart") and d.Transparency == 1 and d.LocalTransparencyModifier == 0 then
+                    -- Only touch parts we very likely stamped: gloves / arms / body.
+                    local n = tostring(d.Name):lower()
+                    if not (n == "head" or n:find("hair", 1, true) or n:find("hat", 1, true) or n:find("face", 1, true)) then
+                        pcall(function()
+                            d.Transparency = 0
+                            d.LocalTransparencyModifier = 0
+                        end)
+                    end
+                end
+            end
+        end)
     end
     _G.EclipseGlassFXClear = _clearAll
 
