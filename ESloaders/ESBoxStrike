@@ -2639,7 +2639,7 @@ local Config = {
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={}, PerCategory={}, Mode="Global", SelectedWeapon="AK-47", SelectedCategory="Rifles" },
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, FreezeOnBuy=false, AutoStop=false, QuickStopOptions={} },
-    World    = { Weather="None" },
+    World    = { Weather="None", WeatherSpeed=0 },
     Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=140, AutoSkillSmooth=0, AutoSkillDistance=600, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, AutoBuyMap={}, AutoBuyDelay=0.15, AutoBuyOnlyAlive=true, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
@@ -6566,7 +6566,9 @@ function updateTriggerBot()
             end
         end
         if _trigLastToolIsKnife then
-            _trigLastScan = now + 0.25
+            -- Long back-off with a knife: TriggerBot can never fire a bullet
+            -- with melee equipped, so no reason to re-scan at 5Hz.
+            _trigLastScan = now + 0.6
             return
         end
     end
@@ -7191,6 +7193,25 @@ function UpdateWeather(t)
         halo.Lifetime=NumberRange.new(8,12)
         halo.Speed=NumberRange.new(0.5,1.5)
         halo.SpreadAngle=Vector2.new(180,180)
+    end
+    -- Apply Weather Speed multiplier (0..5). 0 = current speed, 5 = 6x faster.
+    do
+        local sp = tonumber(Config and Config.World and Config.World.WeatherSpeed) or 0
+        sp = math.clamp(sp, 0, 5)
+        local mult = 1 + sp
+        if WeatherPart then
+            for _, em in ipairs(WeatherPart:GetChildren()) do
+                if em:IsA("ParticleEmitter") then
+                    pcall(function()
+                        em.Rate = em.Rate * mult
+                        local lo, hi = em.Speed.Min, em.Speed.Max
+                        em.Speed = NumberRange.new(lo * mult, hi * mult)
+                        local llo, lhi = em.Lifetime.Min, em.Lifetime.Max
+                        em.Lifetime = NumberRange.new(math.max(llo / mult, 0.1), math.max(lhi / mult, 0.15))
+                    end)
+                end
+            end
+        end
     end
 end
 
@@ -11319,11 +11340,10 @@ do
         local _tsTarget = nil
 
         local function _tsClosestHead()
-            local cam = Workspace.CurrentCamera
-            if not cam then return nil end
             local myTeam = LocalPlayer:GetAttribute("Team")
             local lchar  = LocalPlayer.Character
-            if not lchar or not lchar:FindFirstChild("Head") then return nil end
+            local lhead  = lchar and lchar:FindFirstChild("Head")
+            if not lhead then return nil end
             local best, bestDist = nil, math.huge
             for _, v in pairs(Players:GetPlayers()) do
                 if v ~= LocalPlayer then
@@ -11332,13 +11352,11 @@ do
                        and v:GetAttribute("Team") ~= myTeam then
                         local head = char:FindFirstChild("Head")
                         if head then
-                            local sp, on = cam:WorldToViewportPoint(head.Position)
-                            if on then
-                                local d = (Vector2.new(sp.X, sp.Y) - cam.ViewportSize/2).Magnitude
-                                if d < bestDist then
-                                    bestDist = d
-                                    best = head
-                                end
+                            -- 360°: closest by 3D world distance (no viewport gate).
+                            local d = (head.Position - lhead.Position).Magnitude
+                            if d < bestDist then
+                                bestDist = d
+                                best = head
                             end
                         end
                     end
@@ -13434,6 +13452,14 @@ end })
 WorldGB = Tabs.World:AddLeftGroupbox("ENVIRONMENT")
 SafeAddDropdown(WorldGB, "Weather_Select", { Text="WEATHER", Values={"None","Rain","Snow","Aurora"},
     Default=(Config.World and Config.World.Weather) or "None", Callback=function(v) Config.World.Weather=v; UpdateWeather(v) end })
+WorldGB:AddSlider("Weather_Speed", {
+    Text="SPEED", Default=(Config.World and Config.World.WeatherSpeed) or 0,
+    Min=0, Max=5, Rounding=0,
+    Callback=function(v)
+        Config.World.WeatherSpeed = tonumber(v) or 0
+        if UpdateWeather then pcall(UpdateWeather, Config.World.Weather or "None") end
+    end,
+})
 
 WorldColorGB = Tabs.World:AddRightGroupbox("WORLD COLOR", "sun")
 _Lighting = game:GetService("Lighting")
@@ -18979,6 +19005,9 @@ end)
     _G.EclipseAS_TryRefill    = _tryRefill
     _G.EclipseAS_FindEquipped = _findEquippedWeapon
     _G.EclipseAS_IsMelee      = _isMeleeWeapon
+    -- Exposed so the Wallbang loop (Aim tab) can reuse the exact same
+    -- ShootWeapon packet path that AutoSkill uses (no lag, server-valid).
+    _G.EclipseAS_SendKill     = function(pl, w) return _sendKill(pl, w) end
 
     ------------------------------------------------------------------
     -- Blood sound — resolved from dump path, cached and cloned per shot
@@ -19229,7 +19258,9 @@ end)
                     -- Knife equipped: back off HARD so we don't spin the loop
                     _weaponTable = nil
                     _lastTarget  = nil
-                    task.wait(ES152.adaptiveInterval(0.2, 2))
+                    -- Long back-off with a knife: any faster and the
+                    -- getgc/_findEquippedWeapon churn becomes visible lag.
+                    task.wait(ES152.adaptiveInterval(0.6, 3))
                     break
                 end
                 local rounds = rawget(w, "Rounds") or 0
