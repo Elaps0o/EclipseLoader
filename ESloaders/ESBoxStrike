@@ -2032,7 +2032,8 @@ end
 
 local function _EclipseMouseApplyUnlock()
     pcall(function() UserInput.MouseBehavior = Enum.MouseBehavior.Default end)
-    pcall(function() UserInput.MouseIconEnabled = true end)
+    -- Hide the native mouse icon so the custom cursor is what the user sees.
+    pcall(function() UserInput.MouseIconEnabled = false end)
     pcall(function()
         if LocalPlayer and LocalPlayer.DevEnableMouseLock ~= false then
             LocalPlayer.DevEnableMouseLock = false
@@ -2041,6 +2042,11 @@ local function _EclipseMouseApplyUnlock()
 end
 
 local function _EclipseEnsureModalButton()
+    -- MOBILE FIX: never create the fullscreen Modal absorber on touch devices.
+    -- On mobile it eats every touch (camera drag, movement, jump) even after
+    -- the menu closes if anything leaves it parented for a frame. Mobile has
+    -- no mouse to unlock anyway.
+    if _EclipseIsMobile then return end
     if _EclipseMouseUnlock.modal and _EclipseMouseUnlock.modal.Parent then return end
     pcall(function()
         local host = (NLLib and NLLib.Holder and NLLib.Holder.Instance) or Library.ScreenGui
@@ -2066,6 +2072,17 @@ local function _EclipseKillModalButton()
         pcall(function() _EclipseMouseUnlock.modal:Destroy() end)
         _EclipseMouseUnlock.modal = nil
     end
+    -- Belt & suspenders: sweep any stray absorber left in the GUI hosts so
+    -- mobile touches always pass through to the game after closing the menu.
+    pcall(function()
+        local hosts = {}
+        if Library and Library.ScreenGui then hosts[#hosts+1] = Library.ScreenGui end
+        if NLLib and NLLib.Holder and NLLib.Holder.Instance then hosts[#hosts+1] = NLLib.Holder.Instance end
+        for _, h in ipairs(hosts) do
+            local stray = h:FindFirstChild("_EclipseModalUnlock")
+            if stray then stray:Destroy() end
+        end
+    end)
 end
 
 local function _EclipseSinkMouseLockActions()
@@ -2076,7 +2093,64 @@ local function _EclipseSinkMouseLockActions()
     end
 end
 
+-- =========================================================================
+-- CUSTOM CURSOR (desktop only)
+--   We hide the native mouse icon while the menu is open. To keep the user
+--   able to see where they're clicking, we render a small arrow that follows
+--   UserInput:GetMouseLocation() every frame. Skipped on mobile.
+-- =========================================================================
+_EclipseCursor = { gui=nil, frame=nil }
+local function _EclipseCursorEnsure()
+    if _EclipseIsMobile then return end
+    if _EclipseCursor.frame and _EclipseCursor.frame.Parent then return end
+    pcall(function()
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "_EclipseCustomCursor"
+        sg.IgnoreGuiInset  = true
+        sg.ResetOnSpawn    = false
+        sg.DisplayOrder    = 2147483647
+        sg.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
+        if gethui then sg.Parent = gethui() else sg.Parent = game:GetService("CoreGui") end
+
+        -- Simple arrow via a rotated triangle-ish frame: use ImageLabel with
+        -- a built-in cursor asset for clarity.
+        local img = Instance.new("ImageLabel")
+        img.Name = "Cursor"
+        img.BackgroundTransparency = 1
+        img.Size = UDim2.fromOffset(20, 20)
+        img.AnchorPoint = Vector2.new(0, 0)
+        img.Image = "rbxasset://textures/Cursors/KeyboardMouse/ArrowFarCursor.png"
+        img.ImageColor3 = Color3.fromRGB(180, 130, 255)
+        img.ZIndex = 2147483647
+        img.Parent = sg
+
+        _EclipseCursor.gui = sg
+        _EclipseCursor.frame = img
+    end)
+end
+local function _EclipseCursorKill()
+    if _EclipseCursor.gui then
+        pcall(function() _EclipseCursor.gui:Destroy() end)
+    end
+    _EclipseCursor.gui = nil
+    _EclipseCursor.frame = nil
+end
+local function _EclipseCursorUpdate()
+    if not _EclipseCursor.frame or not _EclipseCursor.frame.Parent then return end
+    local ok, loc = pcall(function() return UserInput:GetMouseLocation() end)
+    if not ok or not loc then return end
+    _EclipseCursor.frame.Position = UDim2.fromOffset(loc.X, loc.Y)
+end
+
 function _EclipseMouseUnlockRefresh()
+    -- MOBILE: skip everything. No mouse to unlock, no modal absorber, no cursor.
+    if _EclipseIsMobile then
+        _EclipseKillModalButton()
+        _EclipseCursorKill()
+        _EclipseMouseUnlock.active = false
+        _EclipseMouseUnlock.saved  = nil
+        return
+    end
     if _EclipseMouseOpen() then
         if not _EclipseMouseUnlock.active then
             _EclipseMouseUnlock.saved = {
@@ -2089,8 +2163,10 @@ function _EclipseMouseUnlockRefresh()
         _EclipseEnsureModalButton()
         _EclipseSinkMouseLockActions()
         _EclipseMouseApplyUnlock()
+        _EclipseCursorEnsure()
     elseif _EclipseMouseUnlock.active then
         _EclipseKillModalButton()
+        _EclipseCursorKill()
         local s = _EclipseMouseUnlock.saved or {}
         pcall(function() if s.Behavior then UserInput.MouseBehavior = s.Behavior end end)
         pcall(function() if s.Icon ~= nil then UserInput.MouseIconEnabled = s.Icon end end)
@@ -2108,12 +2184,14 @@ pcall(function()
         if _EclipseMouseUnlock.active then
             _EclipseMouseApplyUnlock()
             _EclipseSinkMouseLockActions()
+            _EclipseCursorUpdate()
         end
     end)
 end)
 _G.__EclipseMouseUnlockUnbind = function()
     pcall(function() RunService:UnbindFromRenderStep(_EclipseRenderBind) end)
     _EclipseKillModalButton()
+    _EclipseCursorKill()
     -- restore whatever we saved when unloading with the menu still open
     if _EclipseMouseUnlock.active then
         local s = _EclipseMouseUnlock.saved or {}
@@ -3614,34 +3692,10 @@ function isScopedIn()
 end
 
 function updateSniperCrosshair()
-    local on = Config.GlobalEnable and Config.Crosshair.SniperEnabled
-    if not on then
-        for _, o in pairs(CH) do o.Visible = false end
-        return
-    end
-    local wn = getHeldWeaponName()
-    if not wn or not SniperWeapons[wn] then
-        for _, o in pairs(CH) do o.Visible = false end
-        return
-    end
-    if Config.Crosshair.HideOnScope and isScopedIn() then
-        for _, o in pairs(CH) do o.Visible = false end
-        return
-    end
-    local vs = Camera.ViewportSize
-    local cx, cy = vs.X/2, vs.Y/2
-    local size, gap = Config.Crosshair.Size, Config.Crosshair.Gap
-    local col, th = Config.Crosshair.Color, Config.Crosshair.Thickness
-    CH.U.From = Vector2.new(cx, cy - gap); CH.U.To = Vector2.new(cx, cy - gap - size)
-    CH.D.From = Vector2.new(cx, cy + gap); CH.D.To = Vector2.new(cx, cy + gap + size)
-    CH.L.From = Vector2.new(cx - gap, cy); CH.L.To = Vector2.new(cx - gap - size, cy)
-    CH.R.From = Vector2.new(cx + gap, cy); CH.R.To = Vector2.new(cx + gap + size, cy)
-    for k, o in pairs(CH) do
-        if k ~= "Dot" then o.Thickness = th; o.Color = col; o.Visible = true end
-    end
-    if Config.Crosshair.Dot then
-        CH.Dot.Position = Vector2.new(cx, cy); CH.Dot.Color = col; CH.Dot.Visible = true
-    else CH.Dot.Visible = false end
+    -- Sniper crosshair overlay foi substituído pelo patch de módulo
+    -- (ShowCrosshair=true nas armas). Aqui só garantimos que o desenho
+    -- antigo permanece invisível.
+    for _, o in pairs(CH) do o.Visible = false end
 end
 
 local Debris = game:GetService("Debris")
@@ -6486,14 +6540,31 @@ function updateAimbot()
         local alpha = 1 - math.exp(-dt * k)
         alpha = alpha * ramp
 
-        local sp = Camera:WorldToViewportPoint(closestPart.Position)
+        -- Velocity lead: predict target position using the assembly velocity so
+        -- moving enemies get tracked more accurately without a visible snap.
+        local predictPos = closestPart.Position
+        do
+            local ok, vel = pcall(function() return closestPart.AssemblyLinearVelocity end)
+            if ok and typeof(vel) == "Vector3" then
+                local speed = vel.Magnitude
+                if speed > 2 then
+                    -- Lead 1 frame + small ping compensation; capped so it never
+                    -- overshoots wildly on jittery enemies.
+                    local lead = math.clamp(dt + 0.045, 0.02, 0.12)
+                    predictPos = predictPos + vel * lead
+                end
+            end
+        end
+
+        local sp = Camera:WorldToViewportPoint(predictPos)
         local tp = Vector2.new(sp.X, sp.Y)
         local delta = tp - mp
         local mag = delta.Magnitude
 
-        -- Stickiness: when crosshair is already near the target, boost pull
-        -- so it "grudinha" instead of hovering.
-        if mag < 20 then alpha = math.min(1, alpha * 2.2)
+        -- Soft snap when very close: helps lock onto moving targets without
+        -- looking obviously teleport-y. Tapered so it stays subtle at range.
+        if mag < 8 then alpha = math.min(1, alpha * 3.0)
+        elseif mag < 20 then alpha = math.min(1, alpha * 2.2)
         elseif mag < 60 then alpha = math.min(1, alpha * 1.5) end
         if scoped then alpha = 1 end
 
@@ -6640,12 +6711,13 @@ function updateTriggerBot()
     local ray = Camera:ViewportPointToRay(ap.X, ap.Y)
     local rp = _trigSetIgnore(Camera)
     local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
+    local _wbOn = (Config.Aimbot and Config.Aimbot.WallBang) == true
     if r and r.Instance then
         local m = r.Instance:FindFirstAncestorOfClass("Model")
         if m and m:FindFirstChildOfClass("Humanoid") then
             local plr = Players:GetPlayerFromCharacter(m)
             if _tryFireOnPlayer(plr) then return end
-        elseif Config.TriggerBot.AutoWall then
+        elseif Config.TriggerBot.AutoWall or _wbOn then
             local origin = ray.Origin
             local dir = ray.Direction.Unit
             for _, pl in ipairs(Players:GetPlayers()) do
@@ -6654,9 +6726,13 @@ function updateTriggerBot()
                     if root then
                         local toRoot = (root.Position - origin)
                         if toRoot.Magnitude > 0 and math.acos(math.clamp(dir:Dot(toRoot.Unit), -1, 1)) < math.rad(2.5) then
-                            local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
-                            if pStats and pStats.Success then
+                            if _wbOn then
                                 if _tryFireOnPlayer(pl) then return end
+                            else
+                                local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
+                                if pStats and pStats.Success then
+                                    if _tryFireOnPlayer(pl) then return end
+                                end
                             end
                         end
                     end
@@ -11316,6 +11392,105 @@ AimGB:AddToggle("SilentAim_Toggle", { Text="SILENT AIM", Default=false,
     :AddKeyPicker("SilentAim_Key", { Default="MB1", SyncToggleState=false, Mode="Hold", Text="Silent Aim" })
 
 -- ============================================================
+-- WALLBANG (Aim tab) — single toggle, runtime weapon-module patch only.
+-- Snapshots WallbangMultiplier / Penetration / ArmorPenetration / Range on
+-- every ModuleScript in ReplicatedStorage.Database.Custom.Weapons and
+-- overwrites them with max-power values (multiplier = 60000). New weapons
+-- are caught via ChildAdded. Fully reversible on toggle-off. No map
+-- destruction, no floor spoofing — purely internal module mutation.
+-- ============================================================
+Config.Aimbot.WallBang = Config.Aimbot.WallBang or false
+do
+    local _WB_CACHE = {}
+    local _WB_INIT  = false
+    local _WB_HOOKED = false
+    local _WB_MAX_AMOUNT = 99999999999
+
+    local function _wbCacheOne(mod)
+        if not mod:IsA("ModuleScript") then return end
+        if _WB_CACHE[mod.Name] then return end
+        local okReq, data = pcall(require, mod)
+        if not okReq or type(data) ~= "table" then return end
+        _WB_CACHE[mod.Name] = {
+            Data = data,
+            Orig = {
+                WM = tonumber(data.WallbangMultiplier) or 1,
+                P  = tonumber(data.Penetration)        or 1,
+                AP = tonumber(data.ArmorPenetration)   or 0.5,
+                R  = tonumber(data.Range)              or 1000,
+                RM = tonumber(data.RangeModifier)      or 1,
+            },
+        }
+    end
+
+    local _wbApply
+
+    local function _wbInit()
+        if _WB_INIT then return end
+        local db = ReplicatedSt:FindFirstChild("Database")
+        local custom = db and db:FindFirstChild("Custom")
+        local weapons = custom and custom:FindFirstChild("Weapons")
+        if not weapons then return end
+        for _, mod in ipairs(weapons:GetChildren()) do _wbCacheOne(mod) end
+        if not _WB_HOOKED then
+            _WB_HOOKED = true
+            weapons.ChildAdded:Connect(function(m)
+                pcall(_wbCacheOne, m)
+                if Config.Aimbot.WallBang then
+                    task.defer(function() pcall(_wbApply) end)
+                end
+            end)
+        end
+        _WB_INIT = true
+    end
+
+    _wbApply = function()
+        _wbInit()
+        local on = Config.Aimbot.WallBang == true
+        local amt = _WB_MAX_AMOUNT
+        for _, entry in pairs(_WB_CACHE) do
+            local d, o = entry.Data, entry.Orig
+            pcall(function() if setreadonly then setreadonly(d, false) end end)
+            -- Only touch fields that actually exist on the (frozen) weapon module.
+            -- Writing invented keys on a table.freeze'd table can raise even after setreadonly.
+            if on then
+                pcall(function() d.WallbangMultiplier = amt end)
+                pcall(function() d.Penetration        = amt end)
+                pcall(function() d.ArmorPenetration   = 1   end)
+                pcall(function() d.Range              = amt end)
+                pcall(function() d.RangeModifier      = 1   end) -- 1 = no distance falloff
+            else
+                pcall(function() d.WallbangMultiplier = o.WM end)
+                pcall(function() d.Penetration        = o.P  end)
+                pcall(function() d.ArmorPenetration   = o.AP end)
+                pcall(function() d.Range              = o.R  end)
+                pcall(function() d.RangeModifier      = o.RM end)
+            end
+            pcall(function() if setreadonly then setreadonly(d, true) end end)
+        end
+    end
+    -- Re-apply on respawn so death does not wipe patches on freshly granted weapons.
+    if LocalPlayer and not _G._EclipseWBRespawnHooked then
+        _G._EclipseWBRespawnHooked = true
+        LocalPlayer.CharacterAdded:Connect(function()
+            task.delay(0.5, function() pcall(_wbApply) end)
+            task.delay(1.5, function() pcall(_wbApply) end)
+        end)
+    end
+
+    AimGB:AddToggle("Wallbang_Toggle", {
+        Text = "WALLBANG",
+        Default = false,
+        Callback = function(v)
+            Config.Aimbot.WallBang = v
+            pcall(_wbApply)
+        end,
+    })
+end
+
+
+
+-- ============================================================
 -- Testing stuff — embedded silent aim bypass (raycast hook)
 -- ============================================================
 do
@@ -11346,6 +11521,10 @@ do
         -- No 360° world-distance mode — the target must be actually visible
         -- from the camera (raycast passes through only players / nothing).
         local function _tsIsVisible(target)
+            -- WALLBANG bypass: quando Wallbang está ativo, Silent Aim
+            -- ignora a checagem de visibilidade e mira em qualquer inimigo
+            -- (o patch de módulo garante que a bala penetra qualquer cover).
+            if Config and Config.Aimbot and Config.Aimbot.WallBang then return true end
             local cam = Workspace.CurrentCamera
             if not cam or not target then return false end
             local origin = cam.CFrame
@@ -11538,6 +11717,89 @@ end })
 Config.Grenade.ESP = false
 -- 3D Trajectory is now always embedded into Prediction/Warning/ESP; toggle removed.
 Config.Grenade.Trajectory3D = true
+
+-- ============================================================
+-- GRENADE ZONE ESP — ports the Molotov/Smoke zone highlight from the
+-- open-source HVH script. Adorns every VoxelFire / VoxelSmoke basepart
+-- with a BoxHandleAdornment so you can see burn/smoke areas through walls.
+-- Runtime only, no thread spawned; hooks workspace.Debris ChildAdded.
+-- ============================================================
+Config.Grenade.ZoneESP    = Config.Grenade.ZoneESP    or false
+Config.Grenade.ZoneColor  = Config.Grenade.ZoneColor  or Color3.fromRGB(255, 60, 0)
+do
+    local _GZ = { Adorns = {}, Hooked = false, ScanConn = nil }
+
+    local function _gzColor()
+        return Config.Grenade.ZoneColor or Color3.fromRGB(255, 60, 0)
+    end
+
+    local function _gzAdornPart(part)
+        if not (part and part:IsA("BasePart")) then return end
+        if part:FindFirstChild("BS_ZoneBox") then return end
+        local box = Instance.new("BoxHandleAdornment")
+        box.Name = "BS_ZoneBox"
+        box.Adornee = part
+        box.Size = part.Size
+        box.Color3 = _gzColor()
+        box.Transparency = 0.6
+        box.AlwaysOnTop = true
+        box.ZIndex = 0
+        box.Parent = part
+        _GZ.Adorns[box] = true
+    end
+
+    local function _gzAttachVoxel(child)
+        if not child or not child.Parent then return end
+        local n = child.Name
+        if not (n:find("VoxelFire") or n:find("VoxelSmoke")) then return end
+        for _, v in ipairs(child:GetChildren()) do _gzAdornPart(v) end
+        child.ChildAdded:Connect(function(v)
+            if Config.Grenade.ZoneESP then _gzAdornPart(v) end
+        end)
+    end
+
+    local function _gzClear()
+        for box in pairs(_GZ.Adorns) do
+            pcall(function() box:Destroy() end)
+        end
+        table.clear(_GZ.Adorns)
+    end
+
+    local function _gzScanDebris(folder)
+        if not folder then return end
+        for _, c in ipairs(folder:GetChildren()) do _gzAttachVoxel(c) end
+        folder.ChildAdded:Connect(function(c)
+            if Config.Grenade.ZoneESP then _gzAttachVoxel(c) end
+        end)
+    end
+
+    local function _gzEnable()
+        if _GZ.Hooked then return end
+        _GZ.Hooked = true
+        local wsDebris = workspace:FindFirstChild("Debris")
+        if wsDebris then _gzScanDebris(wsDebris) end
+        workspace.ChildAdded:Connect(function(c)
+            if not Config.Grenade.ZoneESP then return end
+            if c.Name == "Debris" then _gzScanDebris(c) else _gzAttachVoxel(c) end
+        end)
+        for _, c in ipairs(workspace:GetChildren()) do _gzAttachVoxel(c) end
+    end
+
+    WorldEspGB:AddToggle("Grenade_Zone", { Text = "GRENADE ZONE ESP", Default = Config.Grenade.ZoneESP,
+        Callback = function(v)
+            Config.Grenade.ZoneESP = v
+            if v then _gzEnable() else _gzClear() end
+        end })
+        :AddColorPicker("Grenade_ZoneCol", { Default = Config.Grenade.ZoneColor, Title = "Zone color",
+            Callback = function(c)
+                Config.Grenade.ZoneColor = c
+                for box in pairs(_GZ.Adorns) do
+                    pcall(function() box.Color3 = c end)
+                end
+            end })
+end
+
+
 
 PVGB = Tabs.Visuals:AddRightGroupbox("PLAYER VISUALS", "user")
 PVGB:AddToggle("PV_KillEffect", { Text="KILL EFFECT", Default=false,
@@ -12219,14 +12481,11 @@ end)
 
 ChGB = Tabs.Visuals:AddLeftGroupbox("SNIPER CROSSHAIR", "crosshair")
 ChGB:AddToggle("Sniper_CH_Toggle", { Text="SNIPER CROSSHAIR", Default=false,
-    Callback=function(v) Config.Crosshair.SniperEnabled=v; for _,o in pairs(CH) do o.Visible=false end end })
-
-    :AddColorPicker("Sniper_CH_Col", { Default=Config.Crosshair.Color, Title="Crosshair color",
-        Callback=function(c) Config.Crosshair.Color=c end })
-ChGB:AddSlider("Sniper_CH_Size",  { Text="SIZE",     Default=10, Min=2,  Max=40, Rounding=0, Callback=function(v) Config.Crosshair.Size=v end })
-ChGB:AddSlider("Sniper_CH_Gap",   { Text="GAP",      Default=4,  Min=0,  Max=30, Rounding=0, Callback=function(v) Config.Crosshair.Gap=v end })
-ChGB:AddSlider("Sniper_CH_Thick", { Text="THICKNESS",Default=1,  Min=1,  Max=5,  Rounding=0, Callback=function(v) Config.Crosshair.Thickness=v end })
-ChGB:AddToggle("Sniper_CH_Dot",   { Text="CENTER DOT", Default=true, Callback=function(v) Config.Crosshair.Dot=v end })
+    Callback=function(v)
+        Config.Crosshair.SniperEnabled = v
+        for _,o in pairs(CH) do o.Visible = false end
+        if type(_G._EclipseSniperCHApply) == "function" then pcall(_G._EclipseSniperCHApply) end
+    end })
 
 
 Config.Extras = Config.Extras or {}
@@ -13716,6 +13975,7 @@ do
         end
 
         MiscGB:AddToggle("NoSpread_Enable", {
+
             Text = "NO SPREAD (Except Snipers)",
             Default = false,
             Callback = function(v)
@@ -13724,6 +13984,90 @@ do
             end,
         })
     end
+    -- ============================================================
+    -- FIRE RATE (Misc) — slider 0.1..2.0 acting as a multiplier on
+    -- every weapon's FireRate. A weapon's FireRate is the DELAY
+    -- between shots (seconds), so faster fire = smaller delay =
+    -- origFireRate / multiplier. Runtime-only; no thread spawned,
+    -- just patches the shared Custom.Weapons ModuleScript tables and
+    -- re-applies when new weapons appear.
+    -- ============================================================
+    -- Default 0.0 = OFF (weapons keep original FireRate). Any value > 0
+    -- acts as a multiplier on rate (delay = origFireRate / mult). Max 6x.
+    Config.Misc.FireRateMult = Config.Misc.FireRateMult or 0.0
+    do
+        local _FR_CACHE = {}   -- name -> { Data=table, Orig=number, ModesOrig={k=number} }
+        local _FR_INIT  = false
+        local _FR_HOOKED = false
+
+        local function _frCacheOne(mod)
+            if not mod:IsA("ModuleScript") then return end
+            if _FR_CACHE[mod.Name] then return end
+            local okReq, data = pcall(require, mod)
+            if not okReq or type(data) ~= "table" then return end
+            local orig = tonumber(data.FireRate)
+            if not orig then return end
+            local modesOrig = {}
+            if type(data.FireModes) == "table" then
+                for k, fm in pairs(data.FireModes) do
+                    if type(fm) == "table" and tonumber(fm.FireRate) then
+                        modesOrig[k] = tonumber(fm.FireRate)
+                    end
+                end
+            end
+            _FR_CACHE[mod.Name] = { Data = data, Orig = orig, ModesOrig = modesOrig }
+        end
+
+        local _frApply
+        local function _frInit()
+            if _FR_INIT then return end
+            local db = ReplicatedSt:FindFirstChild("Database")
+            local custom = db and db:FindFirstChild("Custom")
+            local weapons = custom and custom:FindFirstChild("Weapons")
+            if not weapons then return end
+            for _, mod in ipairs(weapons:GetChildren()) do _frCacheOne(mod) end
+            if not _FR_HOOKED then
+                _FR_HOOKED = true
+                weapons.ChildAdded:Connect(function(m)
+                    pcall(_frCacheOne, m)
+                    task.defer(function() pcall(_frApply) end)
+                end)
+            end
+            _FR_INIT = true
+        end
+
+        _frApply = function()
+            _frInit()
+            local mult = tonumber(Config.Misc.FireRateMult) or 0
+            local off = mult <= 0
+            for _, entry in pairs(_FR_CACHE) do
+                local d, o = entry.Data, entry.Orig
+                pcall(function() if setreadonly then setreadonly(d, false) end end)
+                d.FireRate = off and o or (o / mult)
+                if type(d.FireModes) == "table" then
+                    for k, fm in pairs(d.FireModes) do
+                        local om = entry.ModesOrig and entry.ModesOrig[k]
+                        if om and type(fm) == "table" then
+                            pcall(function() if setreadonly then setreadonly(fm, false) end end)
+                            fm.FireRate = off and om or (om / mult)
+                            pcall(function() if setreadonly then setreadonly(fm, true) end end)
+                        end
+                    end
+                end
+                pcall(function() if setreadonly then setreadonly(d, true) end end)
+            end
+        end
+
+        MiscGB:AddSlider("FireRate_Slider", {
+            Text = "FIRE RATE",
+            Default = 0.0, Min = 0.0, Max = 6.0, Rounding = 2, Suffix = "x",
+            Callback = function(v)
+                Config.Misc.FireRateMult = tonumber(v) or 0
+                pcall(_frApply)
+            end,
+        })
+    end
+
 
     -- ANTI-AIM (Spinbot) — sits on the RIGHT side, next to AUTOSKILL.
     Config.Misc.AntiAim      = Config.Misc.AntiAim or false
@@ -14553,87 +14897,130 @@ MiscGB:AddToggle("AntiSmoke_Toggle",   { Text="ANTI SMOKE",    Default=false, Ca
     end
 end })
 
--- REMOVE SCOPE — kills the scope zoom / overlay by forcing FOV back to base
--- and hiding scope UI while the toggle is on. Runs on RenderPriority.Last so
--- it applies after the game's scope script.
-Config.Misc.RemoveScope = false
-MiscGB:AddToggle("RemoveScope_Toggle", { Text="REMOVE SCOPE", Default=false, Callback=function(v)
-    Config.Misc.RemoveScope = v
-end })
+-- REMOVE SCOPE / FORCE SCOPE removidos a pedido do usuário.
+Config.Misc.RemoveScope    = false
+Config.Misc.ForceScope     = false
+Config.Misc.NoScopeOverlay = false
+Config.Misc.CustomScopeFov = false
+
+-- ============================================================
+-- INF AMMO — runtime patch em ModuleScripts das armas.
+-- Congela SOMENTE o campo Capacity para um valor gigantesco.
+-- Não mexemos em MagSize / Rounds / BulletsPerMag para não quebrar
+-- a validação de spray pattern do jogo (isso causava erro no respawn:
+-- "spray pattern points not equal to magazine size").
+-- Reversível ao desligar.
+-- ============================================================
+Config.Misc.InfAmmo = false
 do
-    local RS = game:GetService("RunService")
-    local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    local _savedVis = {}
-    local _lastScopeGuiScan = 0
-    pcall(function() RS:UnbindFromRenderStep("EclipseRemoveScope") end)
-    pcall(function()
-        RS:BindToRenderStep("EclipseRemoveScope", Enum.RenderPriority.Last.Value - 1, function()
-            if not scriptRunning or not Config.Misc.RemoveScope then
-                if next(_savedVis) then
-                    for gui, prev in pairs(_savedVis) do
-                        if gui and gui.Parent then pcall(function() gui.Enabled = prev end) end
-                        _savedVis[gui] = nil
-                    end
-                end
-                return
-            end
-            local cam = workspace.CurrentCamera
-            local base = OriginalCameraFOV or 70
-            if cam and cam.FieldOfView < base * 0.9 then
-                pcall(function() cam.FieldOfView = base end)
-            end
-            local now = tick()
-            local pg2 = (now - _lastScopeGuiScan > 0.35) and LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui") or nil
-            if pg2 then
-                _lastScopeGuiScan = now
-                for _, gui in ipairs(pg2:GetChildren()) do
-                    if gui:IsA("ScreenGui") then
-                        local n = tostring(gui.Name or ""):lower()
-                        if n:find("scope") or n:find("sniper") or n:find("zoom") then
-                            if _savedVis[gui] == nil then _savedVis[gui] = gui.Enabled end
-                            if gui.Enabled then pcall(function() gui.Enabled = false end) end
-                        end
-                    end
-                end
-            end
+    local _IA_CACHE = {}
+    local _IA_INIT, _IA_HOOKED = false, false
+    local _IA_AMOUNT = 999999
+
+    local function _iaCacheOne(mod)
+        if not mod:IsA("ModuleScript") then return end
+        if _IA_CACHE[mod.Name] then return end
+        local ok, data = pcall(require, mod)
+        if not ok or type(data) ~= "table" then return end
+        if tonumber(data.Capacity) == nil then return end
+        _IA_CACHE[mod.Name] = { Data = data, Orig = { Capacity = tonumber(data.Capacity) } }
+    end
+
+    local _iaApply
+    local function _iaInit()
+        if _IA_INIT then return end
+        local db = ReplicatedSt:FindFirstChild("Database")
+        local custom = db and db:FindFirstChild("Custom")
+        local weapons = custom and custom:FindFirstChild("Weapons")
+        if not weapons then return end
+        for _, mod in ipairs(weapons:GetChildren()) do _iaCacheOne(mod) end
+        if not _IA_HOOKED then
+            _IA_HOOKED = true
+            weapons.ChildAdded:Connect(function(m)
+                pcall(_iaCacheOne, m)
+                if Config.Misc.InfAmmo then task.defer(function() pcall(_iaApply) end) end
+            end)
+        end
+        _IA_INIT = true
+    end
+
+    _iaApply = function()
+        _iaInit()
+        local on = Config.Misc.InfAmmo == true
+        for _, e in pairs(_IA_CACHE) do
+            local d, o = e.Data, e.Orig
+            pcall(function() if setreadonly then setreadonly(d, false) end end)
+            d.Capacity = on and _IA_AMOUNT or o.Capacity
+            pcall(function() if setreadonly then setreadonly(d, true) end end)
+        end
+    end
+
+    MiscGB:AddToggle("InfAmmo_Toggle", { Text = "INF AMMO", Default = false,
+        Callback = function(v) Config.Misc.InfAmmo = v; pcall(_iaApply) end })
+
+    -- Reaplicar no respawn (armas re-concedidas após morte).
+    if LocalPlayer and not _G._EclipseIARespawnHooked then
+        _G._EclipseIARespawnHooked = true
+        LocalPlayer.CharacterAdded:Connect(function()
+            task.delay(0.5, function() if Config.Misc.InfAmmo then pcall(_iaApply) end end)
+            task.delay(1.5, function() if Config.Misc.InfAmmo then pcall(_iaApply) end end)
         end)
-    end)
+    end
 end
 
--- NO SCOPE OVERLAY + CUSTOM SCOPE FOV (from HVH source): hides the black
--- sniper overlay while scoped and lets the user pick a scoped FOV instead
--- of the game's fixed zoom. Runs alongside REMOVE SCOPE so users can pick
--- overlay-only, custom FOV, or full removal.
-MiscGB:AddToggle("NoScopeOverlay_Toggle", { Text="NO SCOPE OVERLAY", Default=false,
-    Callback=function(v) Config.Misc.NoScopeOverlay = v end })
-MiscGB:AddToggle("CustomScopeFov_Toggle", { Text="CUSTOM SCOPE FOV", Default=false,
-    Callback=function(v) Config.Misc.CustomScopeFov = v end })
-MiscGB:AddSlider("CustomScopeFov_Slider", { Text="SCOPE FOV", Default=40, Min=10, Max=100, Rounding=0, Suffix="°",
-    Callback=function(v) Config.Misc.ScopeFovValue = v end })
+-- ============================================================
+-- SNIPER CROSSHAIR (novo método) — em vez de desenhar overlay, força o
+-- campo ShowCrosshair = true nos módulos das armas quando o toggle
+-- estiver ativo. O overlay antigo continua desligado (updateSniperCrosshair
+-- foi neutralizado).
+-- ============================================================
 do
-    local RS = game:GetService("RunService")
-    pcall(function() RS:UnbindFromRenderStep("EclipseScopeOverlay") end)
-    pcall(function()
-        RS:BindToRenderStep("EclipseScopeOverlay", Enum.RenderPriority.Last.Value, function()
-            if not scriptRunning then return end
-            local scopeInc = LocalPlayer and LocalPlayer:GetAttribute("ScopeIncrement") or 0
-            local isScoped = scopeInc and scopeInc > 0
-            if not isScoped then return end
-            if Config.Misc.NoScopeOverlay then
-                local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
-                local mainGui = pg and pg:FindFirstChild("MainGui")
-                local scopeUI = mainGui and mainGui:FindFirstChild("Gameplay") and mainGui.Gameplay:FindFirstChild("Scope")
-                if scopeUI and scopeUI.Visible then pcall(function() scopeUI.Visible = false end) end
+    local _SC_CACHE = {}
+    local _SC_INIT, _SC_HOOKED = false, false
+
+    local function _scCacheOne(mod)
+        if not mod:IsA("ModuleScript") then return end
+        if _SC_CACHE[mod.Name] then return end
+        local ok, data = pcall(require, mod)
+        if not ok or type(data) ~= "table" then return end
+        _SC_CACHE[mod.Name] = { Data = data, Orig = { SC = data.ShowCrosshair, HC = data.HideCrosshair } }
+    end
+
+    local _scApply
+    local function _scInit()
+        if _SC_INIT then return end
+        local db = ReplicatedSt:FindFirstChild("Database")
+        local custom = db and db:FindFirstChild("Custom")
+        local weapons = custom and custom:FindFirstChild("Weapons")
+        if not weapons then return end
+        for _, mod in ipairs(weapons:GetChildren()) do _scCacheOne(mod) end
+        if not _SC_HOOKED then
+            _SC_HOOKED = true
+            weapons.ChildAdded:Connect(function(m)
+                pcall(_scCacheOne, m)
+                if Config.Crosshair.SniperEnabled then task.defer(function() pcall(_scApply) end) end
+            end)
+        end
+        _SC_INIT = true
+    end
+
+    _scApply = function()
+        _scInit()
+        local on = Config.Crosshair.SniperEnabled == true
+        for _, e in pairs(_SC_CACHE) do
+            local d, o = e.Data, e.Orig
+            pcall(function() if setreadonly then setreadonly(d, false) end end)
+            if on then
+                d.ShowCrosshair = true
+                d.HideCrosshair = false
+            else
+                d.ShowCrosshair = o.SC
+                d.HideCrosshair = o.HC
             end
-            if Config.Misc.CustomScopeFov then
-                local cam = workspace.CurrentCamera
-                local target = tonumber(Config.Misc.ScopeFovValue) or 40
-                if cam and math.abs(cam.FieldOfView - target) > 0.01 then
-                    pcall(function() cam.FieldOfView = target end)
-                end
-            end
-        end)
-    end)
+            pcall(function() if setreadonly then setreadonly(d, true) end end)
+        end
+    end
+    _G._EclipseSniperCHApply = _scApply
 end
 
 
@@ -18627,7 +19014,33 @@ end)()
                     if Config.Logging.Enabled then
                         if didLPDamage then
                             local vname = vplr and vplr.Name or (vchar and vchar.Name) or (typeof(victim)=="Instance" and victim.Name) or tostring(victim)
-                            pcall(function() Library:Notify({ Title="Damage Dealt", Description=string.format("%s took %s dmg", vname, tostring(dmg)), Time=3 }) end)
+                            -- Body part: if `victim` was passed as a BasePart, its Name is the hit part.
+                            local bodyPart
+                            if typeof(victim) == "Instance" and victim:IsA("BasePart") then bodyPart = victim.Name end
+                            if not bodyPart and type(dmg) == "table" then
+                                bodyPart = dmg.HitPart or dmg.hitPart or dmg.Part or dmg.part or dmg.Bone or dmg.bone
+                                if typeof(bodyPart) == "Instance" then bodyPart = bodyPart.Name end
+                            end
+                            -- Weapon: attacker's currently held tool, if any.
+                            local wname
+                            pcall(function()
+                                local aplr = typeof(attacker)=="Instance" and (attacker:IsA("Player") and attacker or Players:GetPlayerFromCharacter(attacker.Parent) or Players:GetPlayerFromCharacter(attacker)) or nil
+                                local achar = aplr and aplr.Character
+                                local tool = achar and achar:FindFirstChildOfClass("Tool")
+                                if tool then wname = tool.Name end
+                            end)
+                            local dnum = tonumber(dmg) or tonumber(type(dmg)=="table" and (dmg.Damage or dmg.damage or dmg.Amount or dmg.amount)) or 0
+                            local desc
+                            if bodyPart and wname then
+                                desc = string.format("%s took %.0f dmg to %s [%s]", vname, dnum, tostring(bodyPart), wname)
+                            elseif bodyPart then
+                                desc = string.format("%s took %.0f dmg to %s", vname, dnum, tostring(bodyPart))
+                            elseif wname then
+                                desc = string.format("%s took %.0f dmg [%s]", vname, dnum, wname)
+                            else
+                                desc = string.format("%s took %s dmg", vname, tostring(dmg))
+                            end
+                            pcall(function() Library:Notify({ Title="Damage Dealt", Description=desc, Time=3 }) end)
                         end
                     end
                     if didLPDamage and vplr and vchar then
@@ -19669,29 +20082,17 @@ _G.EclipseBulletTracerFire = function() end
 -- RAPID RELOAD (Misc) — reuses AutoSkill's refill helpers.
 -- Independent loop; safe when AutoSkill is disabled.
 -- ============================================================
--- Rapid Reload only fires while the R key is held/pressed. It never runs
--- passively — the user must press R for a refill to be attempted.
+-- Rapid Reload runs in a passive loop while the toggle is on — no key press
+-- required. The loop yields with task.wait so it costs no FPS; it only touches
+-- the refill helper when a non-melee weapon is equipped.
 ;(function()
-    local UIS = game:GetService("UserInputService")
-    local rDown = false
-    local function _isTextFocused()
-        local ok, res = pcall(function() return UIS:GetFocusedTextBox() end)
-        return ok and res ~= nil
-    end
-    table.insert(UnloadConnections, UIS.InputBegan:Connect(function(input, gpe)
-        if gpe or _isTextFocused() then return end
-        if input.KeyCode == Enum.KeyCode.R then rDown = true end
-    end))
-    table.insert(UnloadConnections, UIS.InputEnded:Connect(function(input)
-        if input.KeyCode == Enum.KeyCode.R then rDown = false end
-    end))
     task.spawn(function()
         while scriptRunning do
             task.wait(0.15)
             if not scriptRunning then break end
-            if rDown and Config and Config.Misc and Config.Misc.RapidReload then
-                local find = _G.EclipseAS_FindEquipped
-                local refill = _G.EclipseAS_TryRefill
+            if Config and Config.Misc and Config.Misc.RapidReload then
+                local find    = _G.EclipseAS_FindEquipped
+                local refill  = _G.EclipseAS_TryRefill
                 local isMelee = _G.EclipseAS_IsMelee
                 if type(find) == "function" and type(refill) == "function" then
                     local ok, w = pcall(find)
