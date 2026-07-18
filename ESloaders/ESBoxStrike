@@ -2099,52 +2099,90 @@ end
 --   able to see where they're clicking, we render a small arrow that follows
 --   UserInput:GetMouseLocation() every frame. Skipped on mobile.
 -- =========================================================================
-_EclipseCursor = { gui=nil, frame=nil }
+-- =========================================================================
+-- MODERN CURSOR — FOV Ring Style
+--   Clean hollow circle outline (draw-FOV look) centered exactly on the
+--   mouse hotspot, with a tiny visible center dot for aiming reference.
+--   No purple, no pulse, no click animations.
+-- =========================================================================
+_EclipseCursor = { gui=nil, frame=nil, tip=nil, ring=nil, size=28, color=Color3.fromRGB(245,245,245) }
 local function _EclipseCursorEnsure()
     if _EclipseIsMobile then return end
     if _EclipseCursor.frame and _EclipseCursor.frame.Parent then return end
     pcall(function()
         local sg = Instance.new("ScreenGui")
         sg.Name = "_EclipseCustomCursor"
-        sg.IgnoreGuiInset  = true
+        sg.IgnoreGuiInset  = false
         sg.ResetOnSpawn    = false
         sg.DisplayOrder    = 2147483647
         sg.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
         if gethui then sg.Parent = gethui() else sg.Parent = game:GetService("CoreGui") end
 
-        -- Simple arrow via a rotated triangle-ish frame: use ImageLabel with
-        -- a built-in cursor asset for clarity.
-        local img = Instance.new("ImageLabel")
-        img.Name = "Cursor"
-        img.BackgroundTransparency = 1
-        img.Size = UDim2.fromOffset(44, 44)
-        img.AnchorPoint = Vector2.new(0, 0)
-        img.Image = "rbxasset://textures/Cursors/KeyboardMouse/ArrowFarCursor.png"
-        img.ImageColor3 = Color3.fromRGB(180, 130, 255)
-        img.ZIndex = 2147483647
-        img.Parent = sg
+        local size = _EclipseCursor.size or 28
+        local color = _EclipseCursor.color
 
-        _EclipseCursor.gui = sg
-        _EclipseCursor.frame = img
+        -- Root anchored dead-center on the mouse coordinate.
+        local root = Instance.new("Frame")
+        root.Name = "Cursor"
+        root.BackgroundTransparency = 1
+        root.Size = UDim2.fromOffset(size, size)
+        root.AnchorPoint = Vector2.new(0.5, 0.5)
+        root.ZIndex = 2147483647
+        root.Parent = sg
+
+        -- Hollow ring outline (draw-FOV look).
+        local ring = Instance.new("Frame")
+        ring.Name = "Ring"
+        ring.AnchorPoint = Vector2.new(0.5, 0.5)
+        ring.Position = UDim2.fromScale(0.5, 0.5)
+        ring.Size = UDim2.fromOffset(size, size)
+        ring.BackgroundTransparency = 1
+        ring.BorderSizePixel = 0
+        ring.ZIndex = 2147483646
+        ring.Parent = root
+        local rc = Instance.new("UICorner", ring); rc.CornerRadius = UDim.new(1, 0)
+        local rs = Instance.new("UIStroke", ring)
+        rs.Thickness = 1.5
+        rs.Color = color
+        rs.Transparency = 0.05
+
+        -- Center reference dot at the exact hotspot.
+        local dot = Instance.new("Frame")
+        dot.Name = "Dot"
+        dot.AnchorPoint = Vector2.new(0.5, 0.5)
+        dot.Position = UDim2.fromScale(0.5, 0.5)
+        dot.Size = UDim2.fromOffset(3, 3)
+        dot.BackgroundColor3 = color
+        dot.BorderSizePixel = 0
+        dot.ZIndex = 2147483647
+        dot.Parent = root
+        local dc = Instance.new("UICorner", dot); dc.CornerRadius = UDim.new(1, 0)
+
+        _EclipseCursor.gui   = sg
+        _EclipseCursor.frame = root
+        _EclipseCursor.ring  = ring
+        _EclipseCursor.tip   = dot
     end)
 end
 local function _EclipseCursorKill()
-    if _EclipseCursor.gui then
-        pcall(function() _EclipseCursor.gui:Destroy() end)
-    end
-    _EclipseCursor.gui = nil
-    _EclipseCursor.frame = nil
+    if _EclipseCursor.gui then pcall(function() _EclipseCursor.gui:Destroy() end) end
+    _EclipseCursor.gui=nil; _EclipseCursor.frame=nil; _EclipseCursor.tip=nil; _EclipseCursor.ring=nil
 end
 local function _EclipseCursorUpdate()
     if not _EclipseCursor.frame or not _EclipseCursor.frame.Parent then return end
-    local ok, loc = pcall(function() return UserInput:GetMouseLocation() end)
-    if not ok or not loc then return end
-    -- GetMouseLocation excludes the topbar inset; since our ScreenGui uses
-    -- IgnoreGuiInset=true, add it back so the cursor sits EXACTLY on the
-    -- real OS pointer instead of ~36px above it.
-    local inset = Vector2.new(0, 0)
-    pcall(function() inset = game:GetService("GuiService"):GetGuiInset() end)
-    _EclipseCursor.frame.Position = UDim2.fromOffset(loc.X, loc.Y + inset.Y)
+    local x, y
+    local ok = pcall(function()
+        local m = LocalPlayer:GetMouse()
+        x, y = m.X, m.Y
+    end)
+    if not ok or not x then
+        local ok2, loc = pcall(function() return UserInput:GetMouseLocation() end)
+        if not ok2 or not loc then return end
+        local inset = Vector2.new(0, 0)
+        pcall(function() inset = GuiService:GetGuiInset() or inset end)
+        x, y = loc.X - inset.X, loc.Y - inset.Y
+    end
+    _EclipseCursor.frame.Position = UDim2.fromOffset(x, y)
 end
 
 function _EclipseMouseUnlockRefresh()
