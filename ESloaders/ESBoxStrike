@@ -2117,7 +2117,7 @@ local function _EclipseCursorEnsure()
         local img = Instance.new("ImageLabel")
         img.Name = "Cursor"
         img.BackgroundTransparency = 1
-        img.Size = UDim2.fromOffset(20, 20)
+        img.Size = UDim2.fromOffset(44, 44)
         img.AnchorPoint = Vector2.new(0, 0)
         img.Image = "rbxasset://textures/Cursors/KeyboardMouse/ArrowFarCursor.png"
         img.ImageColor3 = Color3.fromRGB(180, 130, 255)
@@ -2139,7 +2139,12 @@ local function _EclipseCursorUpdate()
     if not _EclipseCursor.frame or not _EclipseCursor.frame.Parent then return end
     local ok, loc = pcall(function() return UserInput:GetMouseLocation() end)
     if not ok or not loc then return end
-    _EclipseCursor.frame.Position = UDim2.fromOffset(loc.X, loc.Y)
+    -- GetMouseLocation excludes the topbar inset; since our ScreenGui uses
+    -- IgnoreGuiInset=true, add it back so the cursor sits EXACTLY on the
+    -- real OS pointer instead of ~36px above it.
+    local inset = Vector2.new(0, 0)
+    pcall(function() inset = game:GetService("GuiService"):GetGuiInset() end)
+    _EclipseCursor.frame.Position = UDim2.fromOffset(loc.X, loc.Y + inset.Y)
 end
 
 function _EclipseMouseUnlockRefresh()
