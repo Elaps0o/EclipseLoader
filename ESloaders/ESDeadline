@@ -3033,7 +3033,7 @@ ESPBox:AddToggle("esp_enabled",{ Text="Enabled", Default=false, Callback=functio
     pcall(function() if WeatherPart then WeatherPart:Destroy() end end)
     pcall(function() if CoreGui:FindFirstChild("EclipseDL_Terms") then CoreGui.EclipseDL_Terms:Destroy() end end)
     end
-end }):AddKeyPicker("esp_key",{ Default="LeftBracket", SyncToggleState=true, Mode="Toggle", Text="ESP" })
+end }):Addcker("esp_key",{ Default="H", SyncToggleState=true, Mode="Toggle", Text="ESP" })
 -- team check is controlled by GLOBAL groupbox (Aim tab)
 ESPBox:AddToggle("esp_box",    { Text="Box",           Default=true,  Callback=function(v) Config.ESP.Box=v end })
     :AddColorPicker("esp_box_c",{ Default=Color3.fromRGB(255,255,255), Callback=function(c) Config.ESP.BoxColor=c end })
@@ -3561,7 +3561,7 @@ MBox:AddToggle("misc_speed2x",{ Text="Speed 2x", Default=false, Callback=functio
     Config.Misc.Speed2x = v
     if v then _speedActive = true; _startSpeed()
     else _stopSpeed() end
-end }):AddKeyPicker("speed2x_key",{ Default="G", SyncToggleState=true, Mode="Toggle", Text="Speed 2x" })
+end }):Addcker("speed2x_key",{ Default="G", SyncToggleState=true, Mode="Toggle", Text="Speed 2x" })
 
 -- Re-cache on respawn (values already reset by engine)
 -- Re-arm Speed 2x depois de morrer/respawnar. Limpa cache de humanoids mortos
@@ -3576,7 +3576,7 @@ LocalPlayer.CharacterAdded:Connect(function(c)
 end)
 
 -- Native Eclipse (Linoria) Keybind List is created via NLLib:KeybindList("Keybinds")
--- at script init. All main function keys are bound through :AddKeyPicker on their
+-- at script init. All main function keys are bound through :Addcker on their
 -- toggles (ESP, Aimbot, Trigger, Speed 2x) — no separate keybinds groupbox needed.
 
 
