@@ -283,12 +283,10 @@ local function InstallDeviceSpoofer()
     warn(("[Eclipse] bypass ready (HWID %s..., UA %s)"):format(FAKE_HWID:sub(1,8), FAKE_UA:sub(1,32)))
 
     local function isCoreGuiCaller()
-
-        
         if type(_getcallingscript) ~= "function" then return true end
         local ok, scr = pcall(_getcallingscript)
         if not ok then return true end
-        if scr == nil then return true end 
+        if scr == nil then return true end
         if typeof(scr) ~= "Instance" then return true end
         local insideCore = true
         pcall(function()
@@ -301,7 +299,6 @@ local function InstallDeviceSpoofer()
         return insideCore
     end
 
-    
     pcall(function()
         ge.identifyexecutor = _newcclosure(function() return "Roblox", "0.0.0" end)
         ge.getexecutorname  = _newcclosure(function() return "Roblox" end)
@@ -331,6 +328,8 @@ local function InstallDeviceSpoofer()
         end))
     end
 
+    -- Safe local namecall spoof. Never answers calls from Roblox/CoreGui/LoadingScreen,
+    -- and never returns nil for unrelated game methods.
     if type(_hookmetamethod) == "function" and type(_getnamecallmethod) == "function" then
         local oldNamecall
         oldNamecall = _hookmetamethod(game, "__namecall", _newcclosure(function(self, ...)
@@ -397,6 +396,64 @@ _EclipseIsMobile = false
 pcall(function()
     _EclipseIsMobile = UserInput.TouchEnabled and not UserInput.KeyboardEnabled
 end)
+
+-- =========================================================================
+-- MOBILE COMPAT LAYER
+-- On mobile there is no mouse: MouseButton1 is never "pressed", mousemoverel
+-- has no effect, and mouse1click / mouse1press don't trigger the game's
+-- fire logic. This block gives the Aimbot + TriggerBot equivalent primitives:
+--   _EclipseTouchActive : true while the user has a finger on the screen
+--   _EclipseMobileAim   : rotates the Camera CFrame by a viewport delta
+--   _EclipseMobileFire  : activates the equipped tool (Tool:Activate + shoot
+--                         remote fallback) so TriggerBot fires without a mouse
+-- =========================================================================
+_EclipseTouchActive = false
+if _EclipseIsMobile then
+    pcall(function()
+        UserInput.TouchStarted:Connect(function(_, gp) if not gp then _EclipseTouchActive = true end end)
+        UserInput.TouchEnded:Connect(function() _EclipseTouchActive = false end)
+    end)
+end
+
+function _EclipseMobileAim(dx, dy)
+    -- dx/dy are viewport-pixel deltas (same units as mousemoverel).
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local vp  = cam.ViewportSize
+    if vp.Y < 1 then return end
+    -- Convert pixels -> radians using the vertical FOV.
+    local fov = math.rad(cam.FieldOfView)
+    local perPix = fov / vp.Y
+    local yaw   = -dx * perPix
+    local pitch = -dy * perPix
+    local cf = cam.CFrame
+    local pos = cf.Position
+    -- Extract current yaw/pitch, add delta, clamp pitch to avoid flip.
+    local look = cf.LookVector
+    local curPitch = math.asin(math.clamp(look.Y, -1, 1))
+    local curYaw   = math.atan2(-look.X, -look.Z)
+    local newPitch = math.clamp(curPitch + pitch, math.rad(-89), math.rad(89))
+    local newYaw   = curYaw + yaw
+    cam.CFrame = CFrame.new(pos) * CFrame.Angles(0, newYaw, 0) * CFrame.Angles(newPitch, 0, 0)
+end
+
+function _EclipseMobileFire()
+    local ok, err = pcall(function()
+        local ch = game:GetService("Players").LocalPlayer.Character
+        if not ch then return end
+        local tool = ch:FindFirstChildOfClass("Tool")
+        if not tool then return end
+        -- Preferred path: Tool:Activate() fires the tool's Activated signal,
+        -- which every CS-style weapon script listens to for the shoot loop.
+        pcall(function() tool:Activate() end)
+        -- Fallback: try common shoot remote names on the tool.
+        for _, n in ipairs({"Shoot","Fire","shoot","fire","ShootWeapon","FireWeapon"}) do
+            local r = tool:FindFirstChild(n)
+            if r and r:IsA("RemoteEvent") then pcall(function() r:FireServer() end); break
+            elseif r and r:IsA("RemoteFunction") then pcall(function() r:InvokeServer() end); break end
+        end
+    end)
+end
 task.spawn(function()
     -- Wait longer so initial loading hitch / streaming doesn't false-trigger.
     task.wait(12)
@@ -1256,16 +1313,22 @@ local function makeGroupbox(nlSection)
         -- native Label:Colorpicker equivalent). Old Obsidian code relies on it.
         function handle:AddColorPicker(cid, data)
             data = data or {}
+            local w
             local cp
             pcall(function()
                 cp = lbl and lbl:Colorpicker({
                     Name     = data.Title or data.Text or self.Text or "Color",
                     Flag     = makeFlag(cid, "_col"),
                     Default  = data.Default or Color3.new(1,1,1),
-                    Callback = function(c) if data.Callback then pcall(data.Callback, c) end end,
+                    Callback = function(c)
+                        if w and typeof(c) == "Color3" then w.Value = c end
+                        if data.Callback then pcall(data.Callback, c) end
+                        if w and w._changed then
+                            for _, fn in ipairs(w._changed) do pcall(fn, c) end
+                        end
+                    end,
                 })
             end)
-            local w
             w = {
                 Type = "ColorPicker",
                 Value = data.Default or Color3.new(1,1,1),
@@ -1293,9 +1356,16 @@ local function makeGroupbox(nlSection)
                     end
                 end,
             }
+            -- Try to read the current picker value in case the user picked before we wired it
+            pcall(function()
+                if cp and cp.Value and typeof(cp.Value) == "Color3" then
+                    w.Value = cp.Value
+                end
+            end)
             registerEntry(Library.Options, cid, w)
             return handle
         end
+
         function handle:SetVisible(b) _setControlVisible(lbl, b) end
         function handle:SetDisabled(b) _setControlDisabled(lbl, b) end
         return handle
@@ -1520,6 +1590,16 @@ local ICON_MAP = {
     ["sliders-horizontal"] = "10734963191",
     ["activity"]           = "10709752035",
     ["rocket"]             = "10734934585",
+    -- extra section icons (distinct per group)
+    ["shield"]             = "10734975692",
+    ["volume-2"]           = "10709752035",
+    ["volume"]             = "10709752035",
+    ["refresh-cw"]         = "10734900011",
+    ["refresh"]            = "10734900011",
+    ["sun"]                = "10734886202",
+    ["zap"]                = "10723395708",
+    ["bell"]               = "10709802634",
+    ["shuffle"]            = "10734934585",
     -- legacy aliases (neverlose logo/star)
     ["house"] = "10723407389", ["power"] = "10734950309",
     ["link"]  = "120959262762131", ["user"] = "120959262762131",
@@ -1561,10 +1641,18 @@ local SECTION_ICON_MAP = {
     ["ct weapons"]           = "10734977012",
     ["shared weapons"]       = "10734977012",
     ["custom shoot sounds"]  = "10709752035",
+    ["sounds"]               = "10709802634",
+    ["reload"]               = "10734900011",
+    ["anti-aim"]             = "10734975692",
     ["tabbox"]               = "10734963191",
 }
 function _sectionIcon(explicit, name)
-    if explicit and explicit ~= "" then return resolveIcon(explicit) end
+    if explicit and explicit ~= "" then
+        local k = tostring(explicit):lower()
+        -- if explicit is a semantic name we also have as a section, prefer that map
+        if SECTION_ICON_MAP[k] then return SECTION_ICON_MAP[k] end
+        return resolveIcon(explicit)
+    end
     local k = tostring(name or ""):lower()
     return SECTION_ICON_MAP[k] or "10734963191"
 end
@@ -2404,15 +2492,25 @@ local function _buildEnglishKickMessage(reason)
 end
 
 local function _isEclipseError(message, stack, scriptObj)
-    local blob = tostring(message or "") .. "\n" .. tostring(stack or "") .. "\n" .. tostring(scriptObj and scriptObj:GetFullName() or "")
+    local srcName = ""
+    pcall(function() srcName = scriptObj and scriptObj:GetFullName() or "" end)
+    local blob = tostring(message or "") .. "\n" .. tostring(stack or "") .. "\n" .. srcName
     local low = string.lower(blob)
+    -- Ignore errors originating from game scripts (not from Eclipse).
+    -- LoadingScreen / ReplicatedFirst / BAC / PlayerScripts crash on their own
+    -- during character load and MUST NOT trigger our panic-kick.
+    if string.find(low, "loadingscreen", 1, true) then return false end
+    if string.find(low, "replicatedfirst", 1, true) then return false end
+    if string.find(low, "playerscripts", 1, true) then return false end
+    if string.find(low, "corescript", 1, true) then return false end
+    if string.find(low, "bac ", 1, true) or string.find(low, "|frog", 1, true) then return false end
+    -- Only trip on errors that clearly belong to Eclipse Hub / its UI libs.
     if string.find(low, "eclipse", 1, true) then return true end
     if string.find(low, "obsidian", 1, true) then return true end
     if string.find(low, "linoria",  1, true) then return true end
     if string.find(low, "skinsystem", 1, true) then return true end
     if string.find(low, "autoskill", 1, true) then return true end
     if string.find(low, "sendwebhook", 1, true) then return true end
-    if string.find(low, "attempt to", 1, true) and string.find(low, "index", 1, true) then return true end
     return false
 end
 
@@ -2470,8 +2568,9 @@ end
 -- so every player using the script in the SAME Roblox server sees each other.
 local function _presenceHeaders()
     return {
-        ["Content-Type"] = "application/json",
-        ["x-api-key"]    = ECLIPSE.PresenceKey,
+        ["Content-Type"]   = "application/json",
+        ["x-eclipse-key"] = ECLIPSE.PresenceKey,
+        ["x-api-key"]     = ECLIPSE.PresenceKey,
     }
 end
 
@@ -6483,13 +6582,78 @@ function _isLocalFlashed()
 end
 
 AimState = { lastTarget = nil, acquiredAt = 0, lastTick = 0 }
+
+-- On mobile the fire button is v11.Shoot inside PlayerGui.MobileButtons.
+-- Detect it by (a) reading IsFireHeld off the equipped weapon (set by the
+-- game when the on-screen Shoot button is pressed), or (b) InputBegan on
+-- the Shoot GUI directly.
+_EclipseFireBtnHeld = false
+if _EclipseIsMobile then
+    task.spawn(function()
+        local pg = LocalPlayer:WaitForChild("PlayerGui", 30)
+        if not pg then return end
+        local function hook(btn)
+            if not btn or btn:GetAttribute("_EclipseHooked") then return end
+            btn:SetAttribute("_EclipseHooked", true)
+            pcall(function()
+                btn.InputBegan:Connect(function(i)
+                    if i.UserInputType == Enum.UserInputType.Touch
+                        or i.UserInputType == Enum.UserInputType.MouseButton1 then
+                        _EclipseFireBtnHeld = true
+                    end
+                end)
+                btn.InputEnded:Connect(function(i)
+                    if i.UserInputType == Enum.UserInputType.Touch
+                        or i.UserInputType == Enum.UserInputType.MouseButton1 then
+                        _EclipseFireBtnHeld = false
+                    end
+                end)
+            end)
+        end
+        local function scan(root)
+            for _, d in ipairs(root:GetDescendants()) do
+                if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton"))
+                    and (d.Name == "Shoot" or d.Name == "Fire") then hook(d) end
+            end
+        end
+        scan(pg)
+        pg.DescendantAdded:Connect(function(d)
+            if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton"))
+                and (d.Name == "Shoot" or d.Name == "Fire") then hook(d) end
+        end)
+    end)
+end
+
+local function _mobileFireHeld()
+    if _EclipseFireBtnHeld then return true end
+    -- Fallback: inspect equipped weapon's IsFireHeld flag (game sets it
+    -- true while the Shoot button is pressed for auto/burst weapons).
+    local ok, w = pcall(function()
+        return _G.EclipseAS_FindEquipped and _G.EclipseAS_FindEquipped() or nil
+    end)
+    if ok and type(w) == "table" then
+        local ok2, held = pcall(rawget, w, "IsFireHeld")
+        if ok2 and held == true then return true end
+    end
+    return false
+end
+
 function updateAimbot()
     if not Config.GlobalEnable or not Config.Aimbot.Enabled or not Config.Aimbot.DrawFOV then
         _setAimFOVVisible(false)
     end
     if not Config.GlobalEnable or not Config.Aimbot.Enabled then return end
     if Config.Aimbot.DisableInFlash and _isLocalFlashed() then return end
-    local mouse = UserInput:GetMouseLocation()
+
+    -- Mobile: DrawFOV must be locked to the middle of the screen (there's
+    -- no mouse cursor to follow). PC: follow the mouse as usual.
+    local mouse
+    if _EclipseIsMobile then
+        local vp = Camera.ViewportSize
+        mouse = Vector2.new(vp.X/2, vp.Y/2)
+    else
+        mouse = UserInput:GetMouseLocation()
+    end
     local r = ActiveAimFOV()
     _updateAimFOVVisual(mouse, r, Config.Aimbot.FOVColor, Config.Aimbot.DrawFOV)
 
@@ -6499,24 +6663,34 @@ function updateAimbot()
     local scoped = (isAWP or isSniper) and (isScopedIn and isScopedIn())
 
     local keyHeld = false
-    pcall(function()
-        local kp = Library.Options and Library.Options.Aimbot_Key
-        if kp and kp.GetState then keyHeld = kp:GetState() end
-    end)
-    if not keyHeld then
-        local kp = Library.Options and Library.Options.Aimbot_Key
-        local key = kp and kp.Value or Enum.UserInputType.MouseButton1
-        if key == Enum.UserInputType.MouseButton1 then keyHeld = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-        elseif key == Enum.UserInputType.MouseButton2 then keyHeld = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-        elseif key == Enum.UserInputType.MouseButton3 then keyHeld = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton3)
-        elseif typeof(key) == "EnumItem" and key.EnumType == Enum.KeyCode then keyHeld = UserInput:IsKeyDown(key) end
+    if _EclipseIsMobile then
+        -- Mobile: aim engages only while the on-screen fire button is
+        -- pressed (matches the game's own Shoot input), when scoped, or
+        -- when TriggerBot is on.
+        keyHeld = _mobileFireHeld()
+    else
+        pcall(function()
+            local kp = Library.Options and Library.Options.Aimbot_Key
+            if kp and kp.GetState then keyHeld = kp:GetState() end
+        end)
+        if not keyHeld then
+            local kp = Library.Options and Library.Options.Aimbot_Key
+            local key = kp and kp.Value or Enum.UserInputType.MouseButton1
+            if key == Enum.UserInputType.MouseButton1 then keyHeld = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            elseif key == Enum.UserInputType.MouseButton2 then keyHeld = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            elseif key == Enum.UserInputType.MouseButton3 then keyHeld = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton3)
+            elseif typeof(key) == "EnumItem" and key.EnumType == Enum.KeyCode then keyHeld = UserInput:IsKeyDown(key) end
+        end
     end
-    
+
     local aiming = keyHeld or Config.TriggerBot.Enabled or scoped or (isAWP or isSniper)
     if not aiming then return end
 
     local mp
     if scoped then
+        local vp = Camera.ViewportSize
+        mp = Vector2.new(vp.X/2, vp.Y/2)
+    elseif _EclipseIsMobile then
         local vp = Camera.ViewportSize
         mp = Vector2.new(vp.X/2, vp.Y/2)
     else
@@ -6613,7 +6787,11 @@ function updateAimbot()
 
         local dx = delta.X * alpha
         local dy = delta.Y * alpha
-        if mousemoverel then mousemoverel(dx, dy) end
+        if mousemoverel and not _EclipseIsMobile then
+            mousemoverel(dx, dy)
+        elseif _EclipseIsMobile then
+            _EclipseMobileAim(dx, dy)
+        end
 
     else
         AimState.lastTarget = nil
@@ -6650,14 +6828,12 @@ local function _trigSetIgnore(cam)
 end
 function updateTriggerBot()
     if not Config.GlobalEnable or not Config.TriggerBot.Enabled or not IsAlive() then return end
-    -- Throttle scan/raycast work to ~8Hz. Raycast + FOV loop + AutoWall stats
-    -- is the single hottest path in the script; anything faster than a human
-    -- reaction (~120ms) is wasted CPU that shows up as visible frame drops
-    -- on mid/low-end devices. 125ms keeps the bot instant-feeling while
-    -- cutting per-frame cost by ~50% vs 15Hz.
+    -- Throttle scan/raycast work. 60ms keeps the bot near-instant while
+    -- avoiding per-frame CPU cost. Previous 200ms felt sluggish.
     local now = tick()
-    if (now - _trigLastScan) < 0.20 then return end
+    if (now - _trigLastScan) < 0.06 then return end
     _trigLastScan = now
+
 
     -- MELEE / KNIFE GATE: TriggerBot cannot fire a bullet with a knife equipped.
     -- Cheap cached check on the equipped Tool — no AutoSkill globals, no
@@ -6710,7 +6886,19 @@ function updateTriggerBot()
         -- Sinaliza para o Silent Aim que o disparo veio do TriggerBot,
         -- para que ele conte como um MB1 real e redirecione a bala.
         _G.EclipseMB1Virtual = true
-        if r8DualNow then
+        if _EclipseIsMobile then
+            -- Mobile: no mouse. Activate the tool directly (single tap;
+            -- R8 dual-fire is a PC alt-fire trick that has no mobile equivalent).
+            _EclipseMobileFire()
+            if isNoSpread then
+                task.delay(0.08, function()
+                    _EclipseMobileFire()
+                    task.delay(0.20, function() _G.EclipseMB1Virtual = false end)
+                end)
+            else
+                task.delay(0.25, function() _G.EclipseMB1Virtual = false end)
+            end
+        elseif r8DualNow then
             if mouse1press then pcall(mouse1press) end
             if mouse2press then pcall(mouse2press) end
             task.delay(0.08, function()
@@ -6880,7 +7068,73 @@ local _MV = {
 }
 _MV.JBEB_RP.FilterType = Enum.RaycastFilterType.Exclude
 _MV.ASF_RAY.FilterType = Enum.RaycastFilterType.Exclude
+-- Mobile Jump button hook: watches PlayerGui.MobileButtons.Jump so
+-- Bhop / AutoStrafer behave the same when the on-screen Jump is held.
+_MV.mobileJumpDown = false
+_MV._mobileJumpHooked = false
+_MV._mobileJumpConns = {}
+function _MV.hookMobileJump()
+    if _MV._mobileJumpHooked then return end
+    local ok, plrgui = pcall(function() return LocalPlayer:FindFirstChildOfClass("PlayerGui") end)
+    if not ok or not plrgui then return end
+    local function bindBtn(btn)
+        if not btn or not btn:IsA("GuiButton") then return end
+        for _, c in ipairs(_MV._mobileJumpConns) do pcall(function() c:Disconnect() end) end
+        _MV._mobileJumpConns = {}
+        table.insert(_MV._mobileJumpConns, btn.InputBegan:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.Touch
+            or inp.UserInputType == Enum.UserInputType.MouseButton1 then
+                _MV.mobileJumpDown = true
+            end
+        end))
+        table.insert(_MV._mobileJumpConns, btn.InputEnded:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.Touch
+            or inp.UserInputType == Enum.UserInputType.MouseButton1 then
+                _MV.mobileJumpDown = false
+            end
+        end))
+        _MV._mobileJumpHooked = true
+    end
+    local function scan(root)
+        if not root then return end
+        local mb = root:FindFirstChild("MobileButtons", true)
+        if mb then
+            local jb = mb:FindFirstChild("Jump", true)
+            if jb then bindBtn(jb); return end
+        end
+        local direct = root:FindFirstChild("Jump", true)
+        if direct and direct:IsA("GuiButton") then bindBtn(direct) end
+    end
+    scan(plrgui)
+    -- If the button isn't there yet (spawn / respawn), keep watching.
+    task.spawn(function()
+        local tries = 0
+        while not _MV._mobileJumpHooked and tries < 40 do
+            tries = tries + 1
+            task.wait(0.5)
+            scan(plrgui)
+        end
+    end)
+    pcall(function()
+        plrgui.DescendantAdded:Connect(function(d)
+            if _MV._mobileJumpHooked then return end
+            if d.Name == "Jump" and d:IsA("GuiButton") then bindBtn(d) end
+        end)
+    end)
+end
+pcall(_MV.hookMobileJump)
+-- Rehook on respawn (PlayerGui persists but MobileButtons can be rebuilt)
+pcall(function()
+    LocalPlayer.CharacterAdded:Connect(function()
+        _MV._mobileJumpHooked = false
+        for _, c in ipairs(_MV._mobileJumpConns) do pcall(function() c:Disconnect() end) end
+        _MV._mobileJumpConns = {}
+        task.delay(0.5, function() pcall(_MV.hookMobileJump) end)
+    end)
+end)
+
 function _MV.spaceHeld()
+    if _MV.mobileJumpDown then return true end
     local ok, down = pcall(function() return UserInput:IsKeyDown(Enum.KeyCode.Space) end)
     return ok and down or false
 end
@@ -11521,14 +11775,8 @@ do
         end)
     end
 
-    AimGB:AddToggle("Wallbang_Toggle", {
-        Text = "WALLBANG",
-        Default = false,
-        Callback = function(v)
-            Config.Aimbot.WallBang = v
-            pcall(_wbApply)
-        end,
-    })
+    -- Old WALLBANG toggle removed — use HVH WALLBANG X-RAY (Aim tab) and
+    -- AUTO KILL > WALLBANG (Aim tab, AIMBOT group) from the HVH port instead.
 end
 
 
@@ -12733,22 +12981,8 @@ Config.Visuals.BulletTracer      = Config.Visuals.BulletTracer      or false
 Config.Visuals.BulletTracerColor = Config.Visuals.BulletTracerColor or Color3.fromRGB(170, 90, 255)
 Config.Visuals.BulletTracerDuration = Config.Visuals.BulletTracerDuration or 4.0
 Config.Visuals.BulletTracerRainbow = Config.Visuals.BulletTracerRainbow or false
-PVGB:AddToggle("PV_BulletTracer", { Text="BULLET TRACER", Default=false,
-    Callback=function(v)
-        Config.Visuals.BulletTracer = v and true or false
-        pcall(function()
-            if type(_G.EclipseSetBulletTracerEnabled) == "function" then
-                _G.EclipseSetBulletTracerEnabled(v and true or false)
-            end
-        end)
-    end })
-    :AddColorPicker("PV_BulletTracerColor", {
-        Default=Config.Visuals.BulletTracerColor,
-        Callback=function(c) Config.Visuals.BulletTracerColor = c end })
-PVGB:AddSlider("PV_BulletTracerDuration", { Text="DURATION", Default=Config.Visuals.BulletTracerDuration, Min=0.5, Max=10, Rounding=1, Suffix="s",
-    Callback=function(v) Config.Visuals.BulletTracerDuration = v end })
-PVGB:AddToggle("PV_BulletTracerRainbow", { Text="RAINBOW", Default=Config.Visuals.BulletTracerRainbow == true,
-    Callback=function(v) Config.Visuals.BulletTracerRainbow = v and true or false end })
+-- Old PV_BulletTracer UI removed — the HVH BULLET TRACERS group (Visuals tab)
+-- is now the single tracer implementation.
 -- SHOW IMPACT (2D X) active — see block above.
 
 -- GLASS ARMS removed per user request.
@@ -13811,6 +14045,7 @@ WorldGB:AddSlider("Weather_Speed", {
 })
 
 WorldColorGB = Tabs.World:AddRightGroupbox("WORLD COLOR", "sun")
+_G.__EclipseWorldColorGB = WorldColorGB
 _Lighting = game:GetService("Lighting")
 _wcEffect = _wcEffect
 function _ensureWCEffect()
@@ -14112,19 +14347,8 @@ do
     end
 
 
-    -- ANTI-AIM (Spinbot) — sits on the RIGHT side, next to AUTOSKILL.
-    Config.Misc.AntiAim      = Config.Misc.AntiAim or false
-    Config.Misc.AntiAimSpeed = Config.Misc.AntiAimSpeed or 80
-    Config.Misc.AntiAimYaw   = Config.Misc.AntiAimYaw or "Forward"
-    local AAGB = Tabs.Misc:AddRightGroupbox("ANTI-AIM")
-    AAGB:AddToggle("AA_Enable", { Text = "SPINBOT", Default = false,
-        Callback = function(v) Config.Misc.AntiAim = v end })
-    AAGB:AddDropdown("AA_Yaw", { Text = "YAW", Default = Config.Misc.AntiAimYaw,
-        Values = { "Forward", "Follow", "Freeze" },
-        Callback = function(v) Config.Misc.AntiAimYaw = v end })
-    AAGB:AddSlider("AA_Speed", { Text = "SPINBOT SPEED", Default = Config.Misc.AntiAimSpeed,
-        Min = 1, Max = 150, Rounding = 0, Suffix = "",
-        Callback = function(v) Config.Misc.AntiAimSpeed = v end })
+    -- NOTE: legacy spinbot anti-aim removed. HVH anti-aim is handled in the
+    -- new MISC section below and does not use the old Config.Misc.AntiAim flags.
 
 end
 
@@ -18240,14 +18464,41 @@ end)()
     })
 
 
-    local SoundGB = Tabs.Misc:AddLeftGroupbox("CUSTOM SHOOT SOUNDS")
+    local SoundGB = Tabs.Misc:AddLeftGroupbox("CUSTOM SOUNDS")
+
+    local HVH_SNDLIST = { 'None','Metal','TF2 Critical','TF2','Rust' }
+
+    -- ── Hit Sound ─────────────────────────────────────────────
+    SoundGB:AddLabel("Hit Sound")
+    SoundGB:AddToggle("HVH_HitSound",  { Text = "Enable Hit Sound",  Default = true })
+    SoundGB:AddDropdown("HVH_HitSnd",  { Text = "Sound",  Values = HVH_SNDLIST, Default = "Metal", Multi = false })
+    SoundGB:AddSlider("HVH_HitVol",    { Text = "Volume", Default = 0.5, Min = 0,   Max = 2, Rounding = 2 })
+    SoundGB:AddSlider("HVH_HitPitch",  { Text = "Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
+    SoundGB:AddDivider()
+
+    -- ── Kill Sound ────────────────────────────────────────────
+    SoundGB:AddLabel("Kill Sound")
+    SoundGB:AddToggle("HVH_KillSound", { Text = "Enable Kill Sound", Default = true })
+    SoundGB:AddDropdown("HVH_KillSnd", { Text = "Sound",  Values = HVH_SNDLIST, Default = "TF2 Critical", Multi = false })
+    SoundGB:AddSlider("HVH_KillVol",   { Text = "Volume", Default = 1,   Min = 0,   Max = 2, Rounding = 2 })
+    SoundGB:AddSlider("HVH_KillPitch", { Text = "Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
+    SoundGB:AddDivider()
+
+    -- ── Shoot Sound ───────────────────────────────────────────
+    SoundGB:AddLabel("Shoot Sound")
+    SoundGB:AddToggle("HVH_ShootSound",{ Text = "Enable Shoot Sound", Default = false })
+    SoundGB:AddDropdown("HVH_ShootSnd",{ Text = "Sound",  Values = HVH_SNDLIST, Default = "Rust", Multi = false })
+    SoundGB:AddSlider("HVH_ShootVol",  { Text = "Volume", Default = 0.4, Min = 0,   Max = 2, Rounding = 2 })
+    SoundGB:AddSlider("HVH_ShootPitch",{ Text = "Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
+    SoundGB:AddDivider()
+    -- ── KOV Weapon Fire Override ──────────────────────────────
+    SoundGB:AddLabel("Weapon Fire Override")
     if EX_LIMITED then
-        SoundGB:AddLabel("UNAVAILABLE ON " .. (EX_NAME ~= "" and EX_NAME:upper() or "THIS EXECUTOR"))
-        SoundGB:AddLabel("Sound/HUD overrides blocked.")
+        SoundGB:AddLabel("Unavailable on " .. (EX_NAME ~= "" and EX_NAME or "this executor"))
         Config.Sounds.Enabled = false
     else
     SoundGB:AddToggle("Sounds_Enable", {
-        Text="ENABLE CUSTOM SOUNDS", Default=false,
+        Text="Enable Fire Override", Default=false,
         Callback=function(v) Config.Sounds.Enabled = v; EX.applySoundOverrides() end,
     })
 
@@ -20329,95 +20580,56 @@ end)()
         if not _rateOk() then return end
 
         pcall(function()
-            local f = _folder()
             local baseColor = Config and Config.Visuals and Config.Visuals.BulletTracerColor
             if typeof(baseColor) ~= "Color3" then baseColor = Color3.fromRGB(170, 90, 255) end
-            local life = 4.0
             local duration = Config and Config.Visuals and Config.Visuals.BulletTracerDuration
-            if type(duration) == "number" and duration > 0 then
-                life = math.clamp(duration, 0.5, 10)
-            end
+            if type(duration) ~= "number" or duration <= 0 then duration = 0.5 end
+            duration = math.clamp(duration, 0.1, 10)
 
-            local item = { life = life, _dead = false }
+            -- hvh.lua style: attachments + beam parented to Workspace.Terrain
+            local a0 = Instance.new("Attachment")
+            a0.WorldPosition = origin
+            a0.Parent = Workspace.Terrain
 
-            local a = Instance.new("Part")
-            a.Name = "EclipseTracerA"
-            a.Anchored = true
-            a.CanCollide = false
-            a.CanTouch = false
-            a.CanQuery = false
-            a.Transparency = 1
-            a.Size = Vector3.new(0.05, 0.05, 0.05)
-            a.CFrame = CFrame.new(origin)
-            a.Parent = f
-
-            local b = Instance.new("Part")
-            b.Name = "EclipseTracerB"
-            b.Anchored = true
-            b.CanCollide = false
-            b.CanTouch = false
-            b.CanQuery = false
-            b.Transparency = 1
-            b.Size = Vector3.new(0.05, 0.05, 0.05)
-            b.CFrame = CFrame.new(hitPos)
-            b.Parent = f
-
-            local aa = Instance.new("Attachment")
-            aa.Name = "A"
-            aa.Parent = a
-            local bb = Instance.new("Attachment")
-            bb.Name = "B"
-            bb.Parent = b
+            local a1 = Instance.new("Attachment")
+            a1.WorldPosition = hitPos
+            a1.Parent = Workspace.Terrain
 
             local beam = Instance.new("Beam")
-            beam.Name = "EclipseBulletBeam"
-            beam.Attachment0 = aa
-            beam.Attachment1 = bb
+            beam.Attachment0 = a0
+            beam.Attachment1 = a1
             beam.Color = ColorSequence.new(baseColor)
-            beam.LightEmission = 0.9
+            beam.Width0 = 0.15
+            beam.Width1 = 0.03
+            beam.LightEmission = 1
             beam.LightInfluence = 0
-            beam.Brightness = 2.2
-            beam.Width0 = 0.045
-            beam.Width1 = 0.012
             beam.FaceCamera = true
-            beam.Segments = 2
-            beam.Transparency = NumberSequence.new({
-                NumberSequenceKeypoint.new(0, 0.0),
-                NumberSequenceKeypoint.new(0.18, 0.12),
-                NumberSequenceKeypoint.new(0.42, 0.30),
-                NumberSequenceKeypoint.new(0.72, 0.65),
-                NumberSequenceKeypoint.new(1, 1),
-            })
-            beam.Parent = f
+            beam.Transparency = NumberSequence.new(0)
+            beam.Parent = Workspace.Terrain
 
-            item.beam = beam
-            item.a = a
-            item.b = b
+            local item = { beam = beam, a = a0, b = a1, life = duration, _dead = false }
 
             task.spawn(function()
-                local start = os.clock()
-                while os.clock() - start < life and not item._dead do
-                    local t = (os.clock() - start) / life
-                    local alpha = 1 - math.clamp(t, 0, 1)
+                local startT = tick()
+                while tick() - startT < duration and not item._dead do
+                    local t = (tick() - startT) / duration
                     local rainbow = Config and Config.Visuals and Config.Visuals.BulletTracerRainbow == true
                     local color = rainbow and _rainbowColor(t) or baseColor
                     pcall(function()
-                        beam.Transparency = NumberSequence.new({
-                            NumberSequenceKeypoint.new(0, 0.0),
-                            NumberSequenceKeypoint.new(0.18, 0.12 * alpha),
-                            NumberSequenceKeypoint.new(0.42, 0.30 * alpha),
-                            NumberSequenceKeypoint.new(0.72, 0.65 * alpha),
-                            NumberSequenceKeypoint.new(1, 1),
-                        })
+                        beam.Transparency = NumberSequence.new(t)
                         beam.Color = ColorSequence.new(color)
                     end)
-                    RunService.Heartbeat:Wait()
+                    task.wait()
                 end
+                pcall(function() beam:Destroy() end)
+                pcall(function() a0:Destroy() end)
+                pcall(function() a1:Destroy() end)
             end)
 
             _push(item)
         end)
     end
+
 
     local function _extractVectors(value)
         local origin, finish
@@ -20584,156 +20796,864 @@ end)
 
 
 -- ============================================================
--- ANTI-AIM (Spinbot) — Heartbeat loop.
---   Yaw modes:
---     "Forward" : body spins continuously around Y, head neutral.
---     "Freeze"  : body locked to the yaw the camera had when Freeze started.
---     "Up"      : body KEEPS SPINNING and head tilts UP (~60°). Body is NEVER
---                 tilted forward/back; only the Neck joint moves.
---     "Down"    : body KEEPS SPINNING and head tilts DOWN (~60°). Same rule.
---
---   Why the whole body was tilting before: _setNeckPitch only looked for the
---   Neck Motor6D on the Torso. On R15 rigs the Neck motor lives on the Head
---   (Part0=UpperTorso, Part1=Head), so the pitch was silently no-op'd and
---   the visible tilt came from Roblox's replicated aim vector rotating the
---   entire body — because HRP.CFrame was being touched inconsistently. Now
---   we resolve the Neck motor from EITHER parent, cache the original C0 per
---   motor, and only ever spin HRP around Y (never pitch/roll it).
--- ============================================================
-;(function()
-    local RunS    = game:GetService("RunService")
-    local Players = game:GetService("Players")
-    local LP      = Players.LocalPlayer
+-- ============================================================================
+-- === HVH PORT (from hvh-2.lua) — merged into existing tabs (AIM/VISUALS/MISC)
+-- ============================================================================
+-- Defer to next frame so the UI Library has fully finalized every tab
+-- (avoids "lacking capability Plugin" that fires when Section() is called
+-- from the same synchronous chunk that just built the tabs).
+task.defer(function() pcall(function()
+    local Players            = game:GetService("Players")
+    local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+    local RunService         = game:GetService("RunService")
+    local Workspace          = game:GetService("Workspace")
+    local SoundService       = game:GetService("SoundService")
+    local Lighting           = game:GetService("Lighting")
+    local LP                 = Players.LocalPlayer
 
-    local NECK_C0 = setmetatable({}, { __mode = "k" }) -- Motor6D -> original C0
-    local _aaFollowTarget, _aaFollowLastScan = nil, 0
+    local Toggles = Library.Toggles
+    local Options = Library.Options
 
-    local function _findNeckMotor(char)
-        if not char then return nil end
-        local head = char:FindFirstChild("Head")
-        if head then
-            local m = head:FindFirstChild("Neck")
-            if m and m:IsA("Motor6D") then return m end
+    local function forceOff(id)
+        local t = Toggles[id]
+        if t and t.Value and t.SetValue then pcall(function() t:SetValue(false) end) end
+    end
+
+    -- Safe groupbox helper: if the UI lib refuses to create a section
+    -- (capability error, tab missing, whatever), return a no-op stub that
+    -- absorbs every Add* call so downstream logic doesn't cascade into
+    -- "attempt to index nil with 'Toggle'".
+    local function _noopGB()
+        local nop = {}
+        local function ret() return nop end
+        setmetatable(nop, { __index = function() return ret end })
+        return nop
+    end
+    local function safeGB(tab, side, name, icon)
+        if not tab then return _noopGB() end
+        local gb
+        local ok = pcall(function()
+            if side == "R" then gb = tab:AddRightGroupbox(name, icon)
+            else                gb = tab:AddLeftGroupbox(name, icon) end
+        end)
+        if not ok or not gb or not gb.AddToggle then
+            warn("[Eclipse] HVH section '"..tostring(name).."' unavailable — using stub")
+            return _noopGB()
         end
-        for _, name in ipairs({ "Torso", "UpperTorso" }) do
-            local t = char:FindFirstChild(name)
-            if t then
-                local m = t:FindFirstChild("Neck")
-                if m and m:IsA("Motor6D") then return m end
-            end
+        return gb
+    end
+
+
+    -- ------------------------------------------------------------
+    -- WALLBANG X-RAY → moved into WORLD COLOR group (World tab)
+    -- PEN POWER      → moved into EXTRAS group (Aim tab)
+    -- Groupbox creation happens further below; toggles are registered there.
+    -- ------------------------------------------------------------
+
+    local MATERIAL_DEPTH = {
+        [Enum.Material.Plastic]=10,[Enum.Material.SmoothPlastic]=10,[Enum.Material.Wood]=10,[Enum.Material.WoodPlanks]=10,
+        [Enum.Material.Cardboard]=10,[Enum.Material.Glass]=25,[Enum.Material.Fabric]=25,[Enum.Material.Ice]=15,
+        [Enum.Material.Snow]=10,[Enum.Material.Sand]=10,[Enum.Material.Slate]=30,[Enum.Material.Concrete]=35,
+        [Enum.Material.Brick]=30,[Enum.Material.Cobblestone]=30,[Enum.Material.Pavement]=30,[Enum.Material.Limestone]=30,
+        [Enum.Material.Rock]=35,[Enum.Material.Basalt]=40,[Enum.Material.Granite]=40,[Enum.Material.Marble]=40,
+        [Enum.Material.Sandstone]=25,[Enum.Material.Metal]=45,[Enum.Material.Asphalt]=30,
+    }
+    local function matDepth(m) return MATERIAL_DEPTH[m] or 0 end
+
+    -- Expose pen override globally so ESBoxStrike aim logic can pick it up
+    _G.EclipseHVH_GetPen = function()
+        if Toggles.HVH_PenOverride and Toggles.HVH_PenOverride.Value then
+            return Options.HVH_PenPower.Value
         end
         return nil
     end
 
-    local function _setNeckPitch(char, deg)
-        local m = _findNeckMotor(char)
-        if not m then return end
-        if NECK_C0[m] == nil then NECK_C0[m] = m.C0 end
-        m.C0 = NECK_C0[m] * CFrame.Angles(math.rad(deg), 0, 0)
+    local function isEnemyPlayer(pl)
+        if pl == LP then return false end
+        local t = pl:GetAttribute("Team"); if not t or t == "Spectators" then return false end
+        local mine = LP:GetAttribute("Team")
+        if mine and t == mine then return false end
+        return true
     end
+    local function isAlive(ch) local h = ch and ch:FindFirstChildOfClass("Humanoid"); return h and h.Health > 0 end
 
-    local function _restoreNeck(char)
-        local m = _findNeckMotor(char)
-        if not m then return end
-        if NECK_C0[m] ~= nil then m.C0 = NECK_C0[m] end
+    local wallbangParts = {}
+    local function resetWallbangParts()
+        for p, orig in pairs(wallbangParts) do pcall(function() p.LocalTransparencyModifier = orig end) end
+        wallbangParts = {}
     end
-
-    connectSignal(RunS.Heartbeat:Connect(function()
-        if not scriptRunning then return end
-        if not (Config and Config.Misc and Config.Misc.AntiAim) then
-            local char = LP and LP.Character
-            if char then pcall(function() _restoreNeck(char) end) end
+    local function updateWallbangESP()
+        if not Toggles.HVH_WallbangESP or not Toggles.HVH_WallbangESP.Value then
+            if next(wallbangParts) then resetWallbangParts() end
             return
         end
-        local char = LP and LP.Character
-        if not char then return end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health <= 0 then return end
-        local cam   = workspace.CurrentCamera
-        local camCF = cam and cam.CFrame
-        local yaw   = tostring(Config.Misc.AntiAimYaw or "Forward")
-        local spd   = math.rad(tonumber(Config.Misc.AntiAimSpeed) or 80)
+        local cam = Workspace.CurrentCamera; if not cam then return end
+        local camPos = cam.CFrame.Position
+        local current = {}
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if isEnemyPlayer(pl) and isAlive(pl.Character) then
+                local ch = pl.Character
+                local tgt = ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChild("Head")
+                if tgt then
+                    local dir = tgt.Position - camPos
+                    local p = RaycastParams.new()
+                    p.FilterType = Enum.RaycastFilterType.Exclude
+                    p.FilterDescendantsInstances = { LP.Character }
+                    local r = Workspace:Raycast(camPos, dir, p)
+                    if r and r.Instance then
+                        local m = r.Instance:FindFirstAncestorOfClass("Model")
+                        local hp = m and Players:GetPlayerFromCharacter(m)
+                        if hp ~= pl and matDepth(r.Instance.Material) > 0 then
+                            current[r.Instance] = true
+                        end
+                    end
+                end
+            end
+        end
+        for part, orig in pairs(wallbangParts) do
+            if not current[part] then pcall(function() part.LocalTransparencyModifier = orig end); wallbangParts[part] = nil end
+        end
+        local tt = Options.HVH_WallTrans.Value
+        for part in pairs(current) do
+            if not wallbangParts[part] and (part:IsA("BasePart") or part:IsA("MeshPart")) then
+                wallbangParts[part] = part.LocalTransparencyModifier
+            end
+            if wallbangParts[part] then pcall(function() part.LocalTransparencyModifier = tt end) end
+        end
+    end
 
+    -- ------------------------------------------------------------
+    -- VISUALS TAB — HVH BULLET TRACERS  (appended to PLAYER VISUALS,
+    -- right below SHOW IMPACT, no separate group)
+    -- ------------------------------------------------------------
+    local TGB = (rawget(getfenv(0), "PVGB")) or safeGB(Tabs.Visuals, "R", "PLAYER VISUALS", "user")
+    pcall(function() TGB:AddDivider() end)
+    TGB:AddLabel("Bullet Tracers")
+    TGB:AddToggle("HVH_Tracers", { Text = "Enable Bullet Tracers", Default = false,
+        Callback = function(v) if v then forceOff("PV_BulletTracer") end end })
+    TGB:AddLabel("Tracer Color"):AddColorPicker("HVH_TracerColor", { Default = Color3.fromRGB(255,50,50) })
+    TGB:AddSlider("HVH_TracerThick", { Text = "Thickness",    Default = 0.15, Min = 0.01, Max = 1, Rounding = 2 })
+    TGB:AddSlider("HVH_TracerTrans", { Text = "Transparency", Default = 0,    Min = 0,    Max = 1, Rounding = 2 })
+    TGB:AddSlider("HVH_TracerLife",  { Text = "Lifetime",     Default = 0.5,  Min = 0.1,  Max = 3, Rounding = 1, Suffix = "s" })
+
+    local function drawTracer(from, to)
+        local a0 = Instance.new("Attachment"); a0.WorldPosition = from; a0.Parent = Workspace.Terrain
+        local a1 = Instance.new("Attachment"); a1.WorldPosition = to;   a1.Parent = Workspace.Terrain
+        local beam = Instance.new("Beam")
+        beam.Attachment0 = a0; beam.Attachment1 = a1
+        local col = Options.HVH_TracerColor.Value
+        local th  = Options.HVH_TracerThick.Value
+        local st  = Options.HVH_TracerTrans.Value
+        beam.Color = ColorSequence.new(col)
+        beam.Width0 = th; beam.Width1 = th * 0.2
+        beam.LightEmission = 1; beam.LightInfluence = 0; beam.FaceCamera = true
+        beam.Parent = Workspace.Terrain
+        local dur = Options.HVH_TracerLife.Value
+        local t0 = tick()
+        task.spawn(function()
+            while tick() - t0 < dur do
+                local t = (tick() - t0) / dur
+                local ct = st + (1 - st) * t
+                beam.Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, ct),
+                    NumberSequenceKeypoint.new(1, ct),
+                })
+                task.wait()
+            end
+            beam:Destroy(); a0:Destroy(); a1:Destroy()
+        end)
+    end
+
+    -- ------------------------------------------------------------
+    -- WORLD TAB — WALLBANG X-RAY inside the existing WORLD COLOR group
+    -- (Ambience/CustomTime/Brightness/NoShadows removed — they were
+    --  leaving Lighting in a broken state when toggled off.)
+    -- ------------------------------------------------------------
+    -- Snapshot original Lighting once and restore, so any leftover state
+    -- from a previous session of this script is cleared immediately.
+    local _origLighting = {
+        Ambient        = Lighting.Ambient,
+        OutdoorAmbient = Lighting.OutdoorAmbient,
+        Brightness     = Lighting.Brightness,
+        GlobalShadows  = Lighting.GlobalShadows,
+        ClockTime      = Lighting.ClockTime,
+    }
+    pcall(function()
+        Lighting.Ambient        = _origLighting.Ambient
+        Lighting.OutdoorAmbient = _origLighting.OutdoorAmbient
+        Lighting.Brightness     = _origLighting.Brightness
+        Lighting.GlobalShadows  = _origLighting.GlobalShadows
+    end)
+
+    local WCGB = (_G.__EclipseWorldColorGB)
+        or (rawget(getfenv(0), "WorldColorGB"))
+        or safeGB(Tabs.World, "R", "WORLD COLOR", "sun")
+    pcall(function() WCGB:AddDivider() end)
+    WCGB:AddToggle("HVH_WallbangESP", {
+        Text = "WALLBANG X-RAY", Default = false,
+        Callback = function(v)
+            if v then forceOff("Wallbang_Toggle") end
+            if not v then pcall(resetWallbangParts) end
+        end,
+    })
+    WCGB:AddSlider("HVH_WallTrans", { Text = "WALL TRANSPARENCY", Default = 0.8, Min = 0, Max = 0.95, Rounding = 2 })
+
+    -- ── Custom Time ─────────────────────────────────────────
+    pcall(function() WCGB:AddDivider() end)
+    WCGB:AddToggle("HVH_CustomTime", {
+        Text = "CUSTOM TIME", Default = false,
+        Callback = function(v)
+            if v then
+                pcall(function() Lighting.ClockTime = Options.HVH_TimeVal.Value end)
+            else
+                pcall(function() Lighting.ClockTime = _origLighting.ClockTime end)
+            end
+        end,
+    })
+    WCGB:AddSlider("HVH_TimeVal", {
+        Text = "TIME OF DAY", Default = 12, Min = 0, Max = 24, Rounding = 1,
+        Callback = function(v)
+            if Toggles.HVH_CustomTime and Toggles.HVH_CustomTime.Value then
+                pcall(function() Lighting.ClockTime = v end)
+            end
+        end,
+    })
+
+    -- ------------------------------------------------------------
+    -- VISUALS TAB — HITMARKER  (appended to PLAYER VISUALS, no separate group)
+    -- ------------------------------------------------------------
+    local HMGB = (rawget(getfenv(0), "PVGB")) or safeGB(Tabs.Visuals, "R", "PLAYER VISUALS", "user")
+    pcall(function() HMGB:AddDivider() end)
+    HMGB:AddLabel("Hitmarker")
+    HMGB:AddToggle("HVH_Hitmarker",   { Text = "Enable Hitmarker", Default = true })
+    HMGB:AddLabel("Body Damage Color"):AddColorPicker("HVH_HM_Body", { Default = Color3.fromRGB(255,255,120) })
+    HMGB:AddLabel("Head Damage Color"):AddColorPicker("HVH_HM_Head", { Default = Color3.fromRGB(255,80,80)   })
+    HMGB:AddSlider("HVH_HM_Size",     { Text = "Text Size", Default = 34, Min = 18, Max = 72, Rounding = 0 })
+    HMGB:AddSlider("HVH_HM_Life",     { Text = "Lifetime",  Default = 0.9, Min = 0.3, Max = 3, Rounding = 1, Suffix = "s" })
+
+    local function showHitmarker(worldPos, dmg, isHead)
         pcall(function()
-            local pos = hrp.Position
-
-            if yaw == "Freeze" then
-                _restoreNeck(char)
-                local st = _G.__EclipseAA or { mode = nil, yawRad = 0 }
-                if st.mode ~= yaw then
-                    local lookCF = camCF or hrp.CFrame
-                    local lv = lookCF.LookVector
-                    st.yawRad = math.atan2(-lv.X, -lv.Z)
-                    st.mode = yaw
-                    _G.__EclipseAA = st
+            local part = Instance.new("Part")
+            part.Size = Vector3.new(0.1, 0.1, 0.1); part.Transparency = 1
+            part.Anchored = true; part.CanCollide = false; part.CastShadow = false
+            part.Position = worldPos + Vector3.new((math.random()-0.5)*0.6, (math.random())*0.4, (math.random()-0.5)*0.6)
+            part.Parent = Workspace
+            local bg = Instance.new("BillboardGui")
+            bg.Size = UDim2.new(0, 140, 0, 55); bg.AlwaysOnTop = true
+            bg.LightInfluence = 0; bg.Adornee = part; bg.Parent = part
+            local shadow = Instance.new("TextLabel")
+            shadow.Size = UDim2.new(1,0,1,0); shadow.Position = UDim2.new(0,2,0,2)
+            shadow.BackgroundTransparency = 1; shadow.Font = Enum.Font.GothamBlack
+            shadow.TextSize = Options.HVH_HM_Size.Value
+            shadow.TextColor3 = Color3.fromRGB(0,0,0); shadow.TextTransparency = 0.5
+            shadow.Text = "-"..tostring(dmg)..(isHead and "  ★" or ""); shadow.Parent = bg
+            local lbl = Instance.new("TextLabel")
+            lbl.Size = UDim2.new(1,0,1,0); lbl.BackgroundTransparency = 1
+            lbl.Font = Enum.Font.GothamBlack; lbl.TextSize = Options.HVH_HM_Size.Value
+            lbl.TextStrokeTransparency = 0.15; lbl.TextStrokeColor3 = Color3.fromRGB(0,0,0)
+            lbl.TextColor3 = isHead and Options.HVH_HM_Head.Value or Options.HVH_HM_Body.Value
+            lbl.Text = shadow.Text; lbl.Parent = bg
+            local life = Options.HVH_HM_Life.Value
+            local t0 = tick()
+            task.spawn(function()
+                while tick() - t0 < life do
+                    local t = (tick() - t0) / life
+                    bg.StudsOffset = Vector3.new(0, t*3, 0)
+                    local scale = 1 + t * 0.35
+                    lbl.TextSize    = math.floor(Options.HVH_HM_Size.Value * scale)
+                    shadow.TextSize = lbl.TextSize
+                    lbl.TextTransparency    = t
+                    shadow.TextTransparency = 0.5 + t*0.5
+                    lbl.TextStrokeTransparency = 0.15 + t*0.85
+                    task.wait()
                 end
-                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, st.yawRad, 0)
+                part:Destroy()
+            end)
+        end)
+    end
+    _G.EclipseHVH_ShowHitmarker = showHitmarker
 
-            elseif yaw == "Follow" then
-                -- Aim the body toward the nearest visible enemy (auto-follow).
-                -- Head stays neutral; only HRP Y-rotation is written so the
-                -- torso never tilts. If no target, fall back to Forward spin.
-                _restoreNeck(char)
-                local bestPl = _aaFollowTarget
-                local bestOk = false
-                if bestPl and bestPl.Parent and bestPl.Character then
-                    local pch = bestPl.Character
-                    local h   = pch and pch:FindFirstChildOfClass("Humanoid")
-                    local hd  = pch and (pch:FindFirstChild("Head") or pch:FindFirstChild("HumanoidRootPart"))
-                    bestOk = h and h.Health > 0 and hd ~= nil
+    -- ------------------------------------------------------------
+    -- MISC TAB — ANTI-AIM (HVH, replaces AA_Enable/spinbot)
+    -- ------------------------------------------------------------
+    local AAGB = safeGB(Tabs.Misc, "R", "ANTI-AIM", "shield")
+    AAGB:AddToggle("HVH_AA",         { Text = "ENABLE ANTI-AIM", Default = false,
+        Callback = function(v) if v then forceOff("AA_Enable") end end })
+    AAGB:AddDropdown("HVH_YawMode",  { Text = "YAW",   Values = {'None','Backward','Left','Right','Spin','Random'}, Default = 'Backward', Multi = false })
+    AAGB:AddSlider("HVH_SpinSpeed",  { Text = "SPIN SPEED",      Default = 10,  Min = 1,   Max = 100, Rounding = 0 })
+    AAGB:AddSlider("HVH_RandInt",    { Text = "RANDOM INTERVAL", Default = 0.5, Min = 0.1, Max = 2.0, Rounding = 1, Suffix = "s" })
+    AAGB:AddDropdown("HVH_PitchMode",{ Text = "PITCH", Values = {'None','Down','Up','Zero','Random'}, Default = 'Down', Multi = false })
+
+    AAGB:AddDivider()
+    AAGB:AddToggle("HVH_AntiSpec", { Text = "ANTI-SPECTATOR",   Default = false })
+    AAGB:AddSlider("HVH_SpecRot",  { Text = "ROTATION AMOUNT", Default = math.pi, Min = 0, Max = math.pi, Rounding = 2 })
+    AAGB:AddSlider("HVH_SpecPos",  { Text = "POSITION OFFSET", Default = 1,       Min = 0, Max = 10,      Rounding = 1, Suffix = " studs" })
+
+    local spinAngle = 0
+    local randomYaw = 0
+    local lastRandomUpdate = 0
+    pcall(function()
+        local RM = require(ReplicatedStorage.Database.Security.Remotes)
+        if RM.Character and RM.Character.UpdateLookAngle then
+            local Orig = RM.Character.UpdateLookAngle.Send
+            if type(Orig) == "function" then
+                local function hk(...)
+                    local args = select(1, ...)
+                    if Toggles.HVH_AA and Toggles.HVH_AA.Value and typeof(args) == "table" and args.HorizontalAngle then
+                        local yaw = args.HorizontalAngle
+                        local ym = Options.HVH_YawMode.Value
+                        local pm = Options.HVH_PitchMode.Value
+
+                        if     ym == "Backward" then
+                            yaw = yaw + math.pi
+                        elseif ym == "Left" then
+                            yaw = yaw + math.pi / 2
+                        elseif ym == "Right" then
+                            yaw = yaw - math.pi / 2
+                        elseif ym == "Spin" then
+                            spinAngle = (spinAngle + (Options.HVH_SpinSpeed.Value * 0.01)) % (2 * math.pi)
+                            yaw = yaw + spinAngle
+                        elseif ym == "Random" then
+                            if tick() - lastRandomUpdate > Options.HVH_RandInt.Value then
+                                randomYaw = (math.random() - 0.5) * 2 * math.pi
+                                lastRandomUpdate = tick()
+                            end
+                            yaw = randomYaw
+                        end
+
+                        yaw = (yaw + math.pi) % (2 * math.pi) - math.pi
+                        args.HorizontalAngle = yaw
+
+                        if     pm == "Down" then
+                            args.VerticalLook = -1
+                        elseif pm == "Up" then
+                            args.VerticalLook = 1
+                        elseif pm == "Zero" then
+                            args.VerticalLook = 0
+                        elseif pm == "Random" then
+                            args.VerticalLook = (math.random() - 0.5) * 2
+                        end
+
+                    end
+                    return Orig(...)
                 end
-                if (not bestOk) or (tick() - _aaFollowLastScan) > ES152.adaptiveInterval(0.18, 2) then
-                    _aaFollowLastScan = tick()
-                    bestPl = nil
-                    local bestDist = math.huge
-                    for _, pl in ipairs(Players:GetPlayers()) do
-                        if pl ~= LP then
-                            local skip = false
-                            if not _IS_DEATHMATCH and Config.TeamCheck and IsAlly and IsAlly(pl) then skip = true end
-                            if not skip then
-                                local pch = pl.Character
-                                local h   = pch and pch:FindFirstChildOfClass("Humanoid")
-                                local hd  = pch and (pch:FindFirstChild("Head") or pch:FindFirstChild("HumanoidRootPart"))
-                                if h and h.Health > 0 and hd then
-                                    local vis = IsVisible and IsVisible(hd)
-                                    if vis then
-                                        local d = (hd.Position - pos).Magnitude
-                                        if d < bestDist then bestDist = d; bestPl = pl end
+                RM.Character.UpdateLookAngle.Send = (newcclosure and newcclosure(hk)) or hk
+            end
+        end
+
+        if RM.Spectate and RM.Spectate.UpdateCameraCFrame then
+            local Orig = RM.Spectate.UpdateCameraCFrame.Send
+            if type(Orig) == "function" then
+                local function hk(...)
+                    local args = select(1, ...)
+                    if Toggles.HVH_AntiSpec and Toggles.HVH_AntiSpec.Value and typeof(args) == "CFrame" then
+                        local ra = Options.HVH_SpecRot.Value
+                        local pa = Options.HVH_SpecPos.Value
+                        local rx = (math.random() - 0.5) * 2 * ra
+                        local ry = (math.random() - 0.5) * 2 * ra
+                        local rz = (math.random() - 0.5) * 2 * ra
+                        local px = (math.random() - 0.5) * 2 * pa
+                        local py = (math.random() - 0.5) * 2 * pa
+                        local pz = (math.random() - 0.5) * 2 * pa
+                        args = args * CFrame.new(px,py,pz) * CFrame.Angles(rx,ry,rz)
+                    end
+                    return Orig(...)
+                end
+                RM.Spectate.UpdateCameraCFrame.Send = (newcclosure and newcclosure(hk)) or hk
+            end
+        end
+    end)
+
+    -- ------------------------------------------------------------
+    -- HVH SOUNDS (Hit / Kill / Shoot) — UI lives in CUSTOM SOUNDS group.
+    -- This is the playback helper used by fireShot below.
+    -- ------------------------------------------------------------
+    local SoundIDs = {
+        ['None']=nil,['Metal']='rbxassetid://2868331684',['TF2 Critical']='rbxassetid://6405267300',
+        ['TF2']='rbxassetid://118731928809041',['Rust']='rbxassetid://121566025787365',
+    }
+    local function playSound(name, vol, pitch)
+        local id = SoundIDs[name]; if not id then return end
+        local ok, s = pcall(Instance.new, "Sound")
+        if not ok or not s then return end
+        s.SoundId = id; s.Volume = vol or 0.5; s.PlaybackSpeed = pitch or 1
+        s.Parent = SoundService
+        pcall(function() s:Play() end)
+        pcall(function() s.Ended:Connect(function() s:Destroy() end) end)
+        task.delay(4, function() pcall(function() if s then s:Destroy() end end) end)
+    end
+    _G.EclipseHVH_PlaySound = playSound
+
+    -- ------------------------------------------------------------
+    -- MISC TAB — RELOAD (No Reload + Reload Time)
+    -- ------------------------------------------------------------
+    local RGB = safeGB(Tabs.Misc, "L", "RELOAD", "refresh-cw")
+    RGB:AddToggle("HVH_NoReload",   { Text = "NO RELOAD", Default = false })
+    RGB:AddSlider("HVH_ReloadTime", { Text = "RELOAD TIME", Default = 2.5, Min = 1.0, Max = 5.0, Rounding = 1, Suffix = "s" })
+
+    pcall(function()
+        local WM = require(ReplicatedStorage.Components.Weapon)
+        local Orig = WM.reload
+        local function hooked(self, ...)
+            if Toggles.HVH_NoReload and Toggles.HVH_NoReload.Value then
+                if self.IsDestroyed or self.IsReloading or self.IsShooting then return end
+                if self.Properties.Rounds == self.Rounds then return end
+                local need = self.Properties.Rounds - self.Rounds
+                local add = math.min(need, self.Capacity)
+                self.Rounds = self.Rounds + add
+                self.Capacity = self.Capacity - add
+                self.IsReloading = false; self.IsInspecting = false; self.IsShooting = false
+                self.CurrentReloadIdentity = nil
+            else
+                return Orig(self, ...)
+            end
+        end
+        WM.reload = (newcclosure and newcclosure(hooked)) or hooked
+    end)
+
+    -- ------------------------------------------------------------
+    -- (removed) ShootWeapon:FireServer passive observer.
+    -- A second __namecall hook on `game` conflicts with BAC/Frog wrappers
+    -- and produces "attempt to index nil with 'FireServer'/'Destroy'"
+    -- inside game modules. Tracer/hitmarker/sounds are triggered
+    -- elsewhere (AutoKill path + safe MB1/Touch fallback).
+    -- ------------------------------------------------------------
+
+
+
+    -- ------------------------------------------------------------
+    -- AIM TAB — AUTO KILL (HVH aimbot autoshoot, ported from hvh-3.lua)
+    -- Ao ativar + segurando qualquer arma, mira e atira automaticamente
+    -- no inimigo mais próximo visível (com wallbang opcional).
+    -- ------------------------------------------------------------
+    -- Auto Kill controls live inside the Aim tab's AIMBOT group, right below Silent Aim
+    local AKGB = safeGB(Tabs.Aim, "R", "EXTRAS", "sparkles")
+    AKGB:AddToggle("HVH_AutoKill",    { Text = "ENABLE",           Default = false })
+    AKGB:AddToggle("HVH_AK_Wallbang", { Text = "WALLBANG",         Default = true  })
+    AKGB:AddToggle("HVH_AK_Headshot", { Text = "AIM AT HEAD",      Default = true  })
+    AKGB:AddToggle("HVH_AK_Silent",   { Text = "SILENT (no camera snap)", Default = false })
+    AKGB:AddToggle("HVH_AK_NoFireDelay", { Text = "NO FIRE DELAY (smart burst)", Default = false })
+    AKGB:AddSlider("HVH_AK_MaxDist",  { Text = "MAX DISTANCE",     Default = 500, Min = 50,  Max = 2000, Rounding = 0, Suffix = " studs" })
+    AKGB:AddSlider("HVH_AK_ReloadT",  { Text = "RELOAD WAIT",      Default = 2.5, Min = 1,   Max = 5,    Rounding = 1, Suffix = "s" })
+    pcall(function() AKGB:AddDivider() end)
+    AKGB:AddToggle("HVH_PenOverride", { Text = "PEN POWER OVERRIDE", Default = false })
+    AKGB:AddSlider("HVH_PenPower",    { Text = "PEN POWER", Default = 10, Min = 0.1, Max = 100, Rounding = 1 })
+
+    -- ---- Weapon DB (mini) ----
+    local WeaponDB = {
+        ["Glock-18"]={FR=0.15,R=20,Pen=1.5,Wbm=0.5,D={Head=68,Torso=17,Arms=13,Legs=11}},
+        ["USP-S"]   ={FR=0.17,R=12,Pen=1.5,Wbm=0.5,D={Head=140,Torso=35,Arms=27,Legs=22}},
+        ["P2000"]   ={FR=0.17,R=13,Pen=1.5,Wbm=0.5,D={Head=140,Torso=35,Arms=27,Legs=22}},
+        ["P250"]    ={FR=0.15,R=13,Pen=1.5,Wbm=0.5,D={Head=140,Torso=35,Arms=27,Legs=22}},
+        ["Five-Seven"]={FR=0.15,R=20,Pen=2,Wbm=0.6,D={Head=126,Torso=32,Arms=24,Legs=20}},
+        ["Tec-9"]   ={FR=0.12,R=18,Pen=1,Wbm=0.4,D={Head=132,Torso=33,Arms=25,Legs=20}},
+        ["CZ75-Auto"]={FR=0.08,R=12,Pen=1.5,Wbm=0.5,D={Head=100,Torso=25,Arms=19,Legs=15}},
+        ["Dual Berettas"]={FR=0.09,R=30,Pen=1.5,Wbm=0.5,D={Head=76,Torso=19,Arms=14,Legs=12}},
+        ["Desert Eagle"]={FR=0.25,R=7,Pen=2,Wbm=0.9,D={Head=257,Torso=63,Arms=47,Legs=38}},
+        ["R8 Revolver"]={FR=0.25,R=8,Pen=3,Wbm=0.9,D={Head=344,Torso=86,Arms=64,Legs=52}},
+        ["MP9"]={FR=0.07,R=30,Pen=2,Wbm=0.6,D={Head=104,Torso=26,Arms=19,Legs=16}},
+        ["MAC-10"]={FR=0.075,R=30,Pen=1.5,Wbm=0.55,D={Head=116,Torso=29,Arms=22,Legs=18}},
+        ["MP7"]={FR=0.075,R=30,Pen=2,Wbm=0.6,D={Head=116,Torso=29,Arms=22,Legs=18}},
+        ["MP5-SD"]={FR=0.08,R=30,Pen=2,Wbm=0.6,D={Head=108,Torso=27,Arms=20,Legs=16}},
+        ["UMP-45"]={FR=0.1,R=25,Pen=2,Wbm=0.65,D={Head=140,Torso=35,Arms=26,Legs=22}},
+        ["P90"]={FR=0.07,R=50,Pen=2,Wbm=0.65,D={Head=104,Torso=26,Arms=19,Legs=16}},
+        ["PP-Bizon"]={FR=0.09,R=64,Pen=1.5,Wbm=0.55,D={Head=108,Torso=27,Arms=20,Legs=16}},
+        ["Galil AR"]={FR=0.09,R=35,Pen=4,Wbm=0.7,D={Head=120,Torso=30,Arms=23,Legs=19}},
+        ["FAMAS"]={FR=0.09,R=25,Pen=4,Wbm=0.7,D={Head=120,Torso=30,Arms=23,Legs=19}},
+        ["AK-47"]={FR=0.1,R=30,Pen=4,Wbm=0.8,D={Head=143,Torso=36,Arms=27,Legs=22}},
+        ["M4A4"]={FR=0.09,R=30,Pen=4,Wbm=0.75,D={Head=131,Torso=33,Arms=25,Legs=20}},
+        ["M4A1-S"]={FR=0.09,R=20,Pen=4,Wbm=0.75,D={Head=133,Torso=33,Arms=25,Legs=21}},
+        ["SG 553"]={FR=0.09,R=30,Pen=4,Wbm=0.75,D={Head=133,Torso=33,Arms=25,Legs=21}},
+        ["AUG"]={FR=0.09,R=30,Pen=4,Wbm=0.75,D={Head=101,Torso=28,Arms=21,Legs=17}},
+        ["SSG 08"]={FR=1.25,R=10,Pen=8,Wbm=0.98,D={Head=315,Torso=80,Arms=61,Legs=50}},
+        ["AWP"]={FR=1.47,R=5,Pen=8,Wbm=0.98,D={Head=459,Torso=115,Arms=88,Legs=72}},
+        ["MAG-7"]={FR=0.84,R=8,Pen=1,Wbm=0.55,D={Head=122,Torso=86,Arms=30,Legs=25}},
+        ["Nova"]={FR=0.88,R=8,Pen=0.8,Wbm=0.5,D={Head=106,Torso=74,Arms=26,Legs=22}},
+        ["Sawed-Off"]={FR=0.84,R=7,Pen=1,Wbm=0.5,D={Head=125,Torso=88,Arms=31,Legs=25}},
+        ["XM1014"]={FR=0.7,R=7,Pen=1,Wbm=0.5,D={Head=82,Torso=57,Arms=20,Legs=17}},
+        ["Negev"]={FR=0.066,R=150,Pen=4,Wbm=0.7,D={Head=115,Torso=29,Arms=22,Legs=18}},
+        ["Knife"]={FR=0.4,R=1,Pen=0,Wbm=0,D={Head=48,Torso=48,Arms=48,Legs=48}},
+        ["Zeus x27"]={FR=0.5,R=1,Pen=1,Wbm=0,D={Head=500,Torso=500,Arms=500,Legs=500}},
+    }
+
+    local HttpService = game:GetService("HttpService")
+    local HITBOX_ORDER = { "Head","HumanoidRootPart","UpperTorso","LowerTorso","LeftUpperArm","RightUpperArm","LeftUpperLeg","RightUpperLeg" }
+
+    local function getWeaponIdAndName()
+        local a = LP:GetAttribute("CurrentEquipped"); if not a then return nil, nil end
+        local ok, d = pcall(function() return HttpService:JSONDecode(a) end)
+        if not ok or type(d) ~= "table" or not d.Identifier then return nil, nil end
+        local wn = d.Name
+        if not wn then
+            local u = string.find(d.Identifier, "_")
+            wn = u and string.sub(d.Identifier, 1, u-1) or d.Identifier
+        end
+        return d.Identifier, wn
+    end
+
+    local function classifyPart(inst)
+        if not inst then return "Torso" end
+        local n = inst.Name
+        if n == "Head" then return "Head" end
+        if n:find("Torso") or n == "HumanoidRootPart" then return "Torso" end
+        if n:find("Arm") or n:find("Hand") then return "Arms" end
+        if n:find("Leg") or n:find("Foot") then return "Legs" end
+        return "Torso"
+    end
+
+    local function getBaseFilter()
+        local f = {}
+        if LP.Character then table.insert(f, LP.Character) end
+        return f
+    end
+    local function shouldFilterPart(instance)
+        if instance:FindFirstAncestorWhichIsA("Accessory") then return true end
+        if instance.Name == "CollisionCapsule" then return true end
+        local map = Workspace:FindFirstChild("Map")
+        if map then
+            for _, s in ipairs({"Cameras","Barriers","Ambience"}) do
+                local n = map:FindFirstChild(s); if n and instance:IsDescendantOf(n) then return true end
+            end
+            local z = map:FindFirstChild("Zones")
+            if z then
+                for _, s in ipairs({"Spawns","Sites"}) do
+                    local n = z:FindFirstChild(s); if n and instance:IsDescendantOf(n) then return true end
+                end
+            end
+        end
+        return false
+    end
+
+    local function isTargetVisible(origin, targetPart)
+        if not targetPart then return false end
+        local allowWB = Toggles.HVH_AK_Wallbang and Toggles.HVH_AK_Wallbang.Value
+        -- Fast path: Eclipse's own IsVisible (LOS check) when wallbang is off.
+        if not allowWB then
+            local ok, vis = pcall(IsVisible, targetPart)
+            return ok and vis or false
+        end
+        local wallCheck = true
+        local pen = (Toggles.HVH_PenOverride and Toggles.HVH_PenOverride.Value)
+            and Options.HVH_PenPower.Value or 4
+        local dir = targetPart.Position - origin
+        local dist = dir.Magnitude
+        local dirU = dir.Unit
+        local tModel = targetPart:FindFirstAncestorOfClass("Model")
+        local filter = getBaseFilter()
+        local remaining = dist
+        local cur = origin
+        for _ = 1, 6 do
+            local p = RaycastParams.new()
+            p.FilterType = Enum.RaycastFilterType.Exclude
+            p.FilterDescendantsInstances = filter
+            local r
+            for _ = 1, 12 do
+                r = Workspace:Raycast(cur, dirU * remaining, p)
+                if not r then break end
+                if not shouldFilterPart(r.Instance) then break end
+                table.insert(filter, r.Instance)
+                p.FilterDescendantsInstances = filter
+            end
+            if not r then return not wallCheck end
+            local hitDist = (r.Position - cur).Magnitude
+            remaining = remaining - hitDist
+            if tModel and r.Instance:IsDescendantOf(tModel) then return true end
+            if not wallCheck then return true end
+            if not allowWB then return false end
+            local d = matDepth(r.Instance.Material)
+            if d == 0 and hitDist > pen then return false end
+            table.insert(filter, r.Instance)
+            cur = r.Position + dirU * 0.1
+        end
+        return false
+    end
+
+    local function findBest()
+        local cam = Workspace.CurrentCamera; if not cam then return nil,nil end
+        local camPos = cam.CFrame.Position
+        local maxD = Options.HVH_AK_MaxDist.Value
+        local bestD, bestP, bestPart = maxD, nil, nil
+        local headOnly = Toggles.HVH_AK_Headshot and Toggles.HVH_AK_Headshot.Value
+        local teamChk  = Config.TeamCheck
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= LP then
+                local theirT = pl:GetAttribute("Team")
+                local mineT  = LP:GetAttribute("Team")
+                local hostile = theirT and theirT ~= "Spectators"
+                if hostile and teamChk and mineT and theirT == mineT then hostile = false end
+                if hostile and isAlive(pl.Character) then
+                    local ch = pl.Character
+                    local order = headOnly and HITBOX_ORDER or { "HumanoidRootPart","UpperTorso","Head","LowerTorso","LeftUpperArm","RightUpperArm","LeftUpperLeg","RightUpperLeg" }
+                    for _, pn in ipairs(order) do
+                        local part = ch:FindFirstChild(pn)
+                        if part and isTargetVisible(camPos, part) then
+                            local d = (camPos - part.Position).Magnitude
+                            if d < bestD then bestD = d; bestP = pl; bestPart = part end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        return bestP, bestPart
+    end
+
+    local function doRayFull(origin, direction, maxDist)
+        local pen = (Toggles.HVH_PenOverride and Toggles.HVH_PenOverride.Value)
+            and Options.HVH_PenPower.Value or 4
+        local allowWB = Toggles.HVH_AK_Wallbang and Toggles.HVH_AK_Wallbang.Value
+        local filter = getBaseFilter()
+        local hits, cur, remaining = {}, origin, maxDist
+        local lastInst, lastPos
+        for _ = 1, 8 do
+            local p = RaycastParams.new()
+            p.FilterType = Enum.RaycastFilterType.Exclude
+            p.FilterDescendantsInstances = filter
+            local r
+            for _ = 1, 15 do
+                r = Workspace:Raycast(cur, direction.Unit * remaining, p)
+                if not r then break end
+                if not shouldFilterPart(r.Instance) then break end
+                table.insert(filter, r.Instance)
+                p.FilterDescendantsInstances = filter
+            end
+            if not r then break end
+            local hd = (r.Position - cur).Magnitude
+            remaining = remaining - hd
+            local mdl = r.Instance:FindFirstAncestorOfClass("Model")
+            local hp = mdl and Players:GetPlayerFromCharacter(mdl)
+            local isLast = (hp and hp ~= LP) or (not allowWB) or (matDepth(r.Instance.Material) == 0 and hd > pen)
+            table.insert(hits, {
+                Instance = r.Instance, Position = r.Position, Normal = r.Normal,
+                Material = r.Instance.Material.Name, Distance = (r.Position - origin).Magnitude,
+                Exit = not isLast,
+            })
+            lastInst, lastPos = r.Instance, r.Position
+            if isLast then break end
+            table.insert(filter, r.Instance)
+            cur = r.Position + direction.Unit * 0.1
+        end
+        if #hits == 0 then
+            table.insert(hits, {
+                Instance = Workspace.Terrain, Position = cur + direction.Unit * remaining,
+                Normal = Vector3.new(0,1,0), Material = "Grass", Distance = maxDist, Exit = false,
+            })
+        end
+        return hits, lastInst, lastPos
+    end
+
+    local shotSeq = 0
+    local nextShotAllowed = 0
+    local akIsReloading = false
+
+    local function getShootRemote()
+        local nf = ReplicatedStorage:FindFirstChild("NetworkRemotes")
+        local inv = nf and nf:FindFirstChild("Inventory")
+        return inv and inv:FindFirstChild("ShootWeapon")
+    end
+
+    local function fireShot(targetPart, targetPlayer)
+        local remote = getShootRemote(); if not remote then return false end
+        local id, wn = getWeaponIdAndName(); if not id then return false end
+        local cam = Workspace.CurrentCamera; if not cam then return false end
+        local ch = LP.Character
+        if not ch or ch:GetAttribute("Dead") then return false end
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return false end
+
+        local camPos = cam.CFrame.Position
+        local dir = (targetPart.Position - camPos).Unit
+        local hits, hitInst, hitPos = doRayFull(camPos, dir, Options.HVH_AK_MaxDist.Value)
+
+        local isSniper = (wn == "SSG 08" or wn == "AWP")
+        local isScoped = cam.FieldOfView < 70
+        shotSeq = shotSeq + 1
+        local ok = pcall(function()
+            remote:FireServer({
+                IsSniperScoped = isSniper and isScoped,
+                ShootingHand   = "Right",
+                Identifier     = id,
+                Seq            = shotSeq,
+                Bullets        = {{ Direction = dir, Origin = camPos, Hits = hits }},
+            })
+        end)
+
+        -- Visual FX: tracer + hitmarker + sounds (mirrors hvh.lua shootPacket)
+        if ok then
+            -- SHOOTSOUND — plays on every successful fire.
+            pcall(function()
+                if Toggles.HVH_ShootSound and Toggles.HVH_ShootSound.Value then
+                    playSound(Options.HVH_ShootSnd.Value, Options.HVH_ShootVol.Value, Options.HVH_ShootPitch.Value)
+                end
+            end)
+            pcall(function()
+                if Toggles.HVH_Tracers and Toggles.HVH_Tracers.Value and hitPos then
+                    drawTracer(camPos, hitPos)
+                end
+            end)
+            -- Determine hit on the target player and compute damage.
+            local didHit, isKill, dmg, partKind = false, false, 0, "Torso"
+            pcall(function()
+                if not (hitInst and targetPlayer) then return end
+                local mdl = hitInst:FindFirstAncestorOfClass("Model")
+                local hp  = mdl and Players:GetPlayerFromCharacter(mdl)
+                if hp ~= targetPlayer then return end
+                didHit = true
+                partKind = classifyPart(hitInst)
+                local stats = WeaponDB[wn]
+                local base = (stats and stats.D and stats.D[partKind]) or 25
+                local wbm = (stats and stats.Wbm) or 0.6
+                local wallBangs = 0
+                for _, h in ipairs(hits) do if h.Exit then wallBangs = wallBangs + 1 end end
+                dmg = math.floor(base * (wbm ^ wallBangs))
+                local tHum = mdl and mdl:FindFirstChildOfClass("Humanoid")
+                if tHum and tHum.Health > 0 and (tHum.Health - dmg) <= 0 then isKill = true end
+            end)
+            if didHit then
+                pcall(function()
+                    if Toggles.HVH_Hitmarker and Toggles.HVH_Hitmarker.Value and hitPos then
+                        _G.EclipseHVH_ShowHitmarker(hitPos, dmg, partKind == "Head")
+                    end
+                end)
+                pcall(function()
+                    if isKill then
+                        if Toggles.HVH_KillSound and Toggles.HVH_KillSound.Value then
+                            playSound(Options.HVH_KillSnd.Value, Options.HVH_KillVol.Value, Options.HVH_KillPitch.Value)
+                        end
+                    else
+                        if Toggles.HVH_HitSound and Toggles.HVH_HitSound.Value then
+                            playSound(Options.HVH_HitSnd.Value, Options.HVH_HitVol.Value, Options.HVH_HitPitch.Value)
+                        end
+                    end
+                end)
+            end
+        end
+        return ok
+    end
+
+    local function tick_autoshoot()
+        if not (Toggles.HVH_AutoKill and Toggles.HVH_AutoKill.Value) then return end
+        local now = tick()
+        if now < nextShotAllowed then return end
+        if akIsReloading then return end
+        local id, wn = getWeaponIdAndName()
+        if not id or wn == "Knife" then return end
+        local stats = WeaponDB[wn]
+        local fireRate = (stats and stats.FR) or 0.12
+
+        local pl, part = findBest()
+        if not pl or not part then return end
+
+        if not (Toggles.HVH_AK_Silent and Toggles.HVH_AK_Silent.Value) then
+            local cam = Workspace.CurrentCamera
+            if cam then cam.CFrame = CFrame.new(cam.CFrame.Position, part.Position) end
+        end
+
+        if fireShot(part, pl) then
+            nextShotAllowed = now + fireRate
+        end
+    end
+
+    -- Auto-kill heartbeat (throttled inside tick_autoshoot by fire rate)
+    RunService.Heartbeat:Connect(function()
+        pcall(tick_autoshoot)
+    end)
+
+    -- ------------------------------------------------------------
+    -- HEARTBEAT LOOPS
+    -- ------------------------------------------------------------
+    RunService.Heartbeat:Connect(function()
+        pcall(updateWallbangESP)
+        pcall(function()
+            applyHVHLighting()
+        end)
+    end)
+
+end) end)
+-- === END HVH PORT ==========================================================
+
+-- ============================================================
+-- Testing stuff — embedded silent aim bypass (raycast hook)
+-- ============================================================
+do
+    local installed = false
+    _G.EclipseInstallSilentBypass = function()
+        if installed then return true end
+        installed = true
+        local ok, err = pcall(function()
+            local hookfn = hookfunction or (oth and oth.hook) or hookfunc
+            assert(hookfn, "executor missing hookfunction/oth.hook")
+            assert(getgc, "executor missing getgc")
+            assert(rawget, "executor missing rawget")
+            -- Stability fix: do NOT hook getfenv/debug.info.
+            -- LoadingScreen and DataController use debug.info/getfenv internally;
+            -- spoofing stack-level "f" or mutating returned environments makes
+            -- later calls receive nil instead of a function, causing:
+            -- "invalid argument #1 to 'info'" and module startup failures.
+            local Players     = game:GetService("Players")
+            local LocalPlayer = Players.LocalPlayer
+            local Workspace   = game:GetService("Workspace")
+            local RunService  = game:GetService("RunService")
+            local _tsTarget = nil
+            local function _tsClosestHead()
+                local cam = Workspace.CurrentCamera
+                if not cam then return nil end
+                local myTeam = LocalPlayer:GetAttribute("Team")
+                local lchar  = LocalPlayer.Character
+                if not lchar or not lchar:FindFirstChild("Head") then return nil end
+                local best, bestDist = nil, math.huge
+                for _, v in pairs(Players:GetPlayers()) do
+                    if v ~= LocalPlayer then
+                        local char = v.Character
+                        if char and not char:GetAttribute("Dead")
+                           and v:GetAttribute("Team") ~= myTeam then
+                            local head = char:FindFirstChild("Head")
+                            if head then
+                                local sp, on = cam:WorldToViewportPoint(head.Position)
+                                if on then
+                                    local d = (Vector2.new(sp.X, sp.Y) - cam.ViewportSize/2).Magnitude
+                                    if d < bestDist then
+                                        bestDist = d
+                                        best = head
                                     end
                                 end
                             end
                         end
                     end
-                    _aaFollowTarget = bestPl
                 end
-                if bestPl and bestPl.Character then
-                    local target = bestPl.Character:FindFirstChild("HumanoidRootPart")
-                                or bestPl.Character:FindFirstChild("Head")
-                    if target then
-                        local dv = target.Position - pos
-                        local ry = math.atan2(-dv.X, -dv.Z)
-                        hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, ry, 0)
-                        _G.__EclipseAA = { mode = yaw, yawRad = ry }
-                    end
-                else
-                    local _, ry = hrp.CFrame:ToOrientation()
-                    ry = ry + spd
-                    hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, ry, 0)
-                    _G.__EclipseAA = { mode = yaw, yawRad = ry }
-                end
-
-            else -- Forward: continuous spin, upright, head neutral.
-                _restoreNeck(char)
-                local _, ry = hrp.CFrame:ToOrientation()
-                ry = ry + spd
-                hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, ry, 0)
-                _G.__EclipseAA = { mode = yaw, yawRad = ry }
+                return best
             end
-
-            if cam and camCF then cam.CFrame = camCF end
+            local _conn = RunService.RenderStepped:Connect(function()
+                if not scriptRunning then return end
+                if Config and Config.Misc and Config.Misc.SilentAim then
+                    _tsTarget = _tsClosestHead()
+                else
+                    _tsTarget = nil
+                end
+            end)
+            if type(connectSignal) == "function" then pcall(connectSignal, _conn) end
+            for _, v in next, getgc(true) do
+                if type(v) == "table" and rawget(v, "cast") then
+                    local _old
+                    _old = hookfn(v.cast, function(...)
+                        local args = {...}
+                        if scriptRunning and Config and Config.Misc and Config.Misc.SilentAim
+                           and args[2] and typeof(args[2]) == "Vector3" and _tsTarget then
+                            local origin = args[1]
+                            args[2] = (_tsTarget.Position - origin)
+                        end
+                        return _old(unpack(args))
+                    end)
+                end
+            end
         end)
-    end))
+        if not ok then
+            installed = false
+            warn("[Eclipse] Silent bypass skipped: "..tostring(err))
+        end
+        return ok
+    end
+    pcall(_G.EclipseInstallSilentBypass)
+end
+
 end)()
-end)() -- close IIFE opened near line 6412
