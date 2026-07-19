@@ -427,27 +427,40 @@ if _EclipseIsMobile then
     end)
 end
 
+_EclipseMobilePendingDX = 0
+_EclipseMobilePendingDY = 0
 function _EclipseMobileAim(dx, dy)
-    -- dx/dy are viewport-pixel deltas (same units as mousemoverel).
-    local cam = workspace.CurrentCamera
-    if not cam then return end
-    local vp  = cam.ViewportSize
-    if vp.Y < 1 then return end
-    -- Convert pixels -> radians using the vertical FOV.
-    local fov = math.rad(cam.FieldOfView)
-    local perPix = fov / vp.Y
-    local yaw   = -dx * perPix
-    local pitch = -dy * perPix
-    local cf = cam.CFrame
-    local pos = cf.Position
-    -- Extract current yaw/pitch, add delta, clamp pitch to avoid flip.
-    local look = cf.LookVector
-    local curPitch = math.asin(math.clamp(look.Y, -1, 1))
-    local curYaw   = math.atan2(-look.X, -look.Z)
-    local newPitch = math.clamp(curPitch + pitch, math.rad(-89), math.rad(89))
-    local newYaw   = curYaw + yaw
-    cam.CFrame = CFrame.new(pos) * CFrame.Angles(0, newYaw, 0) * CFrame.Angles(newPitch, 0, 0)
+    -- Queue the delta; it is applied after the game's camera controller
+    -- runs (BindToRenderStep priority Camera+1) to avoid the shake caused
+    -- by the two writers fighting each frame.
+    if dx == dx and dy == dy then
+        _EclipseMobilePendingDX = _EclipseMobilePendingDX + dx
+        _EclipseMobilePendingDY = _EclipseMobilePendingDY + dy
+    end
 end
+pcall(function()
+    local RS = game:GetService("RunService")
+    RS:BindToRenderStep("EclipseMobileAimApply", Enum.RenderPriority.Camera.Value + 1, function()
+        local dx, dy = _EclipseMobilePendingDX, _EclipseMobilePendingDY
+        if dx == 0 and dy == 0 then return end
+        _EclipseMobilePendingDX, _EclipseMobilePendingDY = 0, 0
+        local cam = workspace.CurrentCamera; if not cam then return end
+        local vp  = cam.ViewportSize; if vp.Y < 1 then return end
+        local perPix = math.rad(cam.FieldOfView) / vp.Y
+        local yaw   = -dx * perPix
+        local pitch = -dy * perPix
+        local cf  = cam.CFrame
+        local pos = cf.Position
+        local rot = cf - pos
+        -- Yaw around world Y (stable), pitch around local X (natural feel).
+        local newRot = CFrame.Angles(0, yaw, 0) * rot * CFrame.Angles(pitch, 0, 0)
+        -- Guard against pitch flip.
+        if newRot.UpVector.Y < 0.05 then
+            newRot = CFrame.Angles(0, yaw, 0) * rot
+        end
+        cam.CFrame = CFrame.new(pos) * newRot
+    end)
+end)
 
 function _EclipseMobileFire()
     local ok, err = pcall(function()
@@ -2591,8 +2604,11 @@ local function _presenceHeaders()
     }
 end
 
+local _presenceInflight = false
 local function _presenceSyncOnce(action)
     if not httpRequest then return end
+    if _presenceInflight then return end
+    _presenceInflight = true
     local body = HttpService:JSONEncode({
         action     = action or "heartbeat",
         placeId    = tostring(game.PlaceId),
@@ -2607,9 +2623,9 @@ local function _presenceSyncOnce(action)
         Headers = _presenceHeaders(),
         Body = body,
     })
-    if not ok or not res or not res.Body then return end
+    if not ok or not res or not res.Body then _presenceInflight = false; return end
     local ok2, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
-    if not ok2 or type(data) ~= "table" or type(data.players) ~= "table" then return end
+    if not ok2 or type(data) ~= "table" or type(data.players) ~= "table" then _presenceInflight = false; return end
     local seen = {}
     local sig = {}
     for _, pl in ipairs(data.players) do
@@ -2629,6 +2645,7 @@ local function _presenceSyncOnce(action)
     for uid in pairs(PresenceUsers) do
         if not seen[uid] then markPresence(uid, false) end
     end
+    _presenceInflight = false
 end
 
 local function _presenceLoop()
@@ -2649,7 +2666,8 @@ local function _presenceLoop()
             pcall(_presenceSyncOnce, "heartbeat")
             local count = 0
             pcall(function() count = #Players:GetPlayers() end)
-            task.wait(count > 12 and 6 or 3)
+            local base = count > 12 and 12 or 8
+            task.wait(base + math.random() * 2)
         end
         pcall(_presenceSyncOnce, "leave")
     end)
@@ -2681,7 +2699,7 @@ local function _presenceFullScan(pg)
     for _, d in ipairs(pg:GetDescendants()) do
         n = n + 1
         _presenceTrackLabel(d)
-        if (n % 120) == 0 then EclipseYield() end
+        if (n % 40) == 0 then RunService.Heartbeat:Wait() end
     end
 end
 
@@ -2714,17 +2732,19 @@ end
 local function _presenceApplyDecorations()
     local names = _presenceNames()
     local iconTag = _presenceIconTag()
-    local touched = 0
+    local batch = 0
+    local BATCH_MAX = 40
     for d in pairs(_presenceKnownLabels) do
-        touched = touched + 1
         if not d or not d.Parent then
             _presenceKnownLabels[d] = nil
             _presenceDecorated[d] = nil
         else
             local raw = d.Text
             local matched = nil
-            for nm in pairs(names) do
-                if type(raw) == "string" and raw:find(nm, 1, true) then matched = nm; break end
+            if type(raw) == "string" then
+                for nm in pairs(names) do
+                    if raw:find(nm, 1, true) then matched = nm; break end
+                end
             end
             local snap = _presenceDecorated[d]
             if matched then
@@ -2742,13 +2762,16 @@ local function _presenceApplyDecorations()
                 _presenceDecorated[d] = nil
             end
         end
-        if (touched % 160) == 0 then EclipseYield() end
+        batch = batch + 1
+        if batch >= BATCH_MAX then
+            batch = 0
+            RunService.Heartbeat:Wait()
+        end
     end
 end
 
 local function _presenceDecorateLoop()
     task.spawn(function()
-        local lastFullScan = 0
         while scriptRunning do
             local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
             if pg then
@@ -2759,18 +2782,13 @@ local function _presenceDecorateLoop()
                     pcall(_presenceFullScan, pg)
                     _presenceLabelConn = pg.DescendantAdded:Connect(_presenceTrackLabel)
                     connectSignal(_presenceLabelConn)
-                    lastFullScan = tick()
-                end
-                if tick() - lastFullScan > 8 then
-                    pcall(_presenceFullScan, pg)
-                    lastFullScan = tick()
                 end
                 if presenceDirty then
                     presenceDirty = false
                     pcall(_presenceApplyDecorations)
                 end
             end
-            task.wait(presenceDirty and 0.2 or 1.0)
+            task.wait(1.0)
         end
         for d, snap in pairs(_presenceDecorated) do
             if d and d.Parent then _presenceRestoreLabel(d, snap) end
@@ -4646,20 +4664,26 @@ function _espApplyAlpha(data, alpha)
 end
 
 function _espFadeTick()
-    local now = tick()
-    local dt = math.min(0.1, now - _ESP_FADE_TICK)
-    _ESP_FADE_TICK = now
-    local speed = 1 / 0.22
+    -- Instant hide, no smooth fade. The tween-based fade was leaving
+    -- "phantom" ESPs frozen on screen whenever the player left, died or
+    -- moved out of range: the fade could stall (interval throttle, lost
+    -- frames, executor Drawing quirks) and the box would stay drawn at
+    -- its last position with no player under it. Hiding immediately
+    -- guarantees the ESP disappears the same frame the target is gone.
+    _ESP_FADE_TICK = tick()
     for plr, data in pairs(ESPObjects) do
-        local target = data._wantVisible and 1 or 0
-        data._alpha = data._alpha or 0
-        if data._alpha < target then
-            data._alpha = math.min(target, data._alpha + dt * speed)
-        elseif data._alpha > target then
-            data._alpha = math.max(target, data._alpha - dt * speed)
+        if data._wantVisible then
+            data._alpha = 1
+        else
+            data._alpha = 0
+            hideESP(data)
+            if data._pendingDestroy then
+                _espDestroyObjects(data)
+                ESPObjects[plr] = nil
+            end
         end
-        _espApplyAlpha(data, data._alpha)
-        if data._alpha <= 0.02 and data._pendingDestroy then
+        -- Extra safety: player object gone entirely -> destroy.
+        if plr and (not plr.Parent) then
             _espDestroyObjects(data)
             ESPObjects[plr] = nil
         end
@@ -5760,11 +5784,15 @@ function updateESP()
         end
     end
 
-    -- Players no longer present: fade out then destroy.
+    -- Players no longer present in Players service, or with no character:
+    -- destroy immediately to avoid phantom ESPs. seen[] tracks anybody we
+    -- looped through this frame; anyone else is stale.
     for p, d in pairs(ESPObjects) do
-        if not seen[p] then
+        if (not seen[p]) or (not p.Parent) then
             d._wantVisible = false
             d._pendingDestroy = true
+            _espDestroyObjects(d)
+            ESPObjects[p] = nil
         end
     end
 
@@ -7470,6 +7498,20 @@ function _MV.hookMobileJump()
     end)
 end
 pcall(_MV.hookMobileJump)
+-- Fallback: UserInputService.JumpRequest fires every time the engine
+-- receives a jump signal (Space, mobile Jump button, gamepad). This is
+-- the *only* reliable source on mobile when the on-screen button GUI
+-- can't be located, and it also covers gamepad users on PC.
+pcall(function()
+    _MV._jumpRequestConn = UserInput.JumpRequest:Connect(function()
+        _MV.mobileJumpDown = true
+        if _MV._jumpRequestClear then task.cancel(_MV._jumpRequestClear) end
+        _MV._jumpRequestClear = task.delay(0.18, function()
+            _MV.mobileJumpDown = false
+            _MV._jumpRequestClear = nil
+        end)
+    end)
+end)
 -- Rehook on respawn (PlayerGui persists but MobileButtons can be rebuilt)
 pcall(function()
     LocalPlayer.CharacterAdded:Connect(function()
@@ -20605,7 +20647,14 @@ end)
                     -- a bala no `best`. Nada de _sendKill aqui.
                     _G.EclipseMB1Virtual = true
                     local ok = false
-                    if mouse1press and mouse1release then
+                    if _EclipseIsMobile then
+                        -- Mobile: nunca chamar mouse1press/mouse1click. Se chamar,
+                        -- o executor pode alternar o contexto de input para PC e
+                        -- o Roblox esconde os botões touch (fire/jump/aim).
+                        if type(_EclipseMobileFire) == "function" then
+                            pcall(_EclipseMobileFire); ok = true
+                        end
+                    elseif mouse1press and mouse1release then
                         pcall(mouse1press)
                         task.wait(0.05)
                         pcall(mouse1release)
