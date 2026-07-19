@@ -3,8 +3,8 @@ local ECLIPSE = {
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
-    PresenceHTTP  = "https://ola-warm-hug-86.lovable.app/api/public/rt/presence",
-    PresencePub   = "https://ola-warm-hug-86.lovable.app/api/public/rt/publish",
+    PresenceHTTP  = "https://project--14b5418b-de85-4707-a14a-e8b2b5ab6577.lovable.app/api/public/rt/presence",
+    PresencePub   = "https://project--14b5418b-de85-4707-a14a-e8b2b5ab6577.lovable.app/api/public/rt/publish",
     PresenceKey   = "hfjyawicdcjgqispxlakdljremzgeove",
     GameLock      = { 114234929420007, 135434213652028 },
     PresenceColor = Color3.fromRGB(160, 90, 255),
@@ -60,6 +60,7 @@ local function _purgeEclipseGuis()
         EclipseWarning = true,        EclipseKillIndicator = true,
         EclipseEspPreview = true,     EclipseKeybindList = true,
         EclipseWatermark = true,      EclipseCustomCursor = true,
+        _EclipseCustomCursor = true,
     }
     local roots = {}
     pcall(function() roots[#roots+1] = game:GetService("CoreGui") end)
@@ -306,8 +307,19 @@ local function InstallDeviceSpoofer()
 
     local UIS = game:GetService("UserInputService")
     local GuiSvc = game:GetService("GuiService")
+    -- Detect mobile BEFORE spoofing so we never masquerade a phone as PC.
+    -- Forcing MouseEnabled=true / KeyboardEnabled=true on a touch device
+    -- makes the game classify us as PC and route PC-only binds/UI (mouse
+    -- click fire, keyboard reload, etc.), which breaks mobile play.
+    local _isTouchDevice = false
+    pcall(function()
+        _isTouchDevice = (UIS.TouchEnabled == true) and (UIS.KeyboardEnabled ~= true)
+    end)
     local PROP_SPOOF = {
-        [UIS] = {
+        [UIS] = _isTouchDevice and {
+            TouchEnabled=true, GamepadEnabled=false, VREnabled=false,
+            MouseEnabled=false, KeyboardEnabled=false, MouseIconEnabled=false,
+        } or {
             TouchEnabled=false, GamepadEnabled=false, VREnabled=false,
             MouseEnabled=true, KeyboardEnabled=true, MouseIconEnabled=true,
         },
@@ -2556,11 +2568,16 @@ end)
 
 
 local PresenceUsers = {}
-local presenceLastFire = 0
+local presenceDirty = true
+local presenceLastSignature = ""
 
 function markPresence(userId, on)
     if userId and userId ~= LocalPlayer.UserId then
-        PresenceUsers[userId] = on and true or nil
+        local nextValue = on and true or nil
+        if PresenceUsers[userId] ~= nextValue then
+            PresenceUsers[userId] = nextValue
+            presenceDirty = true
+        end
     end
 end
 
@@ -2577,11 +2594,12 @@ end
 local function _presenceSyncOnce(action)
     if not httpRequest then return end
     local body = HttpService:JSONEncode({
-        action   = action or "heartbeat",
-        placeId  = tostring(game.PlaceId),
-        jobId    = tostring(game.JobId or "solo"),
-        serverId = tostring(game.JobId or "solo"),
-        playerId = tostring(LocalPlayer.UserId),
+        action     = action or "heartbeat",
+        placeId    = tostring(game.PlaceId),
+        jobId      = tostring(game.JobId or "solo"),
+        serverId   = tostring(game.JobId or "solo"),
+        playerId   = tostring(LocalPlayer.UserId),
+        playerName = tostring(LocalPlayer.Name or ""),
     })
     local ok, res = pcall(httpRequest, {
         Url = ECLIPSE.PresenceHTTP,
@@ -2593,12 +2611,23 @@ local function _presenceSyncOnce(action)
     local ok2, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
     if not ok2 or type(data) ~= "table" or type(data.players) ~= "table" then return end
     local seen = {}
+    local sig = {}
     for _, pl in ipairs(data.players) do
         local uid = tonumber(pl.playerId)
-        if uid then seen[uid] = true; markPresence(uid, true) end
+        if uid and uid ~= LocalPlayer.UserId then
+            seen[uid] = true
+            sig[#sig + 1] = tostring(uid)
+            markPresence(uid, true)
+        end
+    end
+    table.sort(sig)
+    local nextSignature = table.concat(sig, ",")
+    if nextSignature ~= presenceLastSignature then
+        presenceLastSignature = nextSignature
+        presenceDirty = true
     end
     for uid in pairs(PresenceUsers) do
-        if not seen[uid] then PresenceUsers[uid] = nil end
+        if not seen[uid] then markPresence(uid, false) end
     end
 end
 
@@ -2618,7 +2647,9 @@ local function _presenceLoop()
         end
         while scriptRunning do
             pcall(_presenceSyncOnce, "heartbeat")
-            task.wait(10)
+            local count = 0
+            pcall(function() count = #Players:GetPlayers() end)
+            task.wait(count > 12 and 6 or 3)
         end
         pcall(_presenceSyncOnce, "leave")
     end)
@@ -2632,79 +2663,117 @@ local presenceHTTPActive = true
 
 pcall(_presenceLoop)
 
--- Presence NAME decorator: mirrors the kill-name animation logic, but instead
--- of a purple ring above heads it prefixes the Eclipse (raw github) logo to
--- the LEFT of every UI label containing the name of any other player who is
--- currently running this script in the SAME Roblox server.
-local _presenceDecorated = {} -- [Instance] = { Text=..., RichText=..., tag=... }
+local _presenceDecorated = setmetatable({}, { __mode = "k" })
+local _presenceKnownLabels = setmetatable({}, { __mode = "k" })
+local _presenceLabelRoot = nil
+local _presenceLabelConn = nil
+
+local function _presenceTrackLabel(d)
+    if d and (d:IsA("TextLabel") or d:IsA("TextButton")) then
+        _presenceKnownLabels[d] = true
+        presenceDirty = true
+    end
+end
+
+local function _presenceFullScan(pg)
+    if not pg then return end
+    local n = 0
+    for _, d in ipairs(pg:GetDescendants()) do
+        n = n + 1
+        _presenceTrackLabel(d)
+        if (n % 120) == 0 then EclipseYield() end
+    end
+end
+
+local function _presenceIconTag()
+    local iconAsset = _resolveEclipseLogoAsset and _resolveEclipseLogoAsset() or nil
+    local pc = ECLIPSE.PresenceColor or Color3.fromRGB(160, 90, 255)
+    local hex = string.format("#%02X%02X%02X", math.floor((pc.R or 0) * 255), math.floor((pc.G or 0) * 255), math.floor((pc.B or 0) * 255))
+    if type(iconAsset) == "string" and iconAsset ~= "" then
+        return string.format('<img src="%s" width="16" height="16"/> ', iconAsset)
+    end
+    return string.format('<font color="%s"><b>● </b></font>', hex)
+end
+
+local function _presenceNames()
+    local names = {}
+    for uid in pairs(PresenceUsers) do
+        local ok, pl = pcall(function() return Players:GetPlayerByUserId(uid) end)
+        if ok and pl and pl.Name and pl ~= LocalPlayer then names[pl.Name] = true end
+    end
+    return names
+end
+
+local function _presenceRestoreLabel(d, snap)
+    pcall(function()
+        d.Text = snap.Text
+        d.RichText = snap.RichText
+    end)
+end
+
+local function _presenceApplyDecorations()
+    local names = _presenceNames()
+    local iconTag = _presenceIconTag()
+    local touched = 0
+    for d in pairs(_presenceKnownLabels) do
+        touched = touched + 1
+        if not d or not d.Parent then
+            _presenceKnownLabels[d] = nil
+            _presenceDecorated[d] = nil
+        else
+            local raw = d.Text
+            local matched = nil
+            for nm in pairs(names) do
+                if type(raw) == "string" and raw:find(nm, 1, true) then matched = nm; break end
+            end
+            local snap = _presenceDecorated[d]
+            if matched then
+                local base = snap and snap.Text or raw
+                if not snap or snap.tag ~= iconTag or snap.name ~= matched or snap.Text ~= base then
+                    _presenceDecorated[d] = { Text = base, RichText = snap and snap.RichText or d.RichText, tag = iconTag, name = matched }
+                    local newTxt = base:gsub(matched, iconTag .. matched, 1)
+                    pcall(function()
+                        d.RichText = true
+                        d.Text = newTxt
+                    end)
+                end
+            elseif snap then
+                _presenceRestoreLabel(d, snap)
+                _presenceDecorated[d] = nil
+            end
+        end
+        if (touched % 160) == 0 then EclipseYield() end
+    end
+end
+
 local function _presenceDecorateLoop()
     task.spawn(function()
+        local lastFullScan = 0
         while scriptRunning do
             local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
-            local iconAsset = _resolveEclipseLogoAsset and _resolveEclipseLogoAsset() or nil
-            local pc = ECLIPSE.PresenceColor or Color3.fromRGB(160, 90, 255)
-            local hex = string.format("#%02X%02X%02X",
-                math.floor((pc.R or 0) * 255),
-                math.floor((pc.G or 0) * 255),
-                math.floor((pc.B or 0) * 255))
-            local iconTag
-            if type(iconAsset) == "string" and iconAsset ~= "" then
-                iconTag = string.format('<img src="%s" width="16" height="16"/> ', iconAsset)
-            else
-                -- Fallback: colored bullet + wordmark, works even if HttpGet fails
-                iconTag = string.format('<font color="%s"><b>● </b></font>', hex)
-            end
-            if pg and iconTag ~= "" then
-                -- Build { name = true } set of presence users in this server
-                local names = {}
-                for uid in pairs(PresenceUsers) do
-                    local ok, pl = pcall(function() return Players:GetPlayerByUserId(uid) end)
-                    if ok and pl and pl.Name and pl ~= LocalPlayer then
-                        names[pl.Name] = true
-                    end
+            if pg then
+                if _presenceLabelRoot ~= pg then
+                    if _presenceLabelConn then pcall(function() _presenceLabelConn:Disconnect() end) end
+                    _presenceLabelRoot = pg
+                    _presenceKnownLabels = setmetatable({}, { __mode = "k" })
+                    pcall(_presenceFullScan, pg)
+                    _presenceLabelConn = pg.DescendantAdded:Connect(_presenceTrackLabel)
+                    connectSignal(_presenceLabelConn)
+                    lastFullScan = tick()
                 end
-                -- Apply / refresh decoration
-                for _, d in ipairs(pg:GetDescendants()) do
-                    if d:IsA("TextLabel") or d:IsA("TextButton") then
-                        local raw = d.Text
-                        if type(raw) == "string" then
-                            local matched
-                            for nm in pairs(names) do
-                                if raw:find(nm, 1, true) then matched = nm; break end
-                            end
-                            if matched then
-                                local snap = _presenceDecorated[d]
-                                if not snap or snap.tag ~= iconTag or snap.name ~= matched then
-                                    _presenceDecorated[d] = {
-                                        Text = snap and snap.Text or raw,
-                                        RichText = snap and snap.RichText or d.RichText,
-                                        tag = iconTag, name = matched,
-                                    }
-                                    local base = _presenceDecorated[d].Text
-                                    local newTxt = base:gsub(matched, iconTag .. matched)
-                                    pcall(function()
-                                        d.RichText = true
-                                        d.Text = newTxt
-                                    end)
-                                end
-                            end
-                        end
-                    end
+                if tick() - lastFullScan > 8 then
+                    pcall(_presenceFullScan, pg)
+                    lastFullScan = tick()
                 end
-                -- Restore labels whose target is no longer a presence user
-                for d, snap in pairs(_presenceDecorated) do
-                    if type(d) == "userdata" then
-                        if not d.Parent or not names[snap.name] then
-                            pcall(function()
-                                d.Text = snap.Text
-                                d.RichText = snap.RichText
-                            end)
-                            _presenceDecorated[d] = nil
-                        end
-                    end
+                if presenceDirty then
+                    presenceDirty = false
+                    pcall(_presenceApplyDecorations)
                 end
             end
-            task.wait(1.5)
+            task.wait(presenceDirty and 0.2 or 1.0)
+        end
+        for d, snap in pairs(_presenceDecorated) do
+            if d and d.Parent then _presenceRestoreLabel(d, snap) end
         end
     end)
 end
@@ -4530,6 +4599,74 @@ function _espAnimScale()
     return math.max(0, eased)
 end
 
+
+
+-- ============================================================
+-- Per-player ESP fade in/out (~220 ms). Each ESP data blob has
+-- data._alpha (current) and data._wantVisible (target). All
+-- drawings' Transparency is multiplied by alpha each frame so
+-- appearing / disappearing looks smooth. When alpha reaches 0
+-- objects are hidden (and destroyed if _pendingDestroy).
+-- ============================================================
+_ESP_FADE_TICK = _ESP_FADE_TICK or tick()
+_ESP_FADE_KEYS = { "NameTag","DistTag","WeaponTag","HealthBg","HealthFill",
+    "HealthText","TagBg","TagText","WeaponIcon","MoneyText","HeadDot",
+    "Presence","Arrow","TagAmmoBg","TagAmmoFill" }
+_ESP_FADE_ARR  = { "CornerLines","HealthSegments","HealthTicks","Skeleton",
+    "TagBorder","TagGrad" }
+
+function _espApplyAlpha(data, alpha)
+    alpha = math.clamp(alpha, 0, 1)
+    for _, k in ipairs(_ESP_FADE_KEYS) do
+        local d = data[k]
+        if d then
+            pcall(function()
+                if alpha <= 0.02 then
+                    d.Visible = false
+                elseif d.Visible then
+                    d.Transparency = alpha
+                end
+            end)
+        end
+    end
+    for _, k in ipairs(_ESP_FADE_ARR) do
+        local arr = data[k]
+        if arr then
+            for _, d in pairs(arr) do
+                pcall(function()
+                    if alpha <= 0.02 then
+                        d.Visible = false
+                    elseif d.Visible then
+                        d.Transparency = alpha
+                    end
+                end)
+            end
+        end
+    end
+end
+
+function _espFadeTick()
+    local now = tick()
+    local dt = math.min(0.1, now - _ESP_FADE_TICK)
+    _ESP_FADE_TICK = now
+    local speed = 1 / 0.22
+    for plr, data in pairs(ESPObjects) do
+        local target = data._wantVisible and 1 or 0
+        data._alpha = data._alpha or 0
+        if data._alpha < target then
+            data._alpha = math.min(target, data._alpha + dt * speed)
+        elseif data._alpha > target then
+            data._alpha = math.max(target, data._alpha - dt * speed)
+        end
+        _espApplyAlpha(data, data._alpha)
+        if data._alpha <= 0.02 and data._pendingDestroy then
+            _espDestroyObjects(data)
+            ESPObjects[plr] = nil
+        end
+    end
+end
+
+
 function createESPObjects()
     local d = { CornerLines={}, NameTag=Drawing.new("Text"), DistTag=Drawing.new("Text"),
         HealthBg=Drawing.new("Line"), HealthFill=Drawing.new("Line"), HealthSegments={},
@@ -4833,63 +4970,78 @@ function _espHealthValues(plr, char, hum)
     return math.clamp(hp, 0, mx), mx
 end
 
+-- ============================================================
+-- Premium health bar: fixed 4-color gradient (green -> yellow ->
+-- orange -> red). Colors are STATIC on the bar; only the fill
+-- height changes with HP. No text.
+-- ============================================================
+_ESP_HP_COLS = {
+    Color3.fromRGB(70, 230, 130), -- green (top)
+    Color3.fromRGB(240, 220, 60), -- yellow
+    Color3.fromRGB(255, 150, 50), -- orange
+    Color3.fromRGB(255, 65, 65),  -- red   (bottom)
+}
+local function _espHpGradAt(f)
+    -- f in [0..1] where 0 = top (green), 1 = bottom (red)
+    f = math.clamp(f, 0, 1)
+    local G, Y, O, R = _ESP_HP_COLS[1], _ESP_HP_COLS[2], _ESP_HP_COLS[3], _ESP_HP_COLS[4]
+    local function L(a, b, t)
+        return Color3.new(a.R+(b.R-a.R)*t, a.G+(b.G-a.G)*t, a.B+(b.B-a.B)*t)
+    end
+    if f < 1/3 then return L(G, Y, f * 3) end
+    if f < 2/3 then return L(Y, O, (f - 1/3) * 3) end
+    return L(O, R, (f - 2/3) * 3)
+end
+
 function _espDrawHealth(data, hp, maxHp, L, R, T, B, height)
     local hSide = _espSlotSide("Health")
     local bx = (hSide == "Right") and (R + 10) or (L - 10)
     local pct = math.clamp((hp or 0) / math.max(maxHp or 100, 1), 0, 1)
+
+    -- dim full-height background
     data.HealthBg.From = Vector2.new(bx, T)
     data.HealthBg.To = Vector2.new(bx, B)
-    data.HealthBg.Thickness = 6
-    data.HealthBg.Color = Color3.fromRGB(5, 5, 8)
-    data.HealthBg.Transparency = 0.65
+    data.HealthBg.Thickness = 4
+    data.HealthBg.Color = Color3.fromRGB(6, 6, 9)
+    data.HealthBg.Transparency = 0.55
     data.HealthBg.Visible = true
 
-    
-    local fillTop = B - (height * pct)
-    data.HealthFill.From = Vector2.new(bx, B)
-    data.HealthFill.To = Vector2.new(bx, fillTop)
-    data.HealthFill.Thickness = (height < 40) and 3 or 4
-    data.HealthFill.Color = GetHealthColor(pct)
-    data.HealthFill.Transparency = 1
-    data.HealthFill.Visible = pct > 0.001
+    -- legacy single fill / text off (replaced by fixed gradient segments)
+    data.HealthFill.Visible = false
+    data.HealthText.Visible = false
 
     local maxSegs = #data.HealthSegments
-    local segments = math.clamp(math.floor(height / 4), 6, maxSegs)
+    local segments = math.clamp(math.floor(height / 3), 10, maxSegs)
+    local thickness = (height < 40) and 3 or 4
+
+    -- Fill goes bottom-up. Segment i indexed top->bottom.
+    -- Show segment if its center's distance-from-top >= 1 - pct.
     for i = 1, maxSegs do
         local seg = data.HealthSegments[i]
         if i <= segments then
-            local a = (i - 1) / segments
-            local b = i / segments
-            seg.From = Vector2.new(bx, B - (height * a))
-            seg.To = Vector2.new(bx, B - (height * b) + 1)
-            seg.Color = GetHealthColor(math.min(b, pct))
-            seg.Thickness = (height < 40) and 2 or 3
-            seg.Transparency = 1
-            seg.Visible = pct > 0 and a < pct
+            local aTop = (i - 1) / segments
+            local bBot = i / segments
+            local center = (aTop + bBot) * 0.5
+            if (1 - center) <= pct then
+                seg.From = Vector2.new(bx, T + height * aTop)
+                seg.To   = Vector2.new(bx, T + height * bBot + 1)
+                seg.Thickness = thickness
+                seg.Transparency = 1
+                seg.Color = _espHpGradAt(center)
+                seg.Visible = true
+            else
+                seg.Visible = false
+            end
         else
             seg.Visible = false
         end
     end
-    if data.HealthTicks then
-        local showTicks = height >= 48
-        local tickX1, tickX2 = bx - 4, bx + 4
-        for i, tick in ipairs(data.HealthTicks) do
-            if showTicks then
-                local frac = (i == 1) and (1/3) or (2/3)
-                local ty = B - (height * frac)
-                tick.From = Vector2.new(tickX1, ty)
-                tick.To   = Vector2.new(tickX2, ty)
-                tick.Transparency = 1
-                tick.Visible = true
-            else
-                tick.Visible = false
-            end
-        end
-    end
-    
-    data.HealthText.Visible = false
 
+    if data.HealthTicks then
+        for _, tk in ipairs(data.HealthTicks) do tk.Visible = false end
+    end
 end
+
 
 function _espDrawSkeleton(data, char)
     local col = Config.ESP.SkeletonColor
@@ -5352,37 +5504,40 @@ function _espProcessPlayer(plr, myRoot, center)
 
     if not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(plr) then
         local old = ESPObjects[plr]
-        if old then hideESP(old) end
+        if old then old._wantVisible = false end
         return nil
     end
     local char = GetCharacter(plr)
     local data = ESPObjects[plr]
-    if not char then if data then hideESP(data) end; return nil end
+    if not char then if data then data._wantVisible = false end; return nil end
     local root = char:FindFirstChild("HumanoidRootPart")
     local head = char:FindFirstChild("Head")
     local hum  = char:FindFirstChildOfClass("Humanoid")
-    if not root or not head or not hum then if data then hideESP(data) end; return nil end
+    if not root or not head or not hum then if data then data._wantVisible = false end; return nil end
     local hp, maxHp = _espHealthValues(plr, char, hum)
-    if not hp or hp <= 0 then if data then hideESP(data) end; return nil end
+    -- Dead players: no ESP (fade out gracefully via _wantVisible=false).
+    if not hp or hp <= 0 or hum.Health <= 0 then if data then data._wantVisible = false end; return nil end
 
     local dist = (myRoot.Position - root.Position).Magnitude
     local maxD = Config.ESP.MaxDistance
     if Config.Aimbot.Enabled then maxD = math.max(maxD, 600) end
-    if dist > maxD then if data then hideESP(data) end; return nil end
+    if dist > maxD then if data then data._wantVisible = false end; return nil end
 
     if not data then
         data = createESPObjects()
         ESPObjects[plr] = data
+        data._alpha = 0
     end
 
     local hP, hOn = Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))
     local fP, fOn = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,3,0))
     local onScreen = hOn and fOn and hP.Z > 0 and fP.Z > 0
     if not onScreen then
-        hideESP(data)
+        data._wantVisible = false
         if Config.ESP.Arrows then _espDrawArrow(data, root) end
         return nil
     end
+
 
     local height  = math.abs(hP.Y - fP.Y); local width = height * 0.6
     local cx = hP.X; local cy = ((hP.Y + fP.Y)/2)
@@ -5400,13 +5555,14 @@ function _espProcessPlayer(plr, myRoot, center)
     if L < -margin or R > vs.X + margin or T < -margin or B > vs.Y + margin then
         local anyInside = (cx >= -margin and cx <= vs.X + margin and cy >= -margin and cy <= vs.Y + margin)
         if not anyInside then
-            hideESP(data)
+            data._wantVisible = false
             if Config.ESP.Arrows then _espDrawArrow(data, root) end
             return nil
         end
         L = math.clamp(L, 0, vs.X); R = math.clamp(R, 0, vs.X)
         T = math.clamp(T, 0, vs.Y); B = math.clamp(B, 0, vs.Y)
     end
+
 
 
     if Config.ESP.CornerBox then
@@ -5466,8 +5622,10 @@ function _espProcessPlayer(plr, myRoot, center)
     if data.Arrow then data.Arrow.Visible = false end
 
     local aimDist = (Vector2.new(hP.X, hP.Y) - center).Magnitude
+    data._wantVisible = true
     return { player=plr, head=head, root=root, hum=hum, dist=dist, aimDist=aimDist }
 end
+
 
 local ChamsHL = setmetatable({}, { __mode = "k" })
 local ChamsLT = setmetatable({}, { __mode = "k" })
@@ -5576,12 +5734,17 @@ function updateESP()
     local myChar = GetCharacter(LocalPlayer)
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not espOn or not myRoot then
-        for _, d in pairs(ESPObjects) do hideESP(d) end
+        for _, d in pairs(ESPObjects) do d._wantVisible = false end
+        _espFadeTick()
         if TargetLine then TargetLine.Visible = false end
         return
     end
     local espInterval = (ES152.Load and ES152.Load > 0.55) and 0.05 or ((ES152.Load and ES152.Load > 0.25) and 0.033 or 0)
-    if espInterval > 0 and not ES152.tick("ESP.scan", espInterval) then return end
+    if espInterval > 0 and not ES152.tick("ESP.scan", espInterval) then
+        -- still tick fade so smooth even on downsampled frames
+        _espFadeTick()
+        return
+    end
 
     local closest, closestDist = nil, math.huge
     local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
@@ -5597,12 +5760,15 @@ function updateESP()
         end
     end
 
+    -- Players no longer present: fade out then destroy.
     for p, d in pairs(ESPObjects) do
         if not seen[p] then
-            _espDestroyObjects(d)
-            ESPObjects[p] = nil
+            d._wantVisible = false
+            d._pendingDestroy = true
         end
     end
+
+    _espFadeTick()
 
     if TargetLine and Config.ESP.TargetLine and closest then
         local sp, on = Camera:WorldToViewportPoint(closest.head.Position)
@@ -5613,6 +5779,7 @@ function updateESP()
         else TargetLine.Visible = false end
     elseif TargetLine then TargetLine.Visible = false end
 end
+
 
 local WorldEspPool = {}   
 local WorldEspSeen = {}
@@ -5910,6 +6077,27 @@ function syncC4Timer(bomb)
 end
 
 C4UI = {}
+C4AvatarCache = C4AvatarCache or {}
+
+function _c4FetchAvatar(userId)
+    if not userId then return "" end
+    local cached = C4AvatarCache[userId]
+    if cached ~= nil then return cached end
+    C4AvatarCache[userId] = ""
+    task.spawn(function()
+        local ok, url = pcall(function()
+            return Players:GetUserThumbnailAsync(userId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+        end)
+        if ok and url then
+            C4AvatarCache[userId] = url
+            if C4UI.avatar and C4UI.avatar.Parent and C4UI._curUserId == userId then
+                C4UI.avatar.Image = url
+            end
+        end
+    end)
+    return ""
+end
+
 function ensureC4UI()
     if C4UI.frame and C4UI.frame.Parent then return end
     local g = Instance.new("ScreenGui")
@@ -5924,9 +6112,11 @@ function ensureC4UI()
     f.AnchorPoint = Vector2.new(0, 0.5)
     f.Position = UDim2.new(0, 16, 0.5, 0)
     f.BorderSizePixel = 0
-    f.Size = UDim2.fromOffset(218, 52)
-    f.ClipsDescendants = true
+    f.Size = UDim2.fromOffset(238, 78)
+    f.ClipsDescendants = false
     f.Visible = false; f.Active = true; f.ZIndex = 60
+    f.BackgroundColor3 = Color3.fromRGB(18, 17, 22)
+    f.BackgroundTransparency = 0.24
     f.Parent = parent
 
     pcall(function()
@@ -5961,131 +6151,235 @@ function ensureC4UI()
         ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 17, 22)),
     }
 
-    local dotWrap = Instance.new("Frame", f)
-    dotWrap.Name = "DotWrap"
-    dotWrap.BackgroundTransparency = 1
-    dotWrap.Position = UDim2.fromOffset(11, 12)
-    dotWrap.Size = UDim2.fromOffset(12, 12)
-    dotWrap.ZIndex = 62
+    -- =============== AVATAR ===============
+    local avatarBox = Instance.new("Frame", f)
+    avatarBox.Name = "AvatarBox"
+    avatarBox.BackgroundColor3 = Color3.fromRGB(12, 11, 15)
+    avatarBox.BackgroundTransparency = 0.15
+    avatarBox.BorderSizePixel = 0
+    avatarBox.Position = UDim2.fromOffset(10, 11)
+    avatarBox.Size = UDim2.fromOffset(56, 56)
+    avatarBox.ZIndex = 62
+    Instance.new("UICorner", avatarBox).CornerRadius = UDim.new(0, 8)
+    local avatarStroke = Instance.new("UIStroke", avatarBox)
+    avatarStroke.Thickness = 1; avatarStroke.Transparency = 0.4
+    avatarStroke.Color = Color3.fromRGB(170, 95, 255)
 
-    local dot = Instance.new("Frame", dotWrap)
-    dot.Name = "Dot"
-    dot.AnchorPoint = Vector2.new(0.5, 0.5)
-    dot.Position = UDim2.fromScale(0.5, 0.5)
-    dot.Size = UDim2.fromOffset(8, 8)
-    dot.BackgroundColor3 = Color3.fromRGB(170, 95, 255)
-    dot.BorderSizePixel = 0
-    dot.ZIndex = 63
-    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
-    local dotStroke = Instance.new("UIStroke", dot)
-    dotStroke.Color = Color3.fromRGB(230, 210, 255)
-    dotStroke.Thickness = 1
-    dotStroke.Transparency = 0.25
+    local avatar = Instance.new("ImageLabel", avatarBox)
+    avatar.Name = "Avatar"
+    avatar.BackgroundTransparency = 1
+    avatar.Size = UDim2.fromScale(1, 1)
+    avatar.ScaleType = Enum.ScaleType.Crop
+    avatar.Image = ""
+    avatar.ZIndex = 63
+    Instance.new("UICorner", avatar).CornerRadius = UDim.new(0, 8)
 
-    local title = Instance.new("TextLabel", f)
-    title.Name = "Title"
-    title.BackgroundTransparency = 1
-    title.Position = UDim2.fromOffset(30, 7)
-    title.Size = UDim2.new(1, -94, 0, 18)
-    title.Font = Enum.Font.GothamSemibold
-    title.TextSize = 13
-    title.TextColor3 = Color3.fromRGB(238, 232, 255)
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Text = "C4"
-    title.ZIndex = 62
+    local avatarFallback = Instance.new("TextLabel", avatarBox)
+    avatarFallback.Name = "AvFallback"
+    avatarFallback.BackgroundTransparency = 1
+    avatarFallback.Size = UDim2.fromScale(1, 1)
+    avatarFallback.Font = Enum.Font.GothamBold
+    avatarFallback.TextSize = 22
+    avatarFallback.TextColor3 = Color3.fromRGB(170, 95, 255)
+    avatarFallback.Text = "C4"
+    avatarFallback.ZIndex = 64
 
-    local time = Instance.new("TextLabel", f)
-    time.Name = "Time"
-    time.BackgroundTransparency = 1
-    time.Position = UDim2.new(1, -70, 0, 7)
-    time.Size = UDim2.fromOffset(58, 18)
-    time.Font = Enum.Font.GothamBold
-    time.TextSize = 14
-    time.TextColor3 = Color3.fromRGB(255, 255, 255)
-    time.TextXAlignment = Enum.TextXAlignment.Right
-    time.Text = "--"
-    time.ZIndex = 62
+    -- =============== INFO (name, hp bar, distance) ===============
+    local infoName = Instance.new("TextLabel", f)
+    infoName.Name = "InfoName"
+    infoName.BackgroundTransparency = 1
+    infoName.Position = UDim2.fromOffset(74, 10)
+    infoName.Size = UDim2.new(1, -152, 0, 16)
+    infoName.Font = Enum.Font.GothamSemibold
+    infoName.TextSize = 13
+    infoName.TextColor3 = Color3.fromRGB(238, 232, 255)
+    infoName.TextXAlignment = Enum.TextXAlignment.Left
+    infoName.TextTruncate = Enum.TextTruncate.AtEnd
+    infoName.Text = "C4 PLANTED"
+    infoName.ZIndex = 62
 
-    local subLabel = Instance.new("TextLabel", f)
-    subLabel.Name = "Sub"
-    subLabel.BackgroundTransparency = 1
-    subLabel.Position = UDim2.fromOffset(30, 24)
-    subLabel.Size = UDim2.new(1, -42, 0, 12)
-    subLabel.Font = Enum.Font.Gotham
-    subLabel.TextSize = 10
-    subLabel.TextColor3 = Color3.fromRGB(180, 174, 195)
-    subLabel.TextXAlignment = Enum.TextXAlignment.Left
-    subLabel.TextTruncate = Enum.TextTruncate.AtEnd
-    subLabel.Text = "planted"
-    subLabel.ZIndex = 62
+    local infoStatus = Instance.new("TextLabel", f)
+    infoStatus.Name = "InfoStatus"
+    infoStatus.BackgroundTransparency = 1
+    infoStatus.Position = UDim2.fromOffset(74, 27)
+    infoStatus.Size = UDim2.new(1, -152, 0, 12)
+    infoStatus.Font = Enum.Font.Gotham
+    infoStatus.TextSize = 10
+    infoStatus.TextColor3 = Color3.fromRGB(180, 174, 195)
+    infoStatus.TextXAlignment = Enum.TextXAlignment.Left
+    infoStatus.TextTruncate = Enum.TextTruncate.AtEnd
+    infoStatus.Text = "planted"
+    infoStatus.ZIndex = 62
 
-    local barBg = Instance.new("Frame", f)
-    barBg.Name = "ProgressBg"
-    barBg.Position = UDim2.fromOffset(11, 40)
-    barBg.Size = UDim2.new(1, -22, 0, 4)
-    barBg.BackgroundColor3 = Color3.fromRGB(8, 7, 11)
-    barBg.BackgroundTransparency = 0.10
-    barBg.BorderSizePixel = 0
-    barBg.ZIndex = 62
-    Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+    -- HP bar
+    local hpBg = Instance.new("Frame", f)
+    hpBg.Name = "HPBg"
+    hpBg.Position = UDim2.fromOffset(74, 44)
+    hpBg.Size = UDim2.new(1, -152, 0, 5)
+    hpBg.BackgroundColor3 = Color3.fromRGB(8, 7, 11)
+    hpBg.BackgroundTransparency = 0.1
+    hpBg.BorderSizePixel = 0
+    hpBg.ZIndex = 62
+    hpBg.Visible = false
+    Instance.new("UICorner", hpBg).CornerRadius = UDim.new(1, 0)
 
-    local bar = Instance.new("Frame", barBg)
-    bar.Name = "Progress"
-    bar.Size = UDim2.fromScale(1, 1)
-    bar.BackgroundColor3 = Color3.fromRGB(170, 95, 255)
-    bar.BorderSizePixel = 0
-    bar.ZIndex = 63
-    Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
-    local barGrad = Instance.new("UIGradient", bar)
-    barGrad.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(95, 190, 255)),
-        ColorSequenceKeypoint.new(0.55, Color3.fromRGB(170, 95, 255)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 85, 120)),
-    }
+    local hpFill = Instance.new("Frame", hpBg)
+    hpFill.Name = "HPFill"
+    hpFill.Size = UDim2.fromScale(1, 1)
+    hpFill.BackgroundColor3 = Color3.fromRGB(90, 220, 140)
+    hpFill.BorderSizePixel = 0
+    hpFill.ZIndex = 63
+    Instance.new("UICorner", hpFill).CornerRadius = UDim.new(1, 0)
 
-    C4UI.gui    = g
-    C4UI.frame  = f
-    C4UI.dot    = dot
-    C4UI.text   = title
-    C4UI.title  = title
-    C4UI.time   = time
-    C4UI.sub    = subLabel
-    C4UI.barBg  = barBg
-    C4UI.bar    = bar
-    C4UI.dots   = nil
-    C4UI.dotStroke = dotStroke
-    local stroke = f:FindFirstChildOfClass("UIStroke")
-    if not stroke then
-        stroke = Instance.new("UIStroke", f)
-        stroke.Thickness = 1
-        stroke.Color = Color3.fromRGB(0, 0, 0)
-        stroke.Transparency = 0.5
-        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    end
-    C4UI.stroke = stroke
-    C4UI.shown  = false
-    C4UI.pinned = false
+    local hpText = Instance.new("TextLabel", f)
+    hpText.Name = "HPText"
+    hpText.BackgroundTransparency = 1
+    hpText.Position = UDim2.fromOffset(74, 52)
+    hpText.Size = UDim2.new(1, -152, 0, 12)
+    hpText.Font = Enum.Font.Gotham
+    hpText.TextSize = 10
+    hpText.TextColor3 = Color3.fromRGB(170, 165, 185)
+    hpText.TextXAlignment = Enum.TextXAlignment.Left
+    hpText.Text = ""
+    hpText.ZIndex = 62
+
+    local distText = Instance.new("TextLabel", f)
+    distText.Name = "DistText"
+    distText.BackgroundTransparency = 1
+    distText.Position = UDim2.fromOffset(74, 52)
+    distText.Size = UDim2.new(1, -152, 0, 12)
+    distText.Font = Enum.Font.GothamMedium
+    distText.TextSize = 10
+    distText.TextColor3 = Color3.fromRGB(200, 190, 220)
+    distText.TextXAlignment = Enum.TextXAlignment.Right
+    distText.Text = ""
+    distText.ZIndex = 62
+
+    -- =============== CIRCULAR TIMER ===============
+    local ringSize = 66
+    local ring = Instance.new("Frame", f)
+    ring.Name = "Ring"
+    ring.BackgroundTransparency = 1
+    ring.AnchorPoint = Vector2.new(1, 0.5)
+    ring.Position = UDim2.new(1, -10, 0.5, 0)
+    ring.Size = UDim2.fromOffset(ringSize, ringSize)
+    ring.ZIndex = 62
+
+    -- background ring (dim)
+    local ringBg = Instance.new("Frame", ring)
+    ringBg.Name = "RingBg"
+    ringBg.BackgroundColor3 = Color3.fromRGB(40, 36, 50)
+    ringBg.BackgroundTransparency = 0.35
+    ringBg.BorderSizePixel = 0
+    ringBg.Size = UDim2.fromScale(1, 1)
+    ringBg.ZIndex = 62
+    Instance.new("UICorner", ringBg).CornerRadius = UDim.new(1, 0)
+
+    -- ============ ECLIPSE / MOON ============
+    -- Full colored disc (the "moon"). An offset disc the color of the
+    -- panel background slides across it to create the crescent — from
+    -- full moon (t=1) to total eclipse (t=0).
+    local moon = Instance.new("Frame", ring)
+    moon.Name = "Moon"
+    moon.BackgroundColor3 = Color3.fromRGB(170, 95, 255)
+    moon.BorderSizePixel = 0
+    moon.AnchorPoint = Vector2.new(0.5, 0.5)
+    moon.Position = UDim2.fromScale(0.5, 0.5)
+    moon.Size = UDim2.fromScale(1, 1)
+    moon.ZIndex = 63
+    Instance.new("UICorner", moon).CornerRadius = UDim.new(1, 0)
+
+    -- Shadow disc (same color as panel bg). Slides horizontally to
+    -- reveal a crescent. ClipsDescendants on `ring` keeps it circular.
+    local shadow = Instance.new("Frame", ring)
+    shadow.Name = "Shadow"
+    shadow.BackgroundColor3 = Color3.fromRGB(18, 17, 22)
+    shadow.BorderSizePixel = 0
+    shadow.AnchorPoint = Vector2.new(0.5, 0.5)
+    shadow.Position = UDim2.fromScale(0.5, 0.5)
+    shadow.Size = UDim2.fromScale(1, 1)
+    shadow.ZIndex = 64
+    Instance.new("UICorner", shadow).CornerRadius = UDim.new(1, 0)
+    ring.ClipsDescendants = true
+
+    -- center hole -> makes it a ring
+    local hole = Instance.new("Frame", ring)
+    hole.Name = "Hole"
+    hole.AnchorPoint = Vector2.new(0.5, 0.5)
+    hole.Position = UDim2.fromScale(0.5, 0.5)
+    hole.Size = UDim2.fromOffset(ringSize - 8, ringSize - 8)
+    hole.BackgroundColor3 = Color3.fromRGB(18, 17, 22)
+    hole.BorderSizePixel = 0
+    hole.ZIndex = 65
+    Instance.new("UICorner", hole).CornerRadius = UDim.new(1, 0)
+
+    local timeLbl = Instance.new("TextLabel", ring)
+    timeLbl.Name = "Time"
+    timeLbl.BackgroundTransparency = 1
+    timeLbl.AnchorPoint = Vector2.new(0.5, 0.5)
+    timeLbl.Position = UDim2.fromScale(0.5, 0.5)
+    timeLbl.Size = UDim2.fromScale(1, 1)
+    timeLbl.Font = Enum.Font.GothamBold
+    timeLbl.TextSize = 20
+    timeLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    timeLbl.Text = "--"
+    timeLbl.ZIndex = 66
+
+    local stroke = Instance.new("UIStroke", f)
+    stroke.Thickness = 1
+    stroke.Color = Color3.fromRGB(0, 0, 0)
+    stroke.Transparency = 0.5
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+    C4UI.gui         = g
+    C4UI.frame       = f
+    C4UI.avatarBox   = avatarBox
+    C4UI.avatarStroke= avatarStroke
+    C4UI.avatar      = avatar
+    C4UI.avFallback  = avatarFallback
+    C4UI.infoName    = infoName
+    C4UI.infoStatus  = infoStatus
+    C4UI.hpBg        = hpBg
+    C4UI.hpFill      = hpFill
+    C4UI.hpText      = hpText
+    C4UI.distText    = distText
+    C4UI.title       = infoName -- back-compat alias
+    C4UI.text        = infoName -- back-compat alias
+    C4UI.sub         = infoStatus
+    C4UI.time        = timeLbl
+    C4UI.ring        = ring
+    C4UI.ringBg      = ringBg
+    C4UI.moon        = moon
+    C4UI.shadow      = shadow
+    C4UI.hole        = hole
+    C4UI.dot         = nil -- legacy
+    C4UI.bar         = nil -- legacy
+    C4UI.stroke      = stroke
+    C4UI.shown       = false
+    C4UI.pinned      = false
 end
 
+-- Eclipse crescent: as `remain` drops toward 0, the shadow slides
+-- across the moon until it fully eclipses it. pct=1 -> full moon
+-- (shadow offscreen right), pct=0 -> total eclipse (shadow centered).
 function updateC4Ring(remain, total, color)
-    if not (C4UI and C4UI.bar) then return end
+    if not (C4UI and C4UI.moon and C4UI.shadow) then return end
     local pct = 0
     if tonumber(total) and total > 0 and tonumber(remain) then
         pct = math.clamp(remain / total, 0, 1)
     end
     pcall(function()
-        C4UI.bar.Size = UDim2.new(pct, 0, 1, 0)
+        -- Shadow travels from ~+105% (offscreen right = full moon) at
+        -- pct=1 to 50% (centered = total eclipse) at pct=0. A tiny
+        -- vertical nudge gives the classic crescent tilt.
+        C4UI.shadow.Position = UDim2.new(0.5 + (pct * 0.55), 0, 0.5, -2)
         if color then
-            C4UI.bar.BackgroundColor3 = color
-            if C4UI.dot then C4UI.dot.BackgroundColor3 = color end
-            if C4UI.dotStroke then C4UI.dotStroke.Color = Color3.new(
-                math.clamp(color.R + 0.25, 0, 1),
-                math.clamp(color.G + 0.25, 0, 1),
-                math.clamp(color.B + 0.25, 0, 1)
-            ) end
+            C4UI.moon.BackgroundColor3 = color
+            if C4UI.avatarStroke then C4UI.avatarStroke.Color = color end
         end
     end)
 end
+
 
 function C4Hide()
     if not C4UI.frame then return end
@@ -6098,11 +6392,11 @@ function C4Hide()
     connectSignal(tw.Completed:Once(function() if scriptRunning and not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 0.24 end end))
 end
 
-function C4Show(status, timeText, sub, color)
+function C4Show(status, timeText, sub, color, info)
     ensureC4UI()
     if not C4UI.frame then return end
 
-    local title = "C4"
+    local title = "C4 PLANTED"
     local subtitle = "planted"
     if status == "DEFUSING" then
         title = "DEFUSING"; subtitle = (sub and sub ~= "" and sub) or "defuse in progress"
@@ -6116,16 +6410,60 @@ function C4Show(status, timeText, sub, color)
         title = "TIME UP"; subtitle = "fuse ended"
     end
 
-    if C4UI.title then C4UI.title.Text = title end
+    -- Defuser info (avatar / hp / distance)
+    if info and info.player then
+        local plr = info.player
+        C4UI._curUserId = plr.UserId
+        title = plr.DisplayName or plr.Name
+        local cached = C4AvatarCache[plr.UserId]
+        if cached == nil or cached == "" then
+            local url = _c4FetchAvatar(plr.UserId)
+            if url ~= "" then C4UI.avatar.Image = url end
+        else
+            C4UI.avatar.Image = cached
+        end
+        if C4UI.avatar.Image ~= "" then C4UI.avFallback.Visible = false else C4UI.avFallback.Visible = true end
+        C4UI.hpBg.Visible = true
+        local hp    = tonumber(info.hp) or 0
+        local maxhp = tonumber(info.maxhp) or 100
+        if maxhp <= 0 then maxhp = 100 end
+        local ratio = math.clamp(hp / maxhp, 0, 1)
+        C4UI.hpFill.Size = UDim2.fromScale(ratio, 1)
+        local hpCol
+        if ratio > 0.6 then hpCol = Color3.fromRGB(90, 220, 140)
+        elseif ratio > 0.3 then hpCol = Color3.fromRGB(255, 200, 80)
+        else hpCol = Color3.fromRGB(255, 80, 90) end
+        C4UI.hpFill.BackgroundColor3 = hpCol
+        C4UI.hpText.Text = string.format("%d HP", math.floor(hp + 0.5))
+        C4UI.hpText.Position = UDim2.fromOffset(74, 52)
+        C4UI.hpText.Visible = true
+        if info.dist then
+            C4UI.distText.Text = string.format("%dm", math.floor(tonumber(info.dist) or 0))
+            C4UI.distText.Visible = true
+        else
+            C4UI.distText.Visible = false
+        end
+        C4UI.infoStatus.Text = (sub and sub ~= "" and sub) or "defusing"
+    else
+        C4UI._curUserId = nil
+        C4UI.avatar.Image = ""
+        C4UI.avFallback.Visible = true
+        C4UI.avFallback.Text = "C4"
+        C4UI.hpBg.Visible = false
+        C4UI.hpText.Visible = false
+        C4UI.distText.Visible = false
+        C4UI.infoStatus.Text = subtitle
+    end
+
+    if C4UI.infoName then C4UI.infoName.Text = title end
     if C4UI.time then C4UI.time.Text = tostring(timeText or "--") end
-    if C4UI.sub then C4UI.sub.Text = subtitle end
-    local animate = (status == "PLANTED" or status == "DEFUSING")
+
     C4UI.pinned = (status == "BOMB DEFUSED" or status == "BOMB DETONATED"
                    or status == "BOMB LOST" or status == "TIME UP")
 
     if color then
-        if C4UI.dot then C4UI.dot.BackgroundColor3 = color end
         if C4UI.time then C4UI.time.TextColor3 = color end
+        if C4UI.avatarStroke then C4UI.avatarStroke.Color = color end
         C4UI.stroke.Color = color; C4UI.stroke.Transparency = 0.45
     else
         C4UI.stroke.Color = Color3.new(1,1,1); C4UI.stroke.Transparency = 0.6
@@ -6139,17 +6477,6 @@ function C4Show(status, timeText, sub, color)
             { BackgroundTransparency = 0.24 }):Play()
     end
 end
-
-task.spawn(function()
-    while scriptRunning do
-        task.wait(0.33)
-        if not scriptRunning then break end
-        if C4UI.dots and C4UI.dots.Visible then
-            local n = (#C4UI.dots.Text % 3) + 1
-            C4UI.dots.Text = string.rep(".", n)
-        end
-    end
-end)
 
 function findDefuser()
     for _, p in ipairs(Players:GetPlayers()) do
@@ -6354,11 +6681,29 @@ function updateC4Timer()
         end
         local defRemain = math.max(0, dur - elapsed)
         local pct = math.clamp(defRemain / dur, 0, 1)
+        -- Gather defuser info (HP + distance)
+        local info = { player = d }
+        local ok = pcall(function()
+            local char = d.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                info.hp = hum.Health
+                info.maxhp = hum.MaxHealth
+            end
+            local lp = Players.LocalPlayer
+            local lpChar = lp and lp.Character
+            local lpRoot = lpChar and (lpChar:FindFirstChild("HumanoidRootPart") or lpChar.PrimaryPart)
+            local dRoot = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
+            if lpRoot and dRoot then
+                info.dist = (lpRoot.Position - dRoot.Position).Magnitude
+            end
+        end)
         _C4Show("DEFUSING",
             tostring(math.ceil(defRemain)),
-            string.format("%s [%s]", d.DisplayName or d.Name, kit and "KIT" or "NO KIT"),
-            Color3.fromRGB(90, 200, 255))
-        
+            string.format("defusing %s", d:GetAttribute("HasDefuseKit") == true and "[KIT]" or "[NO KIT]"),
+            Color3.fromRGB(90, 200, 255),
+            info)
+
         updateC4Ring(defRemain, dur, Color3.fromRGB(90, 200, 255))
         return
     else
@@ -6382,16 +6727,18 @@ function updateC4Timer()
 
     if C4UI.time then
         local speed
-        if     remain > 30 then speed = 2                                 
-        elseif remain > 20 then speed = 2 + (30 - remain) / 10 * 2        
-        elseif remain > 10 then speed = 4 + (20 - remain) / 10 * 2        
-        elseif remain > 5  then speed = 10                                
-        else                    speed = 16                                
+        if     remain > 30 then speed = 2
+        elseif remain > 20 then speed = 2 + (30 - remain) / 10 * 2
+        elseif remain > 10 then speed = 4 + (20 - remain) / 10 * 2
+        elseif remain > 5  then speed = 10
+        else                    speed = 16
         end
         local beat = 0.5 + 0.5 * math.sin(tick() * speed * math.pi)
         C4UI.time.TextTransparency = (remain <= 30) and (0.15 * (1 - beat)) or 0
-        if C4UI.dot then C4UI.dot.BackgroundTransparency = (remain <= 10) and (0.18 * (1 - beat)) or 0 end
-        if C4UI.bar then C4UI.bar.BackgroundTransparency = (remain <= 10) and (0.12 * (1 - beat)) or 0 end
+        if C4UI.moon and remain <= 10 then
+            local t = 0.15 * (1 - beat)
+            C4UI.moon.BackgroundTransparency = t
+        end
         if C4UI.stroke then
             C4UI.stroke.Transparency = 0.15 + 0.55 * (1 - beat) * (remain <= 30 and 1 or 0)
         end
@@ -11050,6 +11397,7 @@ function CleanupScript()
     pcall(function() if type(_EclipseMouseUnlockRefresh) == "function" then _EclipseMouseUnlockRefresh() end end)
     pcall(function() if type(_G.__EclipseMouseUnlockUnbind) == "function" then _G.__EclipseMouseUnlockUnbind() end end)
     scriptRunning = false
+    pcall(function() if _G.EclipseRestoreWorldLighting then _G.EclipseRestoreWorldLighting() end end)
     sendWebhook("unloaded", "Script unloaded")
     SkinSystem.scriptRunning=false
     Config.Skins.SkinChangerEnabled = false
@@ -11242,6 +11590,9 @@ function CleanupScript()
     end)
     pcall(function()
         pcall(function() if type(_skinPreviewDestroy) == "function" then _skinPreviewDestroy() end end)
+        if type(_EclipseCursorKill) == "function" then pcall(_EclipseCursorKill) end
+        if SpecUI and SpecUI.frame then SpecUI.frame:Destroy() end
+        if SpecUI and SpecUI.gui then SpecUI.gui:Destroy() end
         if C4UI and C4UI.frame then C4UI.frame:Destroy() end
         if C4UI and C4UI.gui then C4UI.gui:Destroy() end
         if C4UI then
@@ -16874,6 +17225,7 @@ end)()
 
 Library:OnUnload(function()
     scriptRunning = false
+    pcall(function() if _G.EclipseRestoreWorldLighting then _G.EclipseRestoreWorldLighting() end end)
     pcall(_skinPreviewDestroy)
     sendWebhook("unloaded", "Script unloaded")
     getgenv().EclipseHubLoaded = nil
@@ -18469,100 +18821,24 @@ end)()
     local HVH_SNDLIST = { 'None','Metal','TF2 Critical','TF2','Rust' }
 
     -- ── Hit Sound ─────────────────────────────────────────────
-    SoundGB:AddLabel("Hit Sound")
     SoundGB:AddToggle("HVH_HitSound",  { Text = "Enable Hit Sound",  Default = true })
-    SoundGB:AddDropdown("HVH_HitSnd",  { Text = "Sound",  Values = HVH_SNDLIST, Default = "Metal", Multi = false })
-    SoundGB:AddSlider("HVH_HitVol",    { Text = "Volume", Default = 0.5, Min = 0,   Max = 2, Rounding = 2 })
-    SoundGB:AddSlider("HVH_HitPitch",  { Text = "Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
+    SoundGB:AddDropdown("HVH_HitSnd",  { Text = "Hit Sound",  Values = HVH_SNDLIST, Default = "Metal", Multi = false })
+    SoundGB:AddSlider("HVH_HitVol",    { Text = "Hit Volume", Default = 0.5, Min = 0,   Max = 2, Rounding = 2 })
+    SoundGB:AddSlider("HVH_HitPitch",  { Text = "Hit Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
     SoundGB:AddDivider()
 
     -- ── Kill Sound ────────────────────────────────────────────
-    SoundGB:AddLabel("Kill Sound")
     SoundGB:AddToggle("HVH_KillSound", { Text = "Enable Kill Sound", Default = true })
-    SoundGB:AddDropdown("HVH_KillSnd", { Text = "Sound",  Values = HVH_SNDLIST, Default = "TF2 Critical", Multi = false })
-    SoundGB:AddSlider("HVH_KillVol",   { Text = "Volume", Default = 1,   Min = 0,   Max = 2, Rounding = 2 })
-    SoundGB:AddSlider("HVH_KillPitch", { Text = "Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
+    SoundGB:AddDropdown("HVH_KillSnd", { Text = "Kill Sound",  Values = HVH_SNDLIST, Default = "TF2 Critical", Multi = false })
+    SoundGB:AddSlider("HVH_KillVol",   { Text = "Kill Volume", Default = 1,   Min = 0,   Max = 2, Rounding = 2 })
+    SoundGB:AddSlider("HVH_KillPitch", { Text = "Kill Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
     SoundGB:AddDivider()
 
     -- ── Shoot Sound ───────────────────────────────────────────
-    SoundGB:AddLabel("Shoot Sound")
     SoundGB:AddToggle("HVH_ShootSound",{ Text = "Enable Shoot Sound", Default = false })
-    SoundGB:AddDropdown("HVH_ShootSnd",{ Text = "Sound",  Values = HVH_SNDLIST, Default = "Rust", Multi = false })
-    SoundGB:AddSlider("HVH_ShootVol",  { Text = "Volume", Default = 0.4, Min = 0,   Max = 2, Rounding = 2 })
-    SoundGB:AddSlider("HVH_ShootPitch",{ Text = "Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
-    SoundGB:AddDivider()
-    -- ── KOV Weapon Fire Override ──────────────────────────────
-    SoundGB:AddLabel("Weapon Fire Override")
-    if EX_LIMITED then
-        SoundGB:AddLabel("Unavailable on " .. (EX_NAME ~= "" and EX_NAME or "this executor"))
-        Config.Sounds.Enabled = false
-    else
-    SoundGB:AddToggle("Sounds_Enable", {
-        Text="Enable Fire Override", Default=false,
-        Callback=function(v) Config.Sounds.Enabled = v; EX.applySoundOverrides() end,
-    })
-
-    
-
-    local WEAPON_BLOCK = {
-        ["Karambit"]=true, ["Butterfly Knife"]=true, ["M9 Bayonet"]=true,
-        ["Flip Knife"]=true, ["Gut Knife"]=true, ["T Knife"]=true, ["CT Knife"]=true,
-        ["Knife"]=true, ["Bayonet"]=true, ["Huntsman Knife"]=true, ["Falchion Knife"]=true,
-        ["Sports Gloves"]=true, ["T Glove"]=true, ["CT Glove"]=true, ["Gloves"]=true,
-        ["HE Grenade"]=true, ["Incendiary Grenade"]=true, ["Molotov"]=true,
-        ["Smoke Grenade"]=true, ["Flashbang"]=true, ["Decoy Grenade"]=true, ["C4"]=true,
-    }
-    local weaponListValues = {}
-    do
-        local seen = {}
-        local function push(n)
-            if not n or seen[n] then return end
-            if WEAPON_BLOCK[n] then return end
-            local lower = n:lower()
-            if lower:find("knife") or lower:find("glove") or lower:find("grenade")
-               or lower == "c4" or lower == "bomb" or lower == "zeus" then return end
-            seen[n] = true; table.insert(weaponListValues, n)
-        end
-        for n in pairs(CT_ONLY or {}) do push(n) end
-        for n in pairs(SHARED  or {}) do push(n) end
-        if SkinsFolder then
-            for _, folder in ipairs(SkinsFolder:GetChildren()) do push(folder.Name) end
-        end
-    end
-    table.sort(weaponListValues)
-    if #weaponListValues == 0 then weaponListValues = { "AK-47" } end
-
-    local presetNames = { "Default" }
-    for k, _ in pairs(EX.SoundPresets) do
-        if k ~= "Default" then table.insert(presetNames, k) end
-    end
-    pcall(table.sort, presetNames, function(a,b) if a==b then return false end if a=="Default" then return true elseif b=="Default" then return false end return tostring(a)<tostring(b) end)
-
-    local currentSoundWeapon = weaponListValues[1]
-    SafeAddDropdown(SoundGB, "Sound_Weapon", {
-        Text="WEAPON", Values=weaponListValues, Default=currentSoundWeapon,
-        Callback=function(v) currentSoundWeapon = v end,
-    })
-    SafeAddDropdown(SoundGB, "Sound_Preset", {
-        Text="WEAPON PRESET", Values=presetNames, Default="Default",
-        Callback=function(v)
-            Config.Sounds.PresetOverrides[currentSoundWeapon] = v
-            if Config.Sounds.Enabled then EX.applySoundOverrides() end
-            pcall(EX.playPresetPreview, v)
-        end,
-    })
-
-
-    SoundGB:AddButton({ Text="Apply", Func=function()
-        Config.Sounds.Enabled = true; EX.applySoundOverrides()
-    end })
-    SoundGB:AddButton({ Text="Restore", Func=function()
-        table.clear(Config.Sounds.PresetOverrides)
-        Config.Sounds.Enabled = false
-        EX.restoreAllSounds()
-    end })
-
-    end -- EX_LIMITED gate
+    SoundGB:AddDropdown("HVH_ShootSnd",{ Text = "Shoot Sound",  Values = HVH_SNDLIST, Default = "Rust", Multi = false })
+    SoundGB:AddSlider("HVH_ShootVol",  { Text = "Shoot Volume", Default = 0.4, Min = 0,   Max = 2, Rounding = 2 })
+    SoundGB:AddSlider("HVH_ShootPitch",{ Text = "Shoot Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
 
 
 
@@ -20878,6 +21154,7 @@ task.defer(function() pcall(function()
     local function isAlive(ch) local h = ch and ch:FindFirstChildOfClass("Humanoid"); return h and h.Health > 0 end
 
     local wallbangParts = {}
+    local _lastWallbangESP = 0
     local function resetWallbangParts()
         for p, orig in pairs(wallbangParts) do pcall(function() p.LocalTransparencyModifier = orig end) end
         wallbangParts = {}
@@ -20887,6 +21164,9 @@ task.defer(function() pcall(function()
             if next(wallbangParts) then resetWallbangParts() end
             return
         end
+        local now = tick()
+        if now - _lastWallbangESP < 0.15 then return end
+        _lastWallbangESP = now
         local cam = Workspace.CurrentCamera; if not cam then return end
         local camPos = cam.CFrame.Position
         local current = {}
@@ -20928,10 +21208,9 @@ task.defer(function() pcall(function()
     -- ------------------------------------------------------------
     local TGB = (rawget(getfenv(0), "PVGB")) or safeGB(Tabs.Visuals, "R", "PLAYER VISUALS", "user")
     pcall(function() TGB:AddDivider() end)
-    TGB:AddLabel("Bullet Tracers")
     TGB:AddToggle("HVH_Tracers", { Text = "Enable Bullet Tracers", Default = false,
         Callback = function(v) if v then forceOff("PV_BulletTracer") end end })
-    TGB:AddLabel("Tracer Color"):AddColorPicker("HVH_TracerColor", { Default = Color3.fromRGB(255,50,50) })
+        :AddColorPicker("HVH_TracerColor", { Default = Color3.fromRGB(255,50,50), Title = "Tracer Color" })
     TGB:AddSlider("HVH_TracerThick", { Text = "Thickness",    Default = 0.15, Min = 0.01, Max = 1, Rounding = 2 })
     TGB:AddSlider("HVH_TracerTrans", { Text = "Transparency", Default = 0,    Min = 0,    Max = 1, Rounding = 2 })
     TGB:AddSlider("HVH_TracerLife",  { Text = "Lifetime",     Default = 0.5,  Min = 0.1,  Max = 3, Rounding = 1, Suffix = "s" })
@@ -20949,19 +21228,29 @@ task.defer(function() pcall(function()
         beam.LightEmission = 1; beam.LightInfluence = 0; beam.FaceCamera = true
         beam.Parent = Workspace.Terrain
         local dur = Options.HVH_TracerLife.Value
-        local t0 = tick()
-        task.spawn(function()
-            while tick() - t0 < dur do
-                local t = (tick() - t0) / dur
-                local ct = st + (1 - st) * t
-                beam.Transparency = NumberSequence.new({
-                    NumberSequenceKeypoint.new(0, ct),
-                    NumberSequenceKeypoint.new(1, ct),
-                })
-                task.wait()
+        local proxy = Instance.new("NumberValue")
+        proxy.Value = 0
+        proxy.Parent = Workspace.Terrain
+        local conn
+        conn = proxy.Changed:Connect(function(val)
+            if not beam or not beam.Parent then
+                if conn then conn:Disconnect() end
+                pcall(function() proxy:Destroy() end)
+                return
             end
-            beam:Destroy(); a0:Destroy(); a1:Destroy()
+            local ct = st + (1 - st) * val
+            beam.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, ct),
+                NumberSequenceKeypoint.new(1, ct),
+            })
         end)
+        local tween = TweenService:Create(proxy, TweenInfo.new(dur, Enum.EasingStyle.Linear), { Value = 1 })
+        local completeConn = tween.Completed:Connect(function()
+            if conn then conn:Disconnect() end
+            pcall(function() beam:Destroy() end)
+            pcall(function() proxy:Destroy() end)
+        end)
+        tween:Play()
     end
 
     -- ------------------------------------------------------------
@@ -20984,6 +21273,34 @@ task.defer(function() pcall(function()
         Lighting.Brightness     = _origLighting.Brightness
         Lighting.GlobalShadows  = _origLighting.GlobalShadows
     end)
+
+    local function _eclipseRestoreWorldLighting()
+        pcall(function()
+            Lighting.Ambient        = _origLighting.Ambient
+            Lighting.OutdoorAmbient = _origLighting.OutdoorAmbient
+            Lighting.Brightness     = _origLighting.Brightness
+            Lighting.GlobalShadows  = _origLighting.GlobalShadows
+            Lighting.ClockTime      = _origLighting.ClockTime
+        end)
+    end
+    _G.EclipseRestoreWorldLighting = _eclipseRestoreWorldLighting
+
+    local _noShadowsConn = nil
+    local function _eclipseSetNoShadows(enabled)
+        if enabled then
+            pcall(function() Lighting.GlobalShadows = false end)
+            if not _noShadowsConn then
+                _noShadowsConn = Lighting:GetPropertyChangedSignal("GlobalShadows"):Connect(function()
+                    if Toggles.HVH_NoShadows and Toggles.HVH_NoShadows.Value and Lighting.GlobalShadows ~= false then
+                        pcall(function() Lighting.GlobalShadows = false end)
+                    end
+                end)
+                connectSignal(_noShadowsConn)
+            end
+        else
+            pcall(function() Lighting.GlobalShadows = _origLighting.GlobalShadows end)
+        end
+    end
 
     local WCGB = (_G.__EclipseWorldColorGB)
         or (rawget(getfenv(0), "WorldColorGB"))
@@ -21017,6 +21334,11 @@ task.defer(function() pcall(function()
                 pcall(function() Lighting.ClockTime = v end)
             end
         end,
+    })
+
+    WCGB:AddToggle("HVH_NoShadows", {
+        Text = "NO SHADOWS", Default = false,
+        Callback = function(v) pcall(_eclipseSetNoShadows, v) end,
     })
 
     -- ------------------------------------------------------------
@@ -21079,68 +21401,27 @@ task.defer(function() pcall(function()
     local AAGB = safeGB(Tabs.Misc, "R", "ANTI-AIM", "shield")
     AAGB:AddToggle("HVH_AA",         { Text = "ENABLE ANTI-AIM", Default = false,
         Callback = function(v) if v then forceOff("AA_Enable") end end })
-    AAGB:AddDropdown("HVH_YawMode",  { Text = "YAW",   Values = {'None','Backward','Left','Right','Spin','Random'}, Default = 'Backward', Multi = false })
-    AAGB:AddSlider("HVH_SpinSpeed",  { Text = "SPIN SPEED",      Default = 10,  Min = 1,   Max = 100, Rounding = 0 })
-    AAGB:AddSlider("HVH_RandInt",    { Text = "RANDOM INTERVAL", Default = 0.5, Min = 0.1, Max = 2.0, Rounding = 1, Suffix = "s" })
-    AAGB:AddDropdown("HVH_PitchMode",{ Text = "PITCH", Values = {'None','Down','Up','Zero','Random'}, Default = 'Down', Multi = false })
+
+
+
+    -- YAW modes (old Eclipse behavior — no Follow):
+    --   Forward : body spins continuously around Y, head neutral.
+    --   Freeze  : body locked to the yaw the camera had when Freeze started.
+    --   Up      : body keeps spinning, head Neck tilts UP (~60°). Only Neck.
+    --   Down    : body keeps spinning, head Neck tilts DOWN (~60°). Only Neck.
+    AAGB:AddDropdown("HVH_YawMode",  { Text = "MODE",
+        Values = {'Forward','Freeze','Up','Down'}, Default = 'Forward', Multi = false })
+    AAGB:AddSlider("HVH_SpinSpeed",  { Text = "SPIN SPEED", Default = 80, Min = 10, Max = 400, Rounding = 0 })
 
     AAGB:AddDivider()
     AAGB:AddToggle("HVH_AntiSpec", { Text = "ANTI-SPECTATOR",   Default = false })
     AAGB:AddSlider("HVH_SpecRot",  { Text = "ROTATION AMOUNT", Default = math.pi, Min = 0, Max = math.pi, Rounding = 2 })
     AAGB:AddSlider("HVH_SpecPos",  { Text = "POSITION OFFSET", Default = 1,       Min = 0, Max = 10,      Rounding = 1, Suffix = " studs" })
 
-    local spinAngle = 0
-    local randomYaw = 0
-    local lastRandomUpdate = 0
+    -- Anti-Spectator: keep the .Send override on Spectate.UpdateCameraCFrame
+    -- (this one has no anti-cheat friction and never touched aim state).
     pcall(function()
         local RM = require(ReplicatedStorage.Database.Security.Remotes)
-        if RM.Character and RM.Character.UpdateLookAngle then
-            local Orig = RM.Character.UpdateLookAngle.Send
-            if type(Orig) == "function" then
-                local function hk(...)
-                    local args = select(1, ...)
-                    if Toggles.HVH_AA and Toggles.HVH_AA.Value and typeof(args) == "table" and args.HorizontalAngle then
-                        local yaw = args.HorizontalAngle
-                        local ym = Options.HVH_YawMode.Value
-                        local pm = Options.HVH_PitchMode.Value
-
-                        if     ym == "Backward" then
-                            yaw = yaw + math.pi
-                        elseif ym == "Left" then
-                            yaw = yaw + math.pi / 2
-                        elseif ym == "Right" then
-                            yaw = yaw - math.pi / 2
-                        elseif ym == "Spin" then
-                            spinAngle = (spinAngle + (Options.HVH_SpinSpeed.Value * 0.01)) % (2 * math.pi)
-                            yaw = yaw + spinAngle
-                        elseif ym == "Random" then
-                            if tick() - lastRandomUpdate > Options.HVH_RandInt.Value then
-                                randomYaw = (math.random() - 0.5) * 2 * math.pi
-                                lastRandomUpdate = tick()
-                            end
-                            yaw = randomYaw
-                        end
-
-                        yaw = (yaw + math.pi) % (2 * math.pi) - math.pi
-                        args.HorizontalAngle = yaw
-
-                        if     pm == "Down" then
-                            args.VerticalLook = -1
-                        elseif pm == "Up" then
-                            args.VerticalLook = 1
-                        elseif pm == "Zero" then
-                            args.VerticalLook = 0
-                        elseif pm == "Random" then
-                            args.VerticalLook = (math.random() - 0.5) * 2
-                        end
-
-                    end
-                    return Orig(...)
-                end
-                RM.Character.UpdateLookAngle.Send = (newcclosure and newcclosure(hk)) or hk
-            end
-        end
-
         if RM.Spectate and RM.Spectate.UpdateCameraCFrame then
             local Orig = RM.Spectate.UpdateCameraCFrame.Send
             if type(Orig) == "function" then
@@ -21163,6 +21444,93 @@ task.defer(function() pcall(function()
             end
         end
     end)
+
+    -- Anti-Aim itself: OLD Eclipse Heartbeat approach that writes HRP.CFrame
+    -- and (for Up/Down) tilts the Neck Motor6D. We deliberately removed the
+    -- previous .Send hook on UpdateLookAngle because it fired many times per
+    -- second per aim update and appeared to correlate with the 1-second freeze
+    -- spikes the user reported (BAC/Frog periodically re-validates that
+    -- remote's send path). Writing HRP.CFrame is what the reference
+    -- old-version anti-aim did and it does not incur that spike.
+    do
+        local RunS    = game:GetService("RunService")
+        local NECK_C0 = setmetatable({}, { __mode = "k" }) -- Motor6D -> original C0
+        local function _findNeckMotor(char)
+            if not char then return nil end
+            local head = char:FindFirstChild("Head")
+            if head then
+                local m = head:FindFirstChild("Neck")
+                if m and m:IsA("Motor6D") then return m end
+            end
+            for _, name in ipairs({ "Torso", "UpperTorso" }) do
+                local t = char:FindFirstChild(name)
+                if t then
+                    local m = t:FindFirstChild("Neck")
+                    if m and m:IsA("Motor6D") then return m end
+                end
+            end
+            return nil
+        end
+        local function _setNeckPitch(char, deg)
+            local m = _findNeckMotor(char); if not m then return end
+            if NECK_C0[m] == nil then NECK_C0[m] = m.C0 end
+            m.C0 = NECK_C0[m] * CFrame.Angles(math.rad(deg), 0, 0)
+        end
+        local function _restoreNeck(char)
+            local m = _findNeckMotor(char); if not m then return end
+            if NECK_C0[m] ~= nil then m.C0 = NECK_C0[m] end
+        end
+
+        connectSignal(RunS.Heartbeat:Connect(function()
+            if not scriptRunning then return end
+            if not (Toggles.HVH_AA and Toggles.HVH_AA.Value) then
+                local char = LocalPlayer and LocalPlayer.Character
+                if char then pcall(function() _restoreNeck(char) end) end
+                return
+            end
+            local char = LocalPlayer and LocalPlayer.Character
+            if not char then return end
+            local hrp = char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health <= 0 then return end
+            local cam   = workspace.CurrentCamera
+            local camCF = cam and cam.CFrame
+            local mode  = tostring(Options.HVH_YawMode.Value or "Forward")
+            local spd   = math.rad(tonumber(Options.HVH_SpinSpeed.Value) or 80)
+
+            pcall(function()
+                local pos = hrp.Position
+                if mode == "Freeze" then
+                    _restoreNeck(char)
+                    local st = _G.__EclipseAA or { mode = nil, yawRad = 0 }
+                    if st.mode ~= mode then
+                        local lookCF = camCF or hrp.CFrame
+                        local lv = lookCF.LookVector
+                        st.yawRad = math.atan2(-lv.X, -lv.Z)
+                        st.mode = mode
+                        _G.__EclipseAA = st
+                    end
+                    hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, st.yawRad, 0)
+                elseif mode == "Up" or mode == "Down" then
+                    _setNeckPitch(char, mode == "Up" and 60 or -60)
+                    local _, ry = hrp.CFrame:ToOrientation()
+                    ry = ry + spd * (1/60)
+                    hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, ry, 0)
+                    _G.__EclipseAA = { mode = mode, yawRad = ry }
+                else -- Forward
+                    _restoreNeck(char)
+                    local _, ry = hrp.CFrame:ToOrientation()
+                    ry = ry + spd * (1/60)
+                    hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, ry, 0)
+                    _G.__EclipseAA = { mode = "Forward", yawRad = ry }
+                end
+                if cam and camCF then cam.CFrame = camCF end
+            end)
+        end))
+    end
+
+
+
 
     -- ------------------------------------------------------------
     -- HVH SOUNDS (Hit / Kill / Shoot) — UI lives in CUSTOM SOUNDS group.
@@ -21554,8 +21922,11 @@ task.defer(function() pcall(function()
         end
     end
 
-    -- Auto-kill heartbeat (throttled inside tick_autoshoot by fire rate)
-    RunService.Heartbeat:Connect(function()
+    local _autoShootAccum = 0
+    RunService.Heartbeat:Connect(function(dt)
+        _autoShootAccum = _autoShootAccum + (dt or 0)
+        if _autoShootAccum < (1 / 30) then return end
+        _autoShootAccum = _autoShootAccum % (1 / 30)
         pcall(tick_autoshoot)
     end)
 
@@ -21565,7 +21936,9 @@ task.defer(function() pcall(function()
     RunService.Heartbeat:Connect(function()
         pcall(updateWallbangESP)
         pcall(function()
-            applyHVHLighting()
+            if ES152.tick("HVH_Lighting", 0.5) then
+                applyHVHLighting()
+            end
         end)
     end)
 
