@@ -18490,79 +18490,9 @@ end)()
     SoundGB:AddDropdown("HVH_ShootSnd",{ Text = "Sound",  Values = HVH_SNDLIST, Default = "Rust", Multi = false })
     SoundGB:AddSlider("HVH_ShootVol",  { Text = "Volume", Default = 0.4, Min = 0,   Max = 2, Rounding = 2 })
     SoundGB:AddSlider("HVH_ShootPitch",{ Text = "Pitch",  Default = 1,   Min = 0.5, Max = 2, Rounding = 2 })
-    SoundGB:AddDivider()
-    -- ── KOV Weapon Fire Override ──────────────────────────────
-    SoundGB:AddLabel("Weapon Fire Override")
-    if EX_LIMITED then
-        SoundGB:AddLabel("Unavailable on " .. (EX_NAME ~= "" and EX_NAME or "this executor"))
-        Config.Sounds.Enabled = false
-    else
-    SoundGB:AddToggle("Sounds_Enable", {
-        Text="Enable Fire Override", Default=false,
-        Callback=function(v) Config.Sounds.Enabled = v; EX.applySoundOverrides() end,
-    })
+    -- Weapon Fire Override removed per user request.
+    Config.Sounds.Enabled = false
 
-    
-
-    local WEAPON_BLOCK = {
-        ["Karambit"]=true, ["Butterfly Knife"]=true, ["M9 Bayonet"]=true,
-        ["Flip Knife"]=true, ["Gut Knife"]=true, ["T Knife"]=true, ["CT Knife"]=true,
-        ["Knife"]=true, ["Bayonet"]=true, ["Huntsman Knife"]=true, ["Falchion Knife"]=true,
-        ["Sports Gloves"]=true, ["T Glove"]=true, ["CT Glove"]=true, ["Gloves"]=true,
-        ["HE Grenade"]=true, ["Incendiary Grenade"]=true, ["Molotov"]=true,
-        ["Smoke Grenade"]=true, ["Flashbang"]=true, ["Decoy Grenade"]=true, ["C4"]=true,
-    }
-    local weaponListValues = {}
-    do
-        local seen = {}
-        local function push(n)
-            if not n or seen[n] then return end
-            if WEAPON_BLOCK[n] then return end
-            local lower = n:lower()
-            if lower:find("knife") or lower:find("glove") or lower:find("grenade")
-               or lower == "c4" or lower == "bomb" or lower == "zeus" then return end
-            seen[n] = true; table.insert(weaponListValues, n)
-        end
-        for n in pairs(CT_ONLY or {}) do push(n) end
-        for n in pairs(SHARED  or {}) do push(n) end
-        if SkinsFolder then
-            for _, folder in ipairs(SkinsFolder:GetChildren()) do push(folder.Name) end
-        end
-    end
-    table.sort(weaponListValues)
-    if #weaponListValues == 0 then weaponListValues = { "AK-47" } end
-
-    local presetNames = { "Default" }
-    for k, _ in pairs(EX.SoundPresets) do
-        if k ~= "Default" then table.insert(presetNames, k) end
-    end
-    pcall(table.sort, presetNames, function(a,b) if a==b then return false end if a=="Default" then return true elseif b=="Default" then return false end return tostring(a)<tostring(b) end)
-
-    local currentSoundWeapon = weaponListValues[1]
-    SafeAddDropdown(SoundGB, "Sound_Weapon", {
-        Text="WEAPON", Values=weaponListValues, Default=currentSoundWeapon,
-        Callback=function(v) currentSoundWeapon = v end,
-    })
-    SafeAddDropdown(SoundGB, "Sound_Preset", {
-        Text="WEAPON PRESET", Values=presetNames, Default="Default",
-        Callback=function(v)
-            Config.Sounds.PresetOverrides[currentSoundWeapon] = v
-            if Config.Sounds.Enabled then EX.applySoundOverrides() end
-            pcall(EX.playPresetPreview, v)
-        end,
-    })
-
-
-    SoundGB:AddButton({ Text="Apply", Func=function()
-        Config.Sounds.Enabled = true; EX.applySoundOverrides()
-    end })
-    SoundGB:AddButton({ Text="Restore", Func=function()
-        table.clear(Config.Sounds.PresetOverrides)
-        Config.Sounds.Enabled = false
-        EX.restoreAllSounds()
-    end })
-
-    end -- EX_LIMITED gate
 
 
 
@@ -20927,11 +20857,10 @@ task.defer(function() pcall(function()
     -- right below SHOW IMPACT, no separate group)
     -- ------------------------------------------------------------
     local TGB = (rawget(getfenv(0), "PVGB")) or safeGB(Tabs.Visuals, "R", "PLAYER VISUALS", "user")
-    pcall(function() TGB:AddDivider() end)
-    TGB:AddLabel("Bullet Tracers")
-    TGB:AddToggle("HVH_Tracers", { Text = "Enable Bullet Tracers", Default = false,
+    TGB:AddToggle("HVH_Tracers", { Text = "Bullet Tracer", Default = false,
         Callback = function(v) if v then forceOff("PV_BulletTracer") end end })
-    TGB:AddLabel("Tracer Color"):AddColorPicker("HVH_TracerColor", { Default = Color3.fromRGB(255,50,50) })
+    TGB:AddColorPicker("HVH_TracerColor", { Default = Color3.fromRGB(255,50,50) })
+
     TGB:AddSlider("HVH_TracerThick", { Text = "Thickness",    Default = 0.15, Min = 0.01, Max = 1, Rounding = 2 })
     TGB:AddSlider("HVH_TracerTrans", { Text = "Transparency", Default = 0,    Min = 0,    Max = 1, Rounding = 2 })
     TGB:AddSlider("HVH_TracerLife",  { Text = "Lifetime",     Default = 0.5,  Min = 0.1,  Max = 3, Rounding = 1, Suffix = "s" })
@@ -21633,19 +21562,25 @@ do
             end)
             if type(connectSignal) == "function" then pcall(connectSignal, _conn) end
             for _, v in next, getgc(true) do
-                if type(v) == "table" and rawget(v, "cast") then
+                if type(v) == "table" and rawget(v, "cast") and type(rawget(v, "cast")) == "function" then
                     local _old
-                    _old = hookfn(v.cast, function(...)
-                        local args = {...}
-                        if scriptRunning and Config and Config.Misc and Config.Misc.SilentAim
-                           and args[2] and typeof(args[2]) == "Vector3" and _tsTarget then
-                            local origin = args[1]
-                            args[2] = (_tsTarget.Position - origin)
-                        end
-                        return _old(unpack(args))
+                    local okHook, errHook = pcall(function()
+                        _old = hookfn(v.cast, function(...)
+                            local args = {...}
+                            if scriptRunning and Config and Config.Misc and Config.Misc.SilentAim
+                               and args[2] and typeof(args[2]) == "Vector3" and _tsTarget then
+                                local origin = args[1]
+                                args[2] = (_tsTarget.Position - origin)
+                            end
+                            return _old(unpack(args))
+                        end)
                     end)
+                    if not okHook then
+                        -- silently ignore this candidate; keep scanning
+                    end
                 end
             end
+
         end)
         if not ok then
             installed = false
