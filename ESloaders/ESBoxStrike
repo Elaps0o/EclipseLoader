@@ -1942,7 +1942,7 @@ end)
 
 local Window = Library:CreateWindow({
     Title  = "ECLIPSE HUB",
-    Footer = "v" .. (tostring(ECLIPSE.Version):match("^[^%s]+") or "3.0.0"),
+    Footer = "v" .. (tostring(ECLIPSE.Version):match("^[^%s]+") or "3.1.0"),
 })
 
 local loadingComplete = false
