@@ -21008,8 +21008,20 @@ end)
 
 end)()
 
+-- BULLET TRACER ENGINE removed per user request.
 _G.EclipseBulletTracerFire = function() end
 
+-- ============================================================
+-- BULLET TRACER v8 — SAFE OBSERVER MODE
+--
+-- No __namecall, no hookfunction, no FireServer interception, no getgc scan.
+-- The previous versions could collide with obfuscated game wrappers and make
+-- LoadingScreen/module calls receive nil method names after a few seconds.
+-- This version observes only safe client signals:
+--   1) VFX.CreateTracer.OnClientEvent, when the game exposes it.
+--   2) Local mouse/touch click fallback using Camera raycast.
+-- It never touches game remotes, so it cannot block or mutate game calls.
+-- ============================================================
 ;(function()
     local Players = game:GetService("Players")
     local RS = game:GetService("ReplicatedStorage")
@@ -21090,7 +21102,9 @@ _G.EclipseBulletTracerFire = function() end
         local tool = ch and ch:FindFirstChildOfClass("Tool")
         if not tool then return false end
         local rawName = tostring(tool.Name or "")
-        
+        -- 1) Authoritative KitchenManager knife lists (KNIVES / knives globals).
+        --    These are the same tables the skin system uses, so any knife the
+        --    game recognises is caught here — no name-heuristic gaps.
         local KN = rawget(_G, "KNIVES") or KNIVES
         if type(KN) == "table" and KN[rawName] == true then return true end
         local kn2 = rawget(_G, "knives") or knives
