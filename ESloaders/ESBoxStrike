@@ -14888,11 +14888,6 @@ do
     Config.Misc.AutoSkillRespectBuy = true
     Config.Misc.AutoSkillRefill     = true
 
-    -- RAPID RELOAD — standalone Misc helper. (Rapid Fire removed per request.)
-    Config.Misc.RapidReload = Config.Misc.RapidReload or false
-    local RRGB = MiscGB
-    RRGB:AddToggle("RR_Enable", { Text = "RAPID RELOAD", Default = false,
-        Callback = function(v) Config.Misc.RapidReload = v end })
 
     -- ============================================================
     -- NO SPREAD (Except Snipers) — port from Obsidian/Tripleware dump.
@@ -21020,38 +21015,6 @@ _G.EclipseBulletTracerFire = function() end
 
 
 -- FPS BOOST removed by user request.
-
-
-
-
-
-
--- ============================================================
--- RAPID RELOAD (Misc) — reuses AutoSkill's refill helpers.
--- Independent loop; safe when AutoSkill is disabled.
--- ============================================================
--- Rapid Reload runs in a passive loop while the toggle is on — no key press
--- required. The loop yields with task.wait so it costs no FPS; it only touches
--- the refill helper when a non-melee weapon is equipped.
-;(function()
-    task.spawn(function()
-        while scriptRunning do
-            task.wait(0.15)
-            if not scriptRunning then break end
-            if Config and Config.Misc and Config.Misc.RapidReload then
-                local find    = _G.EclipseAS_FindEquipped
-                local refill  = _G.EclipseAS_TryRefill
-                local isMelee = _G.EclipseAS_IsMelee
-                if type(find) == "function" and type(refill) == "function" then
-                    local ok, w = pcall(find)
-                    if ok and w and not (type(isMelee) == "function" and isMelee(w)) then
-                        pcall(refill, w)
-                    end
-                end
-            end
-        end
-    end)
-end)()
 
 -- ============================================================
 -- BULLET TRACER v8 — SAFE OBSERVER MODE
