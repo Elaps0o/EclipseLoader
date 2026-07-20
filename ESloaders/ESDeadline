@@ -26,6 +26,16 @@ local MarketplaceSvc = game:GetService("MarketplaceService")
 
 local LocalPlayer = Players.LocalPlayer
 
+-- ipairs-free iterator (drop-in replacement for ipairs on array tables)
+local function _iter(t)
+    local i = 0
+    return function()
+        i = i + 1
+        local v = t[i]
+        if v ~= nil then return i, v end
+    end
+end
+
 local _eclipseFrameStart = os.clock()
 local _ECLIPSE_FRAME_BUDGET = 1/240
 local RunService_forYield = game:GetService("RunService")
@@ -54,8 +64,8 @@ local function _purgeEclipseGuis()
         local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if pg then roots[#roots+1] = pg end
     end)
-    for _, root in ipairs(roots) do
-        for _, ch in ipairs(root:GetChildren()) do
+    for _, root in _iter(roots) do
+        for _, ch in _iter(root:GetChildren()) do
             local nm = ch.Name or ""
             if ECLIPSE_GUI_NAMES[nm] or nm:sub(1,7) == "Eclipse" then
                 pcall(function() ch:Destroy() end)
@@ -149,7 +159,7 @@ do
         local args = {...}
         local joined = ""
         for i = 1, select("#", ...) do joined = joined .. tostring(args[i]) .. " " end
-        for _, pat in ipairs(_blocked) do
+        for _, pat in _iter(_blocked) do
             if string.find(joined, pat, 1, true) then return end
         end
         return _origWarn(...)
@@ -326,7 +336,7 @@ local function InstallDeviceSpoofer()
                 return orig(opts)
             end)
         end
-        for _, name in ipairs({ "http_request", "request", "syn_request" }) do
+        for _, name in _iter({ "http_request", "request", "syn_request" }) do
             local f = rawget(ge, name)
             if type(f) == "function" then ge[name] = wrapRequest(f) end
         end
@@ -339,7 +349,7 @@ end
 if ECLIPSE.GameLock then
     local locks = type(ECLIPSE.GameLock) == "table" and ECLIPSE.GameLock or { ECLIPSE.GameLock }
     local ok = false
-    for _, id in ipairs(locks) do if game.PlaceId == id or game.GameId == id then ok = true; break end end
+    for _, id in _iter(locks) do if game.PlaceId == id or game.GameId == id then ok = true; break end end
     if not ok then
         LocalPlayer:Kick("Eclipse Hub: incompatible game.")
         return
@@ -369,7 +379,7 @@ task.spawn(function()
 
         if #samples > 5 then
             local sum = 0
-            for _, v in ipairs(samples) do sum = sum + v end
+            for _, v in _iter(samples) do sum = sum + v end
             return sum / #samples
         end
 
@@ -592,7 +602,7 @@ function Library:Notify(data)
     pcall(function()
         holder = NLLib and NLLib.NotifHolder and NLLib.NotifHolder.Instance
         if holder then
-            for _, child in ipairs(holder:GetChildren()) do before[child] = true end
+            for _, child in _iter(holder:GetChildren()) do before[child] = true end
         end
     end)
     local customIcon = nil
@@ -609,7 +619,7 @@ function Library:Notify(data)
     task.delay(duration + 1.75, function()
         pcall(function()
             if not holder or not holder.Parent then return end
-            for _, child in ipairs(holder:GetChildren()) do
+            for _, child in _iter(holder:GetChildren()) do
                 if not before[child] and child:IsA("GuiObject") then
                     child:Destroy()
                 end
@@ -620,7 +630,7 @@ end
 function Library:OnUnload(cb) table.insert(self._unloadCbs, cb) end
 function Library:Unload()
     self.Unloaded = true
-    for _, cb in ipairs(self._unloadCbs) do pcall(cb) end
+    for _, cb in _iter(self._unloadCbs) do pcall(cb) end
     pcall(function() if NLLib.Unload then NLLib:Unload() end end)
 end
 function Library:SetWatermarkVisibility() end
@@ -715,7 +725,7 @@ local function _findNLToggleRow(nlToggle)
     local content = items and items.Content and items.Content.Instance
     if not (typeof(content) == "Instance") then return nil, nil end
     local wanted = tostring((nlToggle and nlToggle.Name) or "")
-    for _, d in ipairs(content:GetDescendants()) do
+    for _, d in _iter(content:GetDescendants()) do
         if d:IsA("TextLabel") and d.Text == wanted then
             local row = d.Parent
             while row and row ~= content and not row:IsA("GuiButton") do row = row.Parent end
@@ -808,9 +818,9 @@ do
         local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         _hookRoot(CoreGui); _hookRoot(pg)
 
-        for _, root in ipairs({CoreGui, pg}) do
+        for _, root in _iter({CoreGui, pg}) do
             if root then
-                for _, d in ipairs(root:GetDescendants()) do
+                for _, d in _iter(root:GetDescendants()) do
                     local nm = tostring(d.Name or ""):lower()
                     if nm:find("color") or nm:find("picker") then
                         _bumpZ(d)
@@ -857,7 +867,7 @@ local function wrapToggle(id, nlToggle, cbHolder)
     }
     local function triggerChange(v)
         self._changed = self._changed or {}
-        for _, fn in ipairs(self._changed) do
+        for _, fn in _iter(self._changed) do
             pcall(fn, v)
         end
     end
@@ -961,7 +971,7 @@ local function wrapToggle(id, nlToggle, cbHolder)
                 task.defer(function()
                     pcall(function()
 
-                        for _, d in ipairs(slot:GetDescendants()) do
+                        for _, d in _iter(slot:GetDescendants()) do
                             if d:IsA("TextButton") then
                                 d.Size = UDim2.fromScale(1, 1)
                                 d.Position = UDim2.fromScale(0, 0)
@@ -976,7 +986,7 @@ local function wrapToggle(id, nlToggle, cbHolder)
                             elseif d:IsA("Frame") then
 
                                 d.BackgroundTransparency = 1
-                                for _, gc in ipairs(d:GetChildren()) do
+                                for _, gc in _iter(d:GetChildren()) do
                                     if gc:IsA("UICorner") or gc:IsA("UIStroke") or gc:IsA("UIGradient") then
                                         pcall(function() gc:Destroy() end)
                                     end
@@ -1020,7 +1030,7 @@ local function wrapToggle(id, nlToggle, cbHolder)
                 pcall(function() if cp then cp:Set(c) end end)
                 pcall(function() if slot then slot.BackgroundColor3 = c end end)
                 if data.Callback then pcall(data.Callback, c) end
-                for _, fn in ipairs(self2._changed or {}) do pcall(fn, c) end
+                for _, fn in _iter(self2._changed or {}) do pcall(fn, c) end
             end,
             SetValue    = function(self2, c)
                 if typeof(c) ~= "Color3" then return end
@@ -1028,7 +1038,7 @@ local function wrapToggle(id, nlToggle, cbHolder)
                 pcall(function() if cp then cp:Set(c) end end)
                 pcall(function() if slot then slot.BackgroundColor3 = c end end)
                 if data.Callback then pcall(data.Callback, c) end
-                for _, fn in ipairs(self2._changed or {}) do pcall(fn, c) end
+                for _, fn in _iter(self2._changed or {}) do pcall(fn, c) end
             end,
             SetVisible  = function(_, b) if slot then slot.Visible = b and true or false else _setControlVisible(cp, b) end end,
             SetDisabled = function(_, b) _setControlDisabled(cp, b) end,
@@ -1146,7 +1156,7 @@ local function makeGroupbox(nlSection)
                 if self._lbl then
                     if type(self._lbl.Set) == "function" then self._lbl:Set(self.Text); return end
                     if type(self._lbl.SetText) == "function" then self._lbl:SetText(self.Text); return end
-                    for _, k in ipairs({ "Label", "TextLabel", "Text" }) do
+                    for _, k in _iter({ "Label", "TextLabel", "Text" }) do
                         local ok = pcall(function() self._lbl[k] = self.Text end)
                         if ok then return end
                     end
@@ -1175,14 +1185,14 @@ local function makeGroupbox(nlSection)
                     self2.Value = c
                     pcall(function() if cp then cp:Set(c) end end)
                     if data.Callback then pcall(data.Callback, c) end
-                    for _, fn in ipairs(self2._changed or {}) do pcall(fn, c) end
+                    for _, fn in _iter(self2._changed or {}) do pcall(fn, c) end
                 end,
                 SetValue    = function(self2, c)
                     if typeof(c) ~= "Color3" then return end
                     self2.Value = c
                     pcall(function() if cp then cp:Set(c) end end)
                     if data.Callback then pcall(data.Callback, c) end
-                    for _, fn in ipairs(self2._changed or {}) do pcall(fn, c) end
+                    for _, fn in _iter(self2._changed or {}) do pcall(fn, c) end
                 end,
                 SetVisible  = function(_, b) _setControlVisible(cp, b) end,
                 SetDisabled = function(_, b) _setControlDisabled(cp, b) end,
@@ -1229,7 +1239,7 @@ local function makeGroupbox(nlSection)
                 Default  = data.Default and true or false,
                 Callback = function(v)
                     local changed = false
-                    for _, f in ipairs(cbs) do
+                    for _, f in _iter(cbs) do
                         local ok, didChange = pcall(f, v)
                         if ok and didChange then changed = true end
                     end
@@ -1484,7 +1494,7 @@ end
 local function _applyEclipseLogo()
     local asset = _resolveEclipseLogoAsset()
     if not asset or not _NLWindow or not _NLWindow.Items then return end
-    for _, key in ipairs({ "Logo", "FloatingLogo" }) do
+    for _, key in _iter({ "Logo", "FloatingLogo" }) do
         local item = _NLWindow.Items[key]
         local inst = item and item.Instance
         if inst then pcall(function() inst.Image = asset end) end
@@ -1495,7 +1505,7 @@ local function _repairNeverloseInput()
     pcall(function()
         local holder = (NLLib and NLLib.Holder and NLLib.Holder.Instance) or Library.ScreenGui
         if not holder then return end
-        for _, d in ipairs(holder:GetDescendants()) do
+        for _, d in _iter(holder:GetDescendants()) do
             if d:IsA("GuiButton") then
                 d.Interactable = true
                 d.Active = true
@@ -1594,7 +1604,7 @@ function _EclipseCloseFloatingUi()
             snapshot[#snapshot + 1] = v or k
         end
 
-        for _, obj in ipairs(snapshot) do
+        for _, obj in _iter(snapshot) do
             if type(obj) == "table" and type(obj.SetOpen) == "function" then
                 pcall(function() obj:SetOpen(false) end)
             else
@@ -1635,7 +1645,7 @@ function _EclipseRepairActivePages(forceDeep)
                     for _, sec0 in pairs(page.Sections) do
                         local content0 = sec0.Items and sec0.Items.Content and sec0.Items.Content.Instance
                         if content0 then
-                            for _, d in ipairs(content0:GetDescendants()) do
+                            for _, d in _iter(content0:GetDescendants()) do
                                 if d:IsA("GuiObject") and d.Visible then
                                     pageLooksEmpty = false
                                     break
@@ -1653,7 +1663,7 @@ function _EclipseRepairActivePages(forceDeep)
                             sec.Items.Section.Instance.Visible = true
                         end
                         if sec.Items then
-                            for _, key in ipairs({ "Background", "Content" }) do
+                            for _, key in _iter({ "Background", "Content" }) do
                                 local item = sec.Items[key]
                                 if item and item.Instance and item.Instance:IsA("GuiObject") then item.Instance.Visible = true end
                             end
@@ -1665,7 +1675,7 @@ function _EclipseRepairActivePages(forceDeep)
                             pcall(function()
                                 local items = element.Items
                                 if type(items) ~= "table" then return end
-                                for _, key in ipairs({
+                                for _, key in _iter({
                                     "Toggle", "Indicator", "Text", "Slider", "RealSlider", "Dropdown", "RealDropdown",
                                     "ArrowIcon", "Label", "Button", "Textbox", "Keybind", "Colorpicker"
                                 }) do
@@ -1742,7 +1752,7 @@ do
             pcall(function()
                 local sg = (NLLib and NLLib.Holder and NLLib.Holder.Instance) or Library.ScreenGui
                 if sg then
-                    for _, d in ipairs(sg:GetDescendants()) do
+                    for _, d in _iter(sg:GetDescendants()) do
                         if d.Name == "_EclipseLock" or d.Name == "_EclipseDisabledOverlay" then
                             pcall(function() d:Destroy() end)
                         end
@@ -1908,7 +1918,7 @@ end
 
 local function _EclipseSinkMouseLockActions()
 
-    for _, act in ipairs({ "MouseLockSwitch", "RbxCameraMouseLock", "PlayerCameraMouseLock" }) do
+    for _, act in _iter({ "MouseLockSwitch", "RbxCameraMouseLock", "PlayerCameraMouseLock" }) do
         pcall(function() ContextActionService:UnbindAction(act) end)
     end
 end
@@ -2198,7 +2208,7 @@ local function _presenceSyncOnce(action)
     local ok2, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
     if not ok2 or type(data) ~= "table" or type(data.players) ~= "table" then return end
     local seen = {}
-    for _, pl in ipairs(data.players) do
+    for _, pl in _iter(data.players) do
         local uid = tonumber(pl.playerId)
         if uid then seen[uid] = true; markPresence(uid, true) end
     end
@@ -2249,7 +2259,7 @@ local function _presenceDecorateLoop()
                     end
                 end
 
-                for _, d in ipairs(pg:GetDescendants()) do
+                for _, d in _iter(pg:GetDescendants()) do
                     if d:IsA("TextLabel") or d:IsA("TextButton") then
                         local raw = d.Text
                         if type(raw) == "string" then
@@ -2364,7 +2374,7 @@ function setWindowFooter(text)
         if type(Window.SetFooter) == "function" then Window:SetFooter(text); return end
         local screen = Library.ScreenGui
         if not screen then return end
-        for _, d in ipairs(screen:GetDescendants()) do
+        for _, d in _iter(screen:GetDescendants()) do
             if d:IsA("TextLabel") and (d.Name == "Footer" or d.Name == "FooterLabel") then
                 d.Text = text
                 return
@@ -2500,7 +2510,7 @@ local function _charTeam(model)
     local plr = Players:FindFirstChild(model.Name)
     if plr and plr.Team then return "T:"..tostring(plr.Team.Name) end
     -- Try attributes (Deadline stores team id as attribute)
-    for _, key in ipairs({"team","Team","teamId","TeamId","team_id"}) do
+    for _, key in _iter({"team","Team","teamId","TeamId","team_id"}) do
         local ok, v = pcall(function() return model:GetAttribute(key) end)
         if ok and v ~= nil then return "A:"..tostring(v) end
     end
@@ -2511,7 +2521,7 @@ local function _localCharacter()
     local f = _charFolder(); if not f then return nil end
     local c = LocalPlayer.Character
     if c and c.Parent == f then return c end
-    for _, m in ipairs(f:GetChildren()) do
+    for _, m in _iter(f:GetChildren()) do
         if m.Name == LocalPlayer.Name then return m end
     end
     return c
@@ -2546,7 +2556,7 @@ local PART_MAP = {
 }
 local function resolveTargetPart(model, wanted)
     local list = PART_MAP[wanted] or PART_MAP.Head
-    for _, n in ipairs(list) do
+    for _, n in _iter(list) do
         local p = model:FindFirstChild(n)
         if p and p:IsA("BasePart") then return p end
     end
@@ -2635,7 +2645,7 @@ local function _XT_ScanIndicators()
     _XenoTeam.Indicators = {}
     local pg = LocalPlayer:FindFirstChild("PlayerGui"); if not pg then return end
     local count = 0
-    for _, gui in ipairs(pg:GetDescendants()) do
+    for _, gui in _iter(pg:GetDescendants()) do
         if count >= 60 then break end
         if gui:IsA("GuiObject") and gui.Visible then
             local sz = gui.AbsoluteSize
@@ -2660,7 +2670,7 @@ end
 local function _XT_UpdateStatus()
     local cam = Workspace.CurrentCamera; if not cam then return end
     local folder = _charFolder(); if not folder then return end
-    for _, model in ipairs(folder:GetChildren()) do
+    for _, model in _iter(folder:GetChildren()) do
         if model:IsA("Model") and model.Name ~= LocalPlayer.Name then
             local hrp = model:FindFirstChild("humanoid_root_part") or model:FindFirstChild("HumanoidRootPart")
             if hrp then
@@ -2808,7 +2818,7 @@ CHBox:AddSlider("ch_thick",{ Text="Thickness",   Default=1, Min=1,  Max=6,  Roun
 
 local _CH = {}
 pcall(function()
-    for _,k in ipairs({"L","R","U","D","LO","RO","UO","DO","Dot","DotO"}) do
+    for _,k in _iter({"L","R","U","D","LO","RO","UO","DO","Dot","DotO"}) do
         _CH[k] = Drawing.new("Line"); _CH[k].Visible=false; _CH[k].Thickness=1
     end
     _CH.Dot   = Drawing.new("Square"); _CH.Dot.Filled=true;   _CH.Dot.Visible=false
@@ -2864,7 +2874,7 @@ local function findAimTarget()
     local best, bestDist = nil, Config.Aimbot.FOV
     local folder = _charFolder(); if not folder then return nil end
     local lc = _localCharacter()
-    for _, model in ipairs(folder:GetChildren()) do
+    for _, model in _iter(folder:GetChildren()) do
         if model ~= lc and model.Name ~= LocalPlayer.Name then
             local ok = true
             if Config.Aimbot.TeamCheck and not isEnemyChar(model) then ok = false end
@@ -2970,11 +2980,11 @@ task.spawn(function()
                 local fov = Config.Trigger.FOV or 25
                 local lc = _localCharacter()
                 local fired = false
-                for _, model in ipairs(folder:GetChildren()) do
+                for _, model in _iter(folder:GetChildren()) do
                     if fired then break end
                     if model:IsA("Model") and model ~= lc and model.Name ~= LocalPlayer.Name
                        and not (Config.Trigger.TeamCheck and not isEnemyChar(model)) then
-                        for _, pn in ipairs(TRIG_PARTS) do
+                        for _, pn in _iter(TRIG_PARTS) do
                             local p = model:FindFirstChild(pn)
                             if p and p:IsA("BasePart") then
                                 local sp, on = cam:WorldToViewportPoint(p.Position)
@@ -3076,7 +3086,7 @@ end
 local function _hideSet(set)
     if not set then return end
     set.box.Visible=false; set.boxOut.Visible=false
-    for _,ln in ipairs(set.corners) do ln.Visible=false end
+    for _,ln in _iter(set.corners) do ln.Visible=false end
     set.name.Visible=false; set.dist.Visible=false
     set.hp.Visible=false; set.hpBg.Visible=false
     set.tracer.Visible=false
@@ -3088,7 +3098,7 @@ killESP = function(model)
     local s = ESPCache[model]; if not s then return end
     pcall(function() s.box:Remove() end)
     pcall(function() s.boxOut:Remove() end)
-    for _,ln in ipairs(s.corners) do pcall(function() ln:Remove() end) end
+    for _,ln in _iter(s.corners) do pcall(function() ln:Remove() end) end
     pcall(function() s.name:Remove() end)
     pcall(function() s.dist:Remove() end)
     pcall(function() s.hp:Remove() end)
@@ -3128,7 +3138,7 @@ RunService.RenderStepped:Connect(function()
     -- Track live models this frame so we can hide anything stale
     local seen = {}
 
-    for _, model in ipairs(folder:GetChildren()) do
+    for _, model in _iter(folder:GetChildren()) do
         if model.Name ~= LocalPlayer.Name and model:IsA("Model") then
             seen[model] = true
             local enemy = isEnemyChar(model)
@@ -3150,7 +3160,7 @@ RunService.RenderStepped:Connect(function()
                 if not (onTop or onBot) then
                     -- off-screen: hide the on-screen elements but optionally show arrow
                     set.box.Visible=false; set.boxOut.Visible=false
-                    for _,ln in ipairs(set.corners) do ln.Visible=false end
+                    for _,ln in _iter(set.corners) do ln.Visible=false end
                     set.name.Visible=false; set.dist.Visible=false
                     set.hp.Visible=false; set.hpBg.Visible=false
                     set.tracer.Visible=false
@@ -3215,13 +3225,13 @@ RunService.RenderStepped:Connect(function()
                             set.corners[7].Color=boxColor; set.corners[7].Visible=true
                             set.corners[8].Color=boxColor; set.corners[8].Visible=true
                         else
-                            for _,ln in ipairs(set.corners) do ln.Visible=false end
+                            for _,ln in _iter(set.corners) do ln.Visible=false end
                             set.boxOut.Size=size; set.boxOut.Position=pos; set.boxOut.Visible=true
                             set.box.Size=size;    set.box.Position=pos;    set.box.Color=boxColor; set.box.Visible=true
                         end
                     else
                         set.box.Visible=false; set.boxOut.Visible=false
-                        for _,ln in ipairs(set.corners) do ln.Visible=false end
+                        for _,ln in _iter(set.corners) do ln.Visible=false end
                     end
 
                     set.name.Visible=false
@@ -3291,7 +3301,7 @@ end })
 local _xrayOriginal = {}
 local function applyXray(state, trans)
     if state then
-        for _, inst in ipairs(Workspace:GetDescendants()) do
+        for _, inst in _iter(Workspace:GetDescendants()) do
             if inst:IsA("BasePart") and inst.Parent and not inst.Parent:FindFirstChildOfClass("Humanoid") then
                 if _xrayOriginal[inst] == nil then _xrayOriginal[inst] = inst.Transparency end
                 pcall(function() inst.Transparency = math.max(inst.Transparency, trans) end)
@@ -3331,7 +3341,7 @@ function UpdateWeather(t)
     WeatherEmitter = Instance.new("ParticleEmitter", WeatherPart)
     WeatherEmitter.EmissionDirection = Enum.NormalId.Bottom
     if t == "Rain" then
-        WeatherEmitter.Texture="rbxassetid://241868005"; WeatherEmitter.Rate=800
+        WeatherEmitter.Texture="rbxassetid://241868005"; WeatherEmitter.Rate=300
 
         WeatherEmitter.Color=ColorSequence.new(Color3.fromRGB(120,255,255), Color3.fromRGB(150,240,255))
         WeatherEmitter.LightEmission=1; WeatherEmitter.LightInfluence=0
@@ -3339,13 +3349,13 @@ function UpdateWeather(t)
         WeatherEmitter.Speed=NumberRange.new(80,100); WeatherEmitter.Acceleration=Vector3.new(0,-50,0)
         WeatherEmitter.Transparency=NumberSequence.new(0.2,0.4)
     elseif t == "Snow" then
-        WeatherEmitter.Texture="rbxassetid://99851851"; WeatherEmitter.Rate=200
+        WeatherEmitter.Texture="rbxassetid://99851851"; WeatherEmitter.Rate=90
         WeatherEmitter.Color=ColorSequence.new(Color3.fromRGB(255,255,255))
         WeatherEmitter.LightEmission=1; WeatherEmitter.LightInfluence=0
         WeatherEmitter.Size=NumberSequence.new(0.25,0.35); WeatherEmitter.Speed=NumberRange.new(30,30)
         WeatherEmitter.Lifetime=NumberRange.new(5,10); WeatherEmitter.SpreadAngle=Vector2.new(50,50)
     elseif t == "Aurora" then
-        WeatherEmitter.Texture="rbxassetid://243098098"; WeatherEmitter.Rate=180
+        WeatherEmitter.Texture="rbxassetid://243098098"; WeatherEmitter.Rate=80
         WeatherEmitter.Color=ColorSequence.new({
             ColorSequenceKeypoint.new(0.00, Color3.fromRGB(80,255,170)),
             ColorSequenceKeypoint.new(0.50, Color3.fromRGB(90,220,255)),
@@ -3360,7 +3370,7 @@ function UpdateWeather(t)
     local sp = math.clamp(tonumber(Config.World.WeatherSpeed) or 0, 0, 5)
     local mult = 1 + sp
     if WeatherPart and mult ~= 1 then
-        for _, em in ipairs(WeatherPart:GetChildren()) do
+        for _, em in _iter(WeatherPart:GetChildren()) do
             if em:IsA("ParticleEmitter") then
                 pcall(function()
                     em.Rate = em.Rate * mult
@@ -3371,11 +3381,18 @@ function UpdateWeather(t)
     end
 end
 task.spawn(function()
-    while task.wait(0.1) do
+    local lastPos
+    while task.wait(0.15) do
         if not scriptRunning then break end
         if WeatherPart and WeatherPart.Parent then
             local cam = Workspace.CurrentCamera
-            if cam then WeatherPart.CFrame = cam.CFrame * CFrame.new(0,30,0) end
+            if cam then
+                local p = cam.CFrame.Position
+                if not lastPos or (p - lastPos).Magnitude > 6 then
+                    WeatherPart.CFrame = cam.CFrame * CFrame.new(0,30,0)
+                    lastPos = p
+                end
+            end
         end
     end
 end)
@@ -3622,8 +3639,33 @@ GenGB:AddButton({ Text="Unload", Func=function()
     Library:Unload()
 end })
 
+
+-- ============== EXTRAS ==============
+local ExtrasGB = GenTab:AddRightGroupbox("EXTRAS", "sparkles")
+ExtrasGB:AddToggle("KeybindList_Toggle", {
+    Text = "KEYBIND LIST", Default = false,
+    Callback = function(v)
+        Config.KeybindList.Enabled = v and true or false
+        pcall(function()
+            local KL = NLLib and NLLib.KeybindList
+            if type(KL) == "function" then
+                -- ensure exists then find frame
+                pcall(function() NLLib:KeybindList("Keybinds") end)
+            end
+            local holder = (NLLib and NLLib.Holder and NLLib.Holder.Instance) or Library.ScreenGui
+            if holder and _findGuiChildByHint then
+                local frame = _findGuiChildByHint(holder, {"Keybind","Keybinds","KeybindList","KeybindsList"})
+                if frame and frame:IsA("GuiObject") then
+                    frame.Visible = Config.KeybindList.Enabled
+                end
+            end
+        end)
+    end,
+})
+
 -- ============== SERVER HOP ==============
 local SHGB = GenTab:AddLeftGroupbox("SERVER HOP", "globe")
+Config.KeybindList = Config.KeybindList or { Enabled = false }
 Config.ServerHop = { Mode="Lowest Ping" }
 local _SH_busy = false
 SHGB:AddDropdown("sh_mode", {
@@ -3637,7 +3679,7 @@ local function _pickServer()
     local ok2, data = pcall(function() return HttpService:JSONDecode(body) end)
     if not ok2 or type(data) ~= "table" or type(data.data) ~= "table" then return nil, "Bad JSON" end
     local pool = {}
-    for _, s in ipairs(data.data) do
+    for _, s in _iter(data.data) do
         if s.id ~= game.JobId and (s.playing or 0) < (s.maxPlayers or 99) then
             table.insert(pool, s)
         end
@@ -3710,7 +3752,7 @@ local function _listConfigs()
     if listfiles then
         local ok, files = pcall(listfiles, CFG_FOLDER)
         if ok and files then
-            for _, f in ipairs(files) do
+            for _, f in _iter(files) do
                 local n = tostring(f):match("([^/\\]+)$")
                 if n and n:sub(-5) == ".json" then out[#out+1] = n end
             end
@@ -3756,39 +3798,279 @@ CfgGB:AddButton({ Text="Refresh", Func=_refresh })
 Library:FinalizeUI()
 
 -- =====================================================
--- TERMS OF USE (Eclipse-style acceptance gate)
+-- TERMS OF USE (Neverlose-style acceptance gate, identical to Eclipse)
 -- =====================================================
-local function _showTerms()
-    local gui = CoreGui
-    if not gui or gui:FindFirstChild("EclipseDL_Terms") then return end
-    local sg = Instance.new("ScreenGui"); sg.Name="EclipseDL_Terms"; sg.IgnoreGuiInset=true
-    sg.ResetOnSpawn=false; sg.DisplayOrder=999; sg.Parent = gui
-    local dim = Instance.new("Frame", sg); dim.Size=UDim2.fromScale(1,1); dim.BackgroundColor3=Color3.new(0,0,0); dim.BackgroundTransparency=0.35; dim.BorderSizePixel=0
-    local box = Instance.new("Frame", sg); box.Size=UDim2.fromOffset(460,300); box.Position=UDim2.new(0.5,-230,0.5,-150)
-    box.BackgroundColor3=Color3.fromRGB(22,20,28); box.BorderSizePixel=0
-    Instance.new("UICorner", box).CornerRadius=UDim.new(0,10)
-    local stk = Instance.new("UIStroke", box); stk.Color=Color3.fromRGB(150,100,255); stk.Thickness=1.5
-    local title = Instance.new("TextLabel", box); title.BackgroundTransparency=1; title.Size=UDim2.new(1,-20,0,32); title.Position=UDim2.fromOffset(10,10)
-    title.Font=Enum.Font.GothamBold; title.TextSize=18; title.TextColor3=Color3.fromRGB(210,180,255); title.TextXAlignment=Enum.TextXAlignment.Left
-    title.Text="Eclipse Deadline - Terms of Use"
-    local body = Instance.new("TextLabel", box); body.BackgroundTransparency=1
-    body.Position=UDim2.fromOffset(14,48); body.Size=UDim2.new(1,-28,1,-110)
-    body.Font=Enum.Font.Gotham; body.TextSize=13; body.TextColor3=Color3.fromRGB(220,215,240)
-    body.TextXAlignment=Enum.TextXAlignment.Left; body.TextYAlignment=Enum.TextYAlignment.Top
-    body.TextWrapped=true
-    body.Text = "By clicking Accept you agree that:\n\n"..
-        "- This tool is for educational/testing purposes only.\n"..
-        "- You are solely responsible for any consequences.\n"..
-        "- Using this may violate Roblox / Deadline Terms of Service.\n"..
-        "- The authors provide NO warranty and accept NO liability.\n\n"..
-        "Press RightShift at any time to toggle the menu."
-    local btn = Instance.new("TextButton", box); btn.Size=UDim2.fromOffset(180,36); btn.Position=UDim2.new(0.5,-90,1,-48)
-    btn.BackgroundColor3=Color3.fromRGB(150,100,255); btn.Font=Enum.Font.GothamBold; btn.TextSize=14
-    btn.TextColor3=Color3.new(1,1,1); btn.Text="I Accept"; btn.AutoButtonColor=true
-    Instance.new("UICorner", btn).CornerRadius=UDim.new(0,8)
-    btn.MouseButton1Click:Connect(function() pcall(function() sg:Destroy() end) end)
+local _DL_LOGO_URL = "https://raw.githubusercontent.com/Elaps0o/EclipseLoader/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png"
+local _dlLogoAssetId
+local function _resolveDeadlineLogoAsset()
+    if _dlLogoAssetId then return _dlLogoAssetId end
+    local ok, id = pcall(function()
+        if not (writefile and getcustomasset and http_request or request or (syn and syn.request)) then
+            return _DL_LOGO_URL
+        end
+        local path = "deadline_logo.png"
+        if not (isfile and isfile(path)) then
+            local req = http_request or request or (syn and syn.request)
+            local resp = req({ Url = _DL_LOGO_URL, Method = "GET" })
+            local body = resp and (resp.Body or resp.body)
+            if body then writefile(path, body) end
+        end
+        return getcustomasset(path)
+    end)
+    _dlLogoAssetId = (ok and id) or _DL_LOGO_URL
+    return _dlLogoAssetId
 end
-pcall(_showTerms)
+
+local function showTermsModal(onAccept)
+    local BG       = Color3.fromRGB(10, 9, 14)
+    local PANEL    = Color3.fromRGB(18, 15, 26)
+    local PANEL2   = Color3.fromRGB(23, 19, 34)
+    local STROKE   = Color3.fromRGB(74, 58, 112)
+    local TEXT     = Color3.fromRGB(244, 240, 255)
+    local MUTED    = Color3.fromRGB(176, 168, 198)
+    local ACCENT   = Color3.fromRGB(157, 104, 255)
+    local GOOD     = Color3.fromRGB(118, 218, 156)
+
+    pcall(function()
+        local old = ((gethui and gethui()) or CoreGui):FindFirstChild("EclipseDL_Terms")
+        if old then old:Destroy() end
+    end)
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "EclipseDL_Terms"
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.DisplayOrder = 2147483646
+    gui.Parent = (gethui and gethui()) or CoreGui
+
+    local dim = Instance.new("TextButton")
+    dim.Name = "Backdrop"; dim.Text = ""
+    dim.Size = UDim2.fromScale(1, 1)
+    dim.BackgroundColor3 = Color3.fromRGB(0,0,0)
+    dim.BackgroundTransparency = 1
+    dim.BorderSizePixel = 0
+    dim.AutoButtonColor = false; dim.Active = true; dim.Modal = true
+    dim.ZIndex = 1; dim.Parent = gui
+
+    local card = Instance.new("Frame")
+    card.Name = "TermsCard"
+    card.AnchorPoint = Vector2.new(0.5, 0.5)
+    card.Position = UDim2.fromScale(0.5, 0.53)
+    card.Size = UDim2.fromOffset(520, 390)
+    card.BackgroundColor3 = PANEL
+    card.BackgroundTransparency = 1
+    card.BorderSizePixel = 0; card.ClipsDescendants = true
+    card.ZIndex = 5; card.Parent = dim
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+    local stroke = Instance.new("UIStroke", card)
+    stroke.Color = STROKE; stroke.Thickness = 1; stroke.Transparency = 1
+
+    local grad = Instance.new("UIGradient", card)
+    grad.Rotation = 90
+    grad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, PANEL2),
+        ColorSequenceKeypoint.new(1, BG),
+    })
+
+    local accent = Instance.new("Frame")
+    accent.Name = "Accent"
+    accent.Size = UDim2.new(0, 3, 1, 0)
+    accent.BackgroundColor3 = ACCENT
+    accent.BackgroundTransparency = 1
+    accent.BorderSizePixel = 0; accent.ZIndex = 6; accent.Parent = card
+
+    local logo = Instance.new("ImageLabel")
+    logo.BackgroundTransparency = 1
+    logo.Position = UDim2.fromOffset(28, 24)
+    logo.Size = UDim2.fromOffset(42, 42)
+    logo.ImageTransparency = 1
+    logo.ImageColor3 = TEXT
+    logo.ZIndex = 7; logo.Parent = card
+    pcall(function() logo.Image = _resolveDeadlineLogoAsset() end)
+
+    local eyebrow = Instance.new("TextLabel")
+    eyebrow.BackgroundTransparency = 1
+    eyebrow.Position = UDim2.fromOffset(86, 25)
+    eyebrow.Size = UDim2.new(1, -118, 0, 16)
+    eyebrow.Font = Enum.Font.GothamMedium
+    eyebrow.TextSize = 11
+    eyebrow.TextXAlignment = Enum.TextXAlignment.Left
+    eyebrow.TextColor3 = ACCENT
+    eyebrow.TextTransparency = 1
+    eyebrow.Text = "ECLIPSE DEADLINE"
+    eyebrow.ZIndex = 7; eyebrow.Parent = card
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.fromOffset(86, 43)
+    title.Size = UDim2.new(1, -118, 0, 28)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 22
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = TEXT
+    title.TextTransparency = 1
+    title.Text = "Terms of Use"
+    title.ZIndex = 7; title.Parent = card
+
+    local rule = Instance.new("Frame")
+    rule.Position = UDim2.fromOffset(28, 88)
+    rule.Size = UDim2.new(1, -56, 0, 1)
+    rule.BackgroundColor3 = STROKE
+    rule.BackgroundTransparency = 1
+    rule.BorderSizePixel = 0; rule.ZIndex = 6; rule.Parent = card
+
+    local body = Instance.new("TextLabel")
+    body.BackgroundTransparency = 1
+    body.Position = UDim2.fromOffset(28, 108)
+    body.Size = UDim2.new(1, -56, 0, 150)
+    body.Font = Enum.Font.Gotham
+    body.TextSize = 14
+    body.TextWrapped = true
+    body.TextXAlignment = Enum.TextXAlignment.Left
+    body.TextYAlignment = Enum.TextYAlignment.Top
+    body.TextColor3 = MUTED
+    body.TextTransparency = 1
+    body.LineHeight = 1.2
+    body.Text = "Eclipse Deadline is provided free of charge. If someone sold this to you, request a refund. By continuing, you agree to use it responsibly, accept all risk for your own account, and not resell, impersonate, or redistribute this build."
+    body.ZIndex = 7; body.Parent = card
+
+    local note = Instance.new("Frame")
+    note.Position = UDim2.fromOffset(28, 262)
+    note.Size = UDim2.new(1, -56, 0, 48)
+    note.BackgroundColor3 = Color3.fromRGB(24, 20, 36)
+    note.BackgroundTransparency = 1
+    note.BorderSizePixel = 0; note.ZIndex = 7; note.Parent = card
+    Instance.new("UICorner", note).CornerRadius = UDim.new(0, 6)
+    local ns = Instance.new("UIStroke", note)
+    ns.Color = Color3.fromRGB(56, 47, 82); ns.Transparency = 1
+
+    local noteText = Instance.new("TextLabel")
+    noteText.BackgroundTransparency = 1
+    noteText.Position = UDim2.fromOffset(14, 0)
+    noteText.Size = UDim2.new(1, -28, 1, 0)
+    noteText.Font = Enum.Font.GothamMedium
+    noteText.TextSize = 13
+    noteText.TextXAlignment = Enum.TextXAlignment.Left
+    noteText.TextColor3 = MUTED
+    noteText.TextTransparency = 1
+    noteText.Text = "Official community: discord.gg/5Drj4Hkdgu"
+    noteText.ZIndex = 8; noteText.Parent = note
+
+    local accepted = false
+    local row = Instance.new("TextButton")
+    row.Name = "AcceptRow"; row.Text = ""
+    row.Position = UDim2.fromOffset(28, 323)
+    row.Size = UDim2.new(0, 270, 0, 34)
+    row.BackgroundTransparency = 1
+    row.AutoButtonColor = false; row.ZIndex = 8; row.Parent = card
+
+    local box = Instance.new("Frame")
+    box.Size = UDim2.fromOffset(24, 24)
+    box.Position = UDim2.fromOffset(0, 5)
+    box.BackgroundColor3 = Color3.fromRGB(31, 27, 44)
+    box.BackgroundTransparency = 1
+    box.BorderSizePixel = 0; box.ZIndex = 9; box.Parent = row
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5)
+    local bs = Instance.new("UIStroke", box)
+    bs.Color = STROKE; bs.Transparency = 1
+
+    local mark = Instance.new("TextLabel")
+    mark.BackgroundTransparency = 1
+    mark.Size = UDim2.fromScale(1, 1)
+    mark.Font = Enum.Font.GothamBold
+    mark.TextSize = 16
+    mark.TextColor3 = Color3.fromRGB(255,255,255)
+    mark.TextTransparency = 1
+    mark.Text = "✓"
+    mark.ZIndex = 10; mark.Parent = box
+
+    local acceptLabel = Instance.new("TextLabel")
+    acceptLabel.BackgroundTransparency = 1
+    acceptLabel.Position = UDim2.fromOffset(34, 0)
+    acceptLabel.Size = UDim2.new(1, -34, 1, 0)
+    acceptLabel.Font = Enum.Font.GothamMedium
+    acceptLabel.TextSize = 13
+    acceptLabel.TextXAlignment = Enum.TextXAlignment.Left
+    acceptLabel.TextColor3 = TEXT
+    acceptLabel.TextTransparency = 1
+    acceptLabel.Text = "I read and accept these terms"
+    acceptLabel.ZIndex = 9; acceptLabel.Parent = row
+
+    local continueBtn = Instance.new("TextButton")
+    continueBtn.Name = "Continue"
+    continueBtn.AnchorPoint = Vector2.new(1, 1)
+    continueBtn.Position = UDim2.new(1, -28, 1, -26)
+    continueBtn.Size = UDim2.fromOffset(144, 38)
+    continueBtn.BackgroundColor3 = ACCENT
+    continueBtn.BackgroundTransparency = 1
+    continueBtn.BorderSizePixel = 0
+    continueBtn.AutoButtonColor = false
+    continueBtn.Font = Enum.Font.GothamBold
+    continueBtn.TextSize = 13
+    continueBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    continueBtn.TextTransparency = 1
+    continueBtn.Text = "CONTINUE"
+    continueBtn.ZIndex = 8; continueBtn.Parent = card
+    Instance.new("UICorner", continueBtn).CornerRadius = UDim.new(0, 6)
+
+    local T = TweenService
+    local function tween(obj, ti, props) pcall(function() T:Create(obj, ti, props):Play() end) end
+    local IN = TweenInfo.new(0.34, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+    tween(dim, IN, { BackgroundTransparency = 0.28 })
+    tween(card, IN, { BackgroundTransparency = 0.03, Position = UDim2.fromScale(0.5, 0.5) })
+    tween(stroke, IN, { Transparency = 0.18 })
+    tween(accent, IN, { BackgroundTransparency = 0 })
+    local fadeTargets = { logo, eyebrow, title, body, noteText, acceptLabel, continueBtn }
+    for _fi = 1, #fadeTargets do
+        local obj = fadeTargets[_fi]
+        tween(obj, TweenInfo.new(0.32, Enum.EasingStyle.Sine), { TextTransparency = obj:IsA("ImageLabel") and nil or 0 })
+    end
+    tween(logo, TweenInfo.new(0.32, Enum.EasingStyle.Sine), { ImageTransparency = 0 })
+    tween(rule, IN, { BackgroundTransparency = 0.35 })
+    tween(note, IN, { BackgroundTransparency = 0.08 })
+    tween(ns, IN, { Transparency = 0.35 })
+    tween(box, IN, { BackgroundTransparency = 0 })
+    tween(bs, IN, { Transparency = 0.25 })
+    tween(continueBtn, IN, { BackgroundTransparency = 0.55, TextTransparency = 0.35 })
+
+    local busy = false
+    local function setAccepted(v)
+        accepted = v and true or false
+        if accepted then
+            box.BackgroundColor3 = GOOD; bs.Color = GOOD
+            continueBtn.BackgroundTransparency = 0
+            continueBtn.TextTransparency = 0
+            mark.TextTransparency = 0
+        else
+            box.BackgroundColor3 = Color3.fromRGB(31, 27, 44); bs.Color = STROKE
+            continueBtn.BackgroundTransparency = 0.55
+            continueBtn.TextTransparency = 0.35
+            mark.TextTransparency = 1
+        end
+    end
+    row.MouseButton1Click:Connect(function() setAccepted(not accepted) end)
+    continueBtn.MouseButton1Click:Connect(function()
+        if busy or not accepted then return end
+        busy = true
+        local OUT = TweenInfo.new(0.28, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+        tween(card, OUT, { BackgroundTransparency = 1, Position = UDim2.fromScale(0.5, 0.47) })
+        tween(dim, OUT, { BackgroundTransparency = 1 })
+        local descs = gui:GetDescendants()
+        for _di = 1, #descs do
+            local d = descs[_di]
+            if d:IsA("TextLabel") or d:IsA("TextButton") then tween(d, OUT, { TextTransparency = 1, BackgroundTransparency = 1 })
+            elseif d:IsA("ImageLabel") then tween(d, OUT, { ImageTransparency = 1, BackgroundTransparency = 1 })
+            elseif d:IsA("Frame") then tween(d, OUT, { BackgroundTransparency = 1 })
+            elseif d:IsA("UIStroke") then tween(d, OUT, { Transparency = 1 }) end
+        end
+        task.wait(0.30)
+        pcall(function() gui:Destroy() end)
+        if onAccept then pcall(onAccept) end
+    end)
+end
+
+pcall(function() showTermsModal(function() end) end)
 
 -- =====================================================
 -- SEQUENTIAL LOAD NOTIFY (Eclipse-style)
