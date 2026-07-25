@@ -538,9 +538,9 @@ function connectSignal(conn)
 end
 
 do
-    local ok = rawget(getgenv(), "ECLIPSE_HUBoaderLoaded") == true
+    local ok = rawget(getgenv(), "EclipseLoaderLoaded") == true
     if not ok and writefile and readfile and isfile then
-        local SESSION_FILE = "ECLIPSE_HUBHub_session.dat"
+        local SESSION_FILE = "EclipseHub_session.dat"
         local SIG_SECRET   = "ES_v1_9f2a4c1e8b6d3a57f2e0c9b1a48d76e2c5f0"
         local SESSION_TTL  = 30 * 86400
         local function _sign(data)
@@ -581,9 +581,10 @@ do
         pcall(function()
             LocalPlayer:Kick("Eclipse Hub: please use the official loader. Direct execution is blocked.")
         end)
-        error("Eclipse Hub: loader gate failed — script must be launched by the Eclipse Hub loader.")
+        error("Eclipse Hub: loader gate failed — script must be launched by the Eclipse loader.")
     end
 end
+
 if getgenv().ECLIPSE_HUBHubLoaded then
     warn("Eclipse Hub: reloading previous instance.")
     pcall(function()
