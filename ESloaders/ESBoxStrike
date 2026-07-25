@@ -427,81 +427,51 @@ if _EclipseIsMobile then
     end)
 end
 
-_EclipseMobilePendingDX = 0
-_EclipseMobilePendingDY = 0
-function _EclipseMobileAim(dx, dy)
-    -- Queue the delta; it is applied after the game's camera controller
-    -- runs (BindToRenderStep priority Camera+1) to avoid the shake caused
-    -- by the two writers fighting each frame.
-    if dx == dx and dy == dy then
-        _EclipseMobilePendingDX = _EclipseMobilePendingDX + dx
-        _EclipseMobilePendingDY = _EclipseMobilePendingDY + dy
-    end
+-- Mobile aim (CFrame-direct-at-target).
+-- The old pixel-delta approach fought the game's TouchCamera controller
+-- every frame (BindToRenderStep + queued delta -> visible shake on drag).
+-- This one mirrors the PC behavior conceptually: compute the CFrame that
+-- looks at the predicted world position and slerp the camera rotation to
+-- it in the same tick as the aim update. Position is preserved. Up-vector
+-- is locked to world Y so no roll, and pitch is clamped to avoid flip.
+function _EclipseMobileAimAt(worldPos, alpha)
+    if typeof(worldPos) ~= "Vector3" then return end
+    local cam = workspace.CurrentCamera; if not cam then return end
+    alpha = tonumber(alpha) or 1
+    if alpha <= 0 then return end
+    if alpha > 1 then alpha = 1 end
+    local pos = cam.CFrame.Position
+    local dir = worldPos - pos
+    if dir.Magnitude < 1e-3 then return end
+    -- Build target rotation with world-Y up (no roll, no shake).
+    local target = CFrame.lookAt(pos, worldPos, Vector3.new(0, 1, 0))
+    -- Rotation-only slerp: keep pos, lerp orientation from current -> target.
+    local curRot = cam.CFrame - pos
+    local tgtRot = target - pos
+    local newRot = curRot:Lerp(tgtRot, alpha)
+    -- Pitch flip guard: if slerp went past top, snap yaw-only to target.
+    if newRot.UpVector.Y < 0.05 then newRot = tgtRot end
+    cam.CFrame = CFrame.new(pos) * (newRot - newRot.Position)
 end
-pcall(function()
-    local RS = game:GetService("RunService")
-    RS:BindToRenderStep("EclipseMobileAimApply", Enum.RenderPriority.Camera.Value + 1, function()
-        local dx, dy = _EclipseMobilePendingDX, _EclipseMobilePendingDY
-        if dx == 0 and dy == 0 then return end
-        _EclipseMobilePendingDX, _EclipseMobilePendingDY = 0, 0
-        local cam = workspace.CurrentCamera; if not cam then return end
-        local vp  = cam.ViewportSize; if vp.Y < 1 then return end
-        local perPix = math.rad(cam.FieldOfView) / vp.Y
-        local yaw   = -dx * perPix
-        local pitch = -dy * perPix
-        local cf  = cam.CFrame
-        local pos = cf.Position
-        local rot = cf - pos
-        -- Yaw around world Y (stable), pitch around local X (natural feel).
-        local newRot = CFrame.Angles(0, yaw, 0) * rot * CFrame.Angles(pitch, 0, 0)
-        -- Guard against pitch flip.
-        if newRot.UpVector.Y < 0.05 then
-            newRot = CFrame.Angles(0, yaw, 0) * rot
-        end
-        cam.CFrame = CFrame.new(pos) * newRot
-    end)
-end)
 
--- Registry: the mobile Shoot GuiButton hook (below) publishes its
--- current live button reference here so TriggerBot can drive the real
--- in-game button (the game's own handlers fire) instead of only
--- Tool:Activate(), which many weapon scripts ignore for auto-fire.
-_EclipseMobileShootBtn = nil
+-- Back-compat shim: old call site (_EclipseMobileAim(dx,dy)) becomes a no-op.
+-- Left in place so any other reference to the old symbol doesn't error.
+function _EclipseMobileAim(_, _) end
+
 function _EclipseMobileFire()
-    local fired = false
-    -- 1) Best path: simulate a real press+release on the game's Shoot
-    -- button. That drives every listener the game already wired
-    -- (auto/burst hold loops, animations, recoil, remotes).
-    pcall(function()
-        local btn = _EclipseMobileShootBtn
-        if btn and btn.Parent then
-            -- Update the internal held flag first so our RCS/Aim gating
-            -- sees the shot even on a single-frame tap.
-            _EclipseFireBtnHeld = true
-            -- Fire every signal a GuiButton exposes so we match whichever
-            -- one the game listens to (varies by weapon script).
-            pcall(function() btn.MouseButton1Down:Fire() end)
-            pcall(function() btn.MouseButton1Click:Fire() end)
-            task.delay(0.06, function()
-                pcall(function() btn.MouseButton1Up:Fire() end)
-                _EclipseFireBtnHeld = false
-            end)
-            fired = true
-        end
-    end)
-    -- 2) Fallback: Tool:Activate() + common shoot remotes.
-    pcall(function()
+    local ok, err = pcall(function()
         local ch = game:GetService("Players").LocalPlayer.Character
         if not ch then return end
         local tool = ch:FindFirstChildOfClass("Tool")
         if not tool then return end
+        -- Preferred path: Tool:Activate() fires the tool's Activated signal,
+        -- which every CS-style weapon script listens to for the shoot loop.
         pcall(function() tool:Activate() end)
-        if not fired then
-            for _, n in ipairs({"Shoot","Fire","shoot","fire","ShootWeapon","FireWeapon"}) do
-                local r = tool:FindFirstChild(n)
-                if r and r:IsA("RemoteEvent") then pcall(function() r:FireServer() end); break
-                elseif r and r:IsA("RemoteFunction") then pcall(function() r:InvokeServer() end); break end
-            end
+        -- Fallback: try common shoot remote names on the tool.
+        for _, n in ipairs({"Shoot","Fire","shoot","fire","ShootWeapon","FireWeapon"}) do
+            local r = tool:FindFirstChild(n)
+            if r and r:IsA("RemoteEvent") then pcall(function() r:FireServer() end); break
+            elseif r and r:IsA("RemoteFunction") then pcall(function() r:InvokeServer() end); break end
         end
     end)
 end
@@ -2949,6 +2919,7 @@ local Config = {
         SmokeColor     = Color3.fromRGB(180, 180, 190),
         HeadDot        = false, HeadDotColor = Color3.fromRGB(255,255,255),
         Skeleton       = false, SkeletonColor = Color3.fromRGB(220,220,220),
+        ChinaHat       = false, ChinaHatColor = Color3.fromRGB(220,220,220),
         Arrows         = false, ArrowsColor  = Color3.fromRGB(180,100,255),
         
         Chams          = false,
@@ -4420,13 +4391,7 @@ end
 function updateRCS()
     if not Config.GlobalEnable or not Config.RCS.Enabled then _rcsReset(); return end
     local cam = Workspace.CurrentCamera; if not cam then return end
-    -- Mobile: Shoot button hook (see _mobileFireHeld). PC: mouse button 1.
-    local firing
-    if _EclipseIsMobile then
-        firing = (_EclipseFireBtnHeld == true) or (_mobileFireHeld and _mobileFireHeld())
-    else
-        firing = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-    end
+    local firing = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
     if not firing then _rcsReset(); return end
 
     local held
@@ -4481,12 +4446,8 @@ function updateRCS()
     RCSState.pendPitch = RCSState.pendPitch - aP
     RCSState.pendYaw   = RCSState.pendYaw   - aY
 
-    -- Apply compensation to the camera (identical logic on PC and mobile).
-    if aP ~= 0 or aY ~= 0 then
-        pcall(function()
-            cam.CFrame = cam.CFrame * CFrame.Angles(-aP, -aY, 0)
-        end)
-    end
+    
+    
 end
 
 local function IsAlive()
@@ -4666,63 +4627,8 @@ _ESP_FADE_TICK = _ESP_FADE_TICK or tick()
 _ESP_FADE_KEYS = { "NameTag","DistTag","WeaponTag","HealthBg","HealthFill",
     "HealthText","TagBg","TagText","WeaponIcon","MoneyText","HeadDot",
     "Presence","Arrow","TagAmmoBg","TagAmmoFill" }
-_ESP_FADE_ARR  = { "CornerLines","HealthSegments","HealthTicks","Skeleton",
-    "TagBorder","TagGrad","BoxFill","BoxRainbow","BoxGlow" }
-
--- ============================================================
--- Bankroll-style cleanup: central tracker for connections + drawings,
--- plus a full purge that nukes stale ESPObjects / caches / CoreGui
--- containers. Prevents the "FPS drops out of nowhere" caused by
--- leaked Drawings and orphaned tables piling up between reloads.
--- ============================================================
-_EclipseTrack = _EclipseTrack or { Conn = {}, Drws = {} }
-function _EclipseAddConn(c) if c then _EclipseTrack.Conn[#_EclipseTrack.Conn+1] = c end end
-function _EclipseAddDraw(d) if d and type(d) ~= "number" then _EclipseTrack.Drws[#_EclipseTrack.Drws+1] = d end end
-
-if getgenv().EclipseCleanup then pcall(getgenv().EclipseCleanup) end
-getgenv().EclipseCleanup = function()
-    for _, c in pairs(_EclipseTrack.Conn or {}) do pcall(function() c:Disconnect() end) end
-    for _, d in pairs(_EclipseTrack.Drws or {}) do pcall(function() if type(d) ~= "number" then d:Remove() end end) end
-    if _EclipseTrack.Conn then table.clear(_EclipseTrack.Conn) end
-    if _EclipseTrack.Drws then table.clear(_EclipseTrack.Drws) end
-    if type(ESPObjects) == "table" then
-        for p, d in pairs(ESPObjects) do
-            pcall(function() if _espDestroyObjects then _espDestroyObjects(d) end end)
-            ESPObjects[p] = nil
-        end
-    end
-    if type(CharmCache) == "table" then
-        for p, parts in pairs(CharmCache) do
-            for _, box in pairs(parts) do pcall(function() box:Destroy() end) end
-            CharmCache[p] = nil
-        end
-    end
-    if type(CharmVisCache) == "table" then table.clear(CharmVisCache) end
-    for _, name in ipairs({ "EclipseESP_Container", "Eclipse_Charms", "Eclipse_UI_Backup" }) do
-        pcall(function()
-            local g = game:GetService("CoreGui"):FindFirstChild(name)
-            if g then g:Destroy() end
-        end)
-    end
-    pcall(function() collectgarbage("collect") end)
-end
-
--- Light periodic cache purge: every 30s drop ESP entries whose player
--- left the game and step the GC. Keeps memory + Drawing count flat.
-_EclipseLastPurge = _EclipseLastPurge or tick()
-function _EclipsePeriodicPurge()
-    if tick() - _EclipseLastPurge < 30 then return end
-    _EclipseLastPurge = tick()
-    if type(ESPObjects) == "table" then
-        for p, d in pairs(ESPObjects) do
-            if not p or not p.Parent then
-                pcall(function() if _espDestroyObjects then _espDestroyObjects(d) end end)
-                ESPObjects[p] = nil
-            end
-        end
-    end
-    pcall(function() collectgarbage("step", 128) end)
-end
+_ESP_FADE_ARR  = { "CornerLines","HealthSegments","HealthTicks","Skeleton","ChinaHat",
+    "TagBorder","TagGrad" }
 
 function _espApplyAlpha(data, alpha)
     alpha = math.clamp(alpha, 0, 1)
@@ -4755,44 +4661,49 @@ function _espApplyAlpha(data, alpha)
 end
 
 function _espFadeTick()
-    -- Instant hide by default (prevents "phantom" ESPs when players leave
-    -- or go out of range). Exception: `data._deathFade` triggers a smooth
-    -- 1s fade-out so kills don't just pop off screen.
-    _ESP_FADE_TICK = tick()
+    -- Smooth per-player fade with death-freeze. When an ESP is marked
+    -- _frozen (target died / character removed) we STOP repositioning
+    -- its drawings in _espProcessPlayer, so the box/tag/health stay
+    -- glued to the last on-screen position and just fade to 0 over
+    -- ~0.9s. Range/team/offscreen hides use the same smooth fade but
+    -- without freeze (they can re-appear). Anti-ghost: after fade
+    -- ends OR if the player object left entirely OR frozen > 2s, we
+    -- destroy the drawings for real. All O(#ESPObjects), no allocs.
     local now = tick()
+    local dt  = now - (_ESP_FADE_TICK or now)
+    _ESP_FADE_TICK = now
+    if dt <= 0 then dt = 1/60 end
+    local FADE_IN  = 1 / 0.12   -- ~120 ms in
+    local FADE_OUT = 1 / 0.90   -- ~900 ms out (death fade)
     for plr, data in pairs(ESPObjects) do
-        if data._wantVisible then
-            data._alpha = 1
-            data._deathFade = nil
-        elseif data._deathFade then
-            local dt = now - data._deathFade
-            local a  = math.clamp(1 - (dt / 1.0), 0, 1)
-            data._alpha = a
-            if a <= 0.02 then
-                hideESP(data)
-                data._deathFade = nil
-                if data._pendingDestroy then
-                    _espDestroyObjects(data)
-                    ESPObjects[plr] = nil
-                end
-            else
-                _espApplyAlpha(data, a)
-            end
+        local gone = (not plr) or (not plr.Parent)
+        local a = data._alpha or 0
+        local target
+        if gone then
+            target = 0
+        elseif data._wantVisible and not data._frozen then
+            target = 1
         else
-            data._alpha = 0
+            target = 0
+        end
+        if a < target then
+            a = math.min(target, a + dt * FADE_IN)
+        elseif a > target then
+            a = math.max(target, a - dt * FADE_OUT)
+        end
+        data._alpha = a
+        _espApplyAlpha(data, a)
+        if a <= 0.02 then
             hideESP(data)
-            if data._pendingDestroy then
+            local frozenTooLong = data._frozen and data._deathAt and (now - data._deathAt) > 2.0
+            if gone or data._pendingDestroy or frozenTooLong or data._frozen then
                 _espDestroyObjects(data)
                 ESPObjects[plr] = nil
             end
         end
-        if plr and (not plr.Parent) then
-            _espDestroyObjects(data)
-            ESPObjects[plr] = nil
-        end
     end
-    if _EclipsePeriodicPurge then _EclipsePeriodicPurge() end
 end
+
 
 
 function createESPObjects()
@@ -4818,22 +4729,6 @@ function createESPObjects()
         pcall(function() glow.ZIndex = 1 end)
         d.BoxGlow[i] = glow
     end
-    -- Gradient fill: 16 horizontal strips inside the box, purple -> grey.
-    d.BoxFill = {}
-    for i = 1, 16 do
-        local ln = Drawing.new("Line")
-        ln.Thickness = 2; ln.Transparency = 0.55; ln.Visible = false
-        pcall(function() ln.ZIndex = 2 end)
-        d.BoxFill[i] = ln
-    end
-    -- Rainbow border: 24 short segments around perimeter, hue-cycling.
-    d.BoxRainbow = {}
-    for i = 1, 24 do
-        local ln = Drawing.new("Line")
-        ln.Thickness = 1.4; ln.Transparency = 1; ln.Visible = false
-        pcall(function() ln.ZIndex = 4 end)
-        d.BoxRainbow[i] = ln
-    end
     for i = 1, 24 do
         d.HealthSegments[i] = Drawing.new("Line")
         d.HealthSegments[i].Thickness = 3
@@ -4851,6 +4746,12 @@ function createESPObjects()
         local ln = Drawing.new("Line")
         ln.Thickness = 1; ln.Transparency = 1; ln.Visible = false
         d.Skeleton[i] = ln
+    end
+    d.ChinaHat = {}
+    for i = 1, 10 do
+        local ln = Drawing.new("Line")
+        ln.Thickness = 1; ln.Transparency = 1; ln.Visible = false
+        d.ChinaHat[i] = ln
     end
     
     for i = 1, 4 do
@@ -4901,9 +4802,8 @@ function hideESP(data)
     if data.BoxGlow then for _, l in pairs(data.BoxGlow) do l.Visible = false end end
     for _, l in pairs(data.HealthSegments) do l.Visible = false end
     if data.HealthTicks then for _, l in pairs(data.HealthTicks) do l.Visible = false end end
-    if data.BoxFill then for _, l in pairs(data.BoxFill) do l.Visible = false end end
-    if data.BoxRainbow then for _, l in pairs(data.BoxRainbow) do l.Visible = false end end
     if data.Skeleton then for _, l in pairs(data.Skeleton) do l.Visible = false end end
+    if data.ChinaHat then for _, l in pairs(data.ChinaHat) do l.Visible = false end end
     data.NameTag.Visible=false; data.DistTag.Visible=false
     data.HealthBg.Visible=false; data.HealthFill.Visible=false; data.HealthText.Visible=false
     data.Presence.Visible=false
@@ -4928,9 +4828,8 @@ function _espDestroyObjects(data)
         for _, l in pairs(data.BoxGlow or {}) do pcall(function() l:Remove() end) end
         for _, l in pairs(data.HealthSegments or {}) do pcall(function() l:Remove() end) end
         for _, l in pairs(data.HealthTicks or {}) do pcall(function() l:Remove() end) end
-        for _, l in pairs(data.BoxFill or {}) do pcall(function() l:Remove() end) end
-        for _, l in pairs(data.BoxRainbow or {}) do pcall(function() l:Remove() end) end
         for _, l in pairs(data.Skeleton or {}) do pcall(function() l:Remove() end) end
+        for _, l in pairs(data.ChinaHat or {}) do pcall(function() l:Remove() end) end
         pcall(function() if data.NameTag then data.NameTag:Remove() end end)
         pcall(function() if data.DistTag then data.DistTag:Remove() end end)
         pcall(function() if data.HealthBg then data.HealthBg:Remove() end end)
@@ -4992,77 +4891,6 @@ function _espDrawArrow(data, root)
     arrow.Filled = true
     arrow.Transparency = 1
     arrow.Visible = true
-end
-
--- Premium box gradient: smoothstep-eased vertical fade in the user's color,
--- plus a crisp top hairline / bright bottom bar / faint side glow reusing
--- the pre-allocated BoxRainbow slots (no extra Drawing allocations, no
--- ipairs — numeric for-loops only for lowest per-frame overhead).
-function _espDrawBoxGradient(data, L, R, T, B, col)
-    local fill = data.BoxFill
-    local rain = data.BoxRainbow
-    if not fill then return end
-    local enabled = Config.ESP.BoxFill
-    if enabled == nil then enabled = true end
-    local w, h = R - L, B - T
-    if not enabled or h < 4 or w < 4 then
-        for i = 1, #fill do fill[i].Visible = false end
-        if rain then for i = 1, #rain do rain[i].Visible = false end end
-        return
-    end
-    if typeof(col) ~= "Color3" then
-        col = Config.ESP.BoxColor or Color3.fromRGB(230, 45, 55)
-    end
-
-    local hue, sat, val = Color3.toHSV(col)
-    local n      = #fill
-    local step   = h / n
-    local thick  = step + 0.75
-    local clamp  = math.clamp
-    local fromH  = Color3.fromHSV
-    local V2     = Vector2.new
-
-    for i = 1, n do
-        local t   = (i - 0.5) / n
-        local e   = t * t * (3 - 2 * t)                 -- smoothstep easing
-        local y   = T + (i - 0.5) * step
-        local vv  = clamp(val * (1 - e * 0.62), 0.04, 1)
-        local ss  = clamp(sat * (0.85 + (1 - e) * 0.15), 0, 1)
-        local ln  = fill[i]
-        ln.From         = V2(L + 1, y)
-        ln.To           = V2(R - 1, y)
-        ln.Color        = fromH(hue, ss, vv)
-        ln.Thickness    = thick
-        ln.Transparency = clamp(0.30 + e * 0.60, 0.30, 0.92)
-        ln.Visible      = true
-    end
-
-    if rain then
-        local m = #rain
-        if m >= 4 then
-            local topC  = fromH(hue, clamp(sat, 0, 1),           clamp(val * 1.05, 0, 1))
-            local botC  = fromH(hue, clamp(sat * 0.90, 0, 1),    clamp(val * 0.55, 0.04, 1))
-            local sideC = fromH(hue, clamp(sat * 0.75, 0, 1),    clamp(val * 0.75, 0.04, 1))
-
-            local a = rain[1]
-            a.From, a.To, a.Color, a.Thickness, a.Transparency, a.Visible =
-                V2(L, T), V2(R, T), topC, 1, 0.15, true
-
-            local b = rain[2]
-            b.From, b.To, b.Color, b.Thickness, b.Transparency, b.Visible =
-                V2(L, B), V2(R, B), botC, 2, 0.05, true
-
-            local c = rain[3]
-            c.From, c.To, c.Color, c.Thickness, c.Transparency, c.Visible =
-                V2(L, T), V2(L, B), sideC, 1, 0.35, true
-
-            local d = rain[4]
-            d.From, d.To, d.Color, d.Thickness, d.Transparency, d.Visible =
-                V2(R, T), V2(R, B), sideC, 1, 0.35, true
-
-            for k = 5, m do rain[k].Visible = false end
-        end
-    end
 end
 
 function _espDrawCornerBox(data, plr, L, R, T, B, cW, cH)
@@ -5140,7 +4968,6 @@ function _espDrawCornerBox(data, plr, L, R, T, B, cW, cH)
         setGlow(7, 3.4, 0.72, Vector2.new(R+glowOff,B+glowOff), Vector2.new(R-cW+glowOff,B+glowOff), shadow, true)
         setGlow(8, 3.4, 0.72, Vector2.new(R+glowOff,B+glowOff), Vector2.new(R+glowOff,B-cH+glowOff), shadow, true)
     end
-    _espDrawBoxGradient(data, L, R, T, B, col)
 end
 
 function _espNum(v)
@@ -5282,6 +5109,45 @@ function _espDrawSkeleton(data, char)
         end
     end
     for i, ln in ipairs(data.Skeleton) do if not shown[i] then ln.Visible = false end end
+end
+
+-- China Hat: classic 3D cone above the head. Base circle sits around Head,
+-- peak sits 1 stud higher. Each spoke is projected in world space so the
+-- shape leans correctly with the head orientation instead of being a flat
+-- 2D triangle. 10 spokes give a smooth silhouette without adding lag.
+function _espDrawChinaHat(data, char)
+    local head = char:FindFirstChild("Head")
+    if not head or not head:IsA("BasePart") then
+        for _, l in pairs(data.ChinaHat) do l.Visible = false end
+        return
+    end
+    local col     = Config.ESP.ChinaHatColor or Color3.fromRGB(220,220,220)
+    local cf      = head.CFrame
+    local size    = head.Size
+    local baseR   = math.max(size.X, size.Z) * 0.9
+    local peakUp  = math.max(size.Y, 1) * 1.15
+    local peakCF  = cf * CFrame.new(0, peakUp, 0)
+    local pk, pkOn = Camera:WorldToViewportPoint(peakCF.Position)
+    if not pkOn then
+        for _, l in pairs(data.ChinaHat) do l.Visible = false end
+        return
+    end
+    local peak2D = Vector2.new(pk.X, pk.Y)
+    local n = #data.ChinaHat
+    for i = 1, n do
+        local ang = (i - 1) * (math.pi * 2 / n)
+        local off = cf * CFrame.new(math.cos(ang) * baseR, 0, math.sin(ang) * baseR)
+        local sp, spOn = Camera:WorldToViewportPoint(off.Position)
+        local ln = data.ChinaHat[i]
+        if spOn then
+            ln.From = Vector2.new(sp.X, sp.Y)
+            ln.To   = peak2D
+            ln.Color = col
+            ln.Visible = true
+        else
+            ln.Visible = false
+        end
+    end
 end
 
 function _espGetWeaponName(plr)
@@ -5729,24 +5595,24 @@ function _espProcessPlayer(plr, myRoot, center)
     end
     local char = GetCharacter(plr)
     local data = ESPObjects[plr]
-    if not char then if data then data._wantVisible = false end; return nil end
+    -- Freeze-on-death / freeze-on-char-removal: keep the last drawn
+    -- position, let _espFadeTick fade alpha to 0 over ~0.9s, then
+    -- destroy. Do NOT re-run any drawing code while frozen.
+    local function _freeze(d)
+        if not d then return end
+        d._wantVisible = false
+        if not d._frozen then
+            d._frozen  = true
+            d._deathAt = tick()
+        end
+    end
+    if not char then _freeze(data); return nil end
     local root = char:FindFirstChild("HumanoidRootPart")
     local head = char:FindFirstChild("Head")
     local hum  = char:FindFirstChildOfClass("Humanoid")
-    if not root or not head or not hum then if data then data._wantVisible = false end; return nil end
+    if not root or not head or not hum then _freeze(data); return nil end
     local hp, maxHp = _espHealthValues(plr, char, hum)
-    -- Dead players: smooth 1s fade-out then hide.
-    local isDead = (not hp or hp <= 0 or (hum and hum.Health <= 0))
-    if isDead then
-        if not data then return nil end
-        data._deathFade = data._deathFade or tick()
-        if tick() - data._deathFade >= 1.0 then
-            data._wantVisible = false; data._deathFade = nil; return nil
-        end
-        -- fall through and keep rendering; _espFadeTick applies alpha decay
-    elseif data then
-        data._deathFade = nil
-    end
+    if not hp or hp <= 0 or hum.Health <= 0 then _freeze(data); return nil end
 
     local dist = (myRoot.Position - root.Position).Magnitude
     local maxD = Config.ESP.MaxDistance
@@ -5758,6 +5624,9 @@ function _espProcessPlayer(plr, myRoot, center)
         ESPObjects[plr] = data
         data._alpha = 0
     end
+    -- Target came back alive/valid: clear any prior freeze.
+    if data._frozen then data._frozen = false; data._deathAt = nil end
+
 
     local hP, hOn = Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))
     local fP, fOn = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,3,0))
@@ -5849,40 +5718,29 @@ function _espProcessPlayer(plr, myRoot, center)
         _espDrawSkeleton(data, char)
     elseif data.Skeleton then for _, l in pairs(data.Skeleton) do l.Visible = false end end
 
+    if Config.ESP.ChinaHat and data.ChinaHat then
+        _espDrawChinaHat(data, char)
+    elseif data.ChinaHat then for _, l in pairs(data.ChinaHat) do l.Visible = false end end
+
     if data.Arrow then data.Arrow.Visible = false end
 
     local aimDist = (Vector2.new(hP.X, hP.Y) - center).Magnitude
-    if not data._deathFade then data._wantVisible = true end
+    data._wantVisible = true
     return { player=plr, head=head, root=root, hum=hum, dist=dist, aimDist=aimDist }
 end
 
 
--- ============================================================
--- ESP CHARMS (Bankroll-style, per-part BoxHandleAdornment)
--- Replaces the old Highlight-based Chams. Same Config.ESP.Chams
--- toggle drives it, so the UI checkbox works unchanged.
--- ============================================================
-local CharmCache    = setmetatable({}, { __mode = "k" }) -- [plr] = { [part] = BoxHandleAdornment }
-local CharmVisCache = setmetatable({}, { __mode = "k" }) -- [plr] = bool (last visibility)
-local _ChamsHolder  = nil
-local _LastCharmScan, _LastCharmVis = 0, 0
-local _CHARM_VALID_NAMES = {
-    Head=true, UpperTorso=true, LowerTorso=true, Torso=true,
-    LeftUpperArm=true, LeftLowerArm=true, LeftHand=true,
-    RightUpperArm=true, RightLowerArm=true, RightHand=true,
-    LeftUpperLeg=true, LeftLowerLeg=true, LeftFoot=true,
-    RightUpperLeg=true, RightLowerLeg=true, RightFoot=true,
-    ["Left Arm"]=true, ["Right Arm"]=true, ["Left Leg"]=true, ["Right Leg"]=true,
-}
-
+local ChamsHL = setmetatable({}, { __mode = "k" })
+local ChamsLT = setmetatable({}, { __mode = "k" })
+local _ChamsHolder = nil
 local function _getChamsHolder()
     if _ChamsHolder and _ChamsHolder.Parent then return _ChamsHolder end
     local ok, cg = pcall(function() return game:GetService("CoreGui") end)
     local parent = (ok and cg) or workspace
-    local f = parent:FindFirstChild("Charms_Container")
+    local f = parent:FindFirstChild("EclipseChamsHolder")
     if not f then
         f = Instance.new("Folder")
-        f.Name = "Charms_Container"
+        f.Name = "EclipseChamsHolder"
         f.Parent = parent
     end
     _ChamsHolder = f
@@ -5890,35 +5748,24 @@ local function _getChamsHolder()
 end
 
 local function _destroyChamsFor(plr)
-    local parts = CharmCache[plr]
-    if parts then
-        for _, box in pairs(parts) do pcall(function() box:Destroy() end) end
-        CharmCache[plr] = nil
-    end
-    CharmVisCache[plr] = nil
-end
-
-local function _clearAllCharms()
-    for plr in pairs(CharmCache) do _destroyChamsFor(plr) end
+    local hl = ChamsHL[plr]; if hl then pcall(function() hl:Destroy() end); ChamsHL[plr] = nil end
+    local lt = ChamsLT[plr]; if lt then pcall(function() lt:Destroy() end); ChamsLT[plr] = nil end
 end
 
 function updateChams()
-    -- Charms permanecem ativos em inimigos mesmo com o LocalPlayer morto/spectating.
+    -- Chams é o único ESP que permanece ativo em inimigos mesmo com o LocalPlayer morto/spectating.
     local on = Config.GlobalEnable and Config.ESP.Enabled and Config.ESP.Chams
-    if not on then _clearAllCharms(); return end
+    if not on then
+        for plr, _ in pairs(ChamsHL) do _destroyChamsFor(plr) end
+        for plr, _ in pairs(ChamsLT) do _destroyChamsFor(plr) end
+        return
+    end
 
     local holder = _getChamsHolder()
-    local nt = tick()
-
-    -- Two throttles (Bankroll pattern): fast visibility refresh, slow re-scan
-    -- of character descendants. Keeps FPS steady even in busy rounds.
-    local scv = (nt - _LastCharmVis) > 0.20
-    if scv then _LastCharmVis = nt end
-    local ds  = (nt - _LastCharmScan) > 1.0
-    if ds  then _LastCharmScan = nt end
-
+    if not ES152.tick("Chams.scan", 0.12) then return end
     local intensity = math.clamp(tonumber(Config.ESP.ChamsIntensity) or 1.0, 0.1, 3.0)
-    local transp    = math.clamp(0.55 - (intensity - 1.0) * 0.20, 0.05, 0.90)
+    local baseFillT = math.clamp(0.55 - (intensity - 1.0) * 0.20, 0.05, 0.85)
+    local baseOutT  = math.clamp(0.00 - (intensity - 1.0) * 0.10, 0.00, 0.50)
 
     for _, plr in ipairs(Players:GetPlayers()) do
         repeat
@@ -5927,86 +5774,53 @@ function updateChams()
             local char = plr.Character
             if not char or not char.Parent then _destroyChamsFor(plr); break end
             local hum = char:FindFirstChildOfClass("Humanoid")
-            if not hum or hum.Health <= 0 then _destroyChamsFor(plr); break end
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if not hrp then _destroyChamsFor(plr); break end
+            if hum and hum.Health <= 0 then _destroyChamsFor(plr); break end
 
-            if not CharmCache[plr] then CharmCache[plr] = {} end
-            local cache = CharmCache[plr]
-
-            -- Visibility check (throttled)
-            local iv = CharmVisCache[plr]
-            if scv then
-                iv = false
-                if Config.ESP.VisibleCheck then
-                    local head = char:FindFirstChild("Head") or hrp
-                    if head then pcall(function() iv = IsVisible(head) end) end
-                else
-                    iv = true
-                end
-                CharmVisCache[plr] = iv
+            local hl = ChamsHL[plr]
+            if not hl or not hl.Parent then
+                if hl then pcall(function() hl:Destroy() end) end
+                hl = Instance.new("Highlight")
+                hl.Name = "EclipseChams"
+                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                hl.Parent = holder
+                ChamsHL[plr] = hl
             end
-
-            local col
+            if hl.Adornee ~= char then hl.Adornee = char end
+            local chamsCol = Config.ESP.ChamsColor
             if Config.ESP.VisibleCheck then
-                col = iv and Config.ESP.VisibleChamsColor or Config.ESP.InvisibleChamsColor
-            else
-                col = Config.ESP.ChamsColor
+                local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+                local vis = head and IsVisible(head)
+                chamsCol = vis and Config.ESP.VisibleChamsColor or Config.ESP.InvisibleChamsColor
             end
 
-            -- Update existing boxes + prune stale ones
-            for pt, box in pairs(cache) do
-                local valid = false
-                pcall(function()
-                    if pt and pt.Parent and pt:IsDescendantOf(char) and box and box.Parent then valid = true end
-                end)
-                if not valid then
-                    pcall(function() box:Destroy() end)
-                    cache[pt] = nil
-                else
-                    pcall(function()
-                        box.Size    = pt.Size + Vector3.new(0.05, 0.05, 0.05)
-                        box.Color3  = col
-                        box.Transparency = transp
-                        box.AlwaysOnTop  = true
-                        box.Visible = true
-                    end)
-                end
-            end
+            hl.FillColor           = chamsCol
+            hl.OutlineColor        = chamsCol
+            hl.FillTransparency    = baseFillT
+            hl.OutlineTransparency = math.max(0.02, baseOutT)
 
-            -- Periodically scan for new parts (respawn / new limbs)
-            if ds then
-                for _, pt in ipairs(char:GetDescendants()) do
-                    if pt:IsA("BasePart") and pt.Name ~= "HumanoidRootPart"
-                        and _CHARM_VALID_NAMES[pt.Name] and pt.Transparency < 1
-                        and not cache[pt] then
-                        local ok, box = pcall(function()
-                            local b = Instance.new("BoxHandleAdornment")
-                            b.Name        = "EclipseCharm_" .. pt.Name
-                            b.Adornee     = pt
-                            b.Size        = pt.Size + Vector3.new(0.05, 0.05, 0.05)
-                            b.CFrame      = CFrame.new()
-                            b.SizeRelativeOffset = Vector3.new(0, 0, 0)
-                            b.Color3      = col
-                            b.Transparency = transp
-                            b.AlwaysOnTop = true
-                            b.ZIndex      = 5
-                            b.Parent      = holder
-                            return b
-                        end)
-                        if ok and box then cache[pt] = box end
-                    end
-                end
+            local lt = ChamsLT[plr]
+            if not lt or not lt.Parent then
+                if lt then pcall(function() lt:Destroy() end) end
+                lt = Instance.new("Highlight")
+                lt.Name = "EclipseChamsGlow"
+                lt.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                lt.Parent = holder
+                ChamsLT[plr] = lt
             end
+            if lt.Adornee ~= char then lt.Adornee = char end
+            lt.FillColor = chamsCol
+            lt.OutlineColor = chamsCol
+            lt.FillTransparency = 0.82
+            lt.OutlineTransparency = 0.25
         until true
     end
 
-    -- Garbage collect for gone players
-    for plr in pairs(CharmCache) do
+
+    -- garbage collect for gone players
+    for plr, _ in pairs(ChamsHL) do
         if not plr.Parent then _destroyChamsFor(plr) end
     end
 end
-
 
 function updateSoulParticles() end
 function _EclipseOnShotChams(_) end
@@ -6557,13 +6371,6 @@ function ensureC4UI()
     ring.Position = UDim2.new(1, -10, 0.5, 0)
     ring.Size = UDim2.fromOffset(ringSize, ringSize)
     ring.ZIndex = 62
-    -- Round the ring container itself so ClipsDescendants clips the
-    -- sliding shadow/moon along a CIRCLE, not the square frame bounds
-    -- (without this, the crescent shows square corners mid-countdown).
-    Instance.new("UICorner", ring).CornerRadius = UDim.new(1, 0)
-    local ringAspect = Instance.new("UIAspectRatioConstraint", ring)
-    ringAspect.AspectRatio = 1
-    ringAspect.DominantAxis = Enum.DominantAxis.Width
 
     -- background ring (dim)
     local ringBg = Instance.new("Frame", ring)
@@ -7230,107 +7037,43 @@ end
 
 AimState = { lastTarget = nil, acquiredAt = 0, lastTick = 0 }
 
--- ============================================================
--- MOBILE BUTTON HOOKS (Shoot / Aim / Jump / Reload)
--- The game clones its touch buttons out of
---   ReplicatedStorage.Interface.Screens.Gameplay.Middle.MobileButtons
--- into PlayerGui at runtime. Names are stable: "Shoot", "Aim", "Jump",
--- "Reload", "Crouch", "Walk", etc. (see Mobile.lua REQUIRED_BUTTONS).
---
--- We track "held" state per button using EVERY available signal
--- (.Activated / .MouseButton1Down/Up / InputBegan/Ended) because
--- different executors and Roblox platforms fire different subsets.
--- Also hooked whether the button lives in PlayerGui or CoreGui.
--- ============================================================
+-- On mobile the fire button is v11.Shoot inside PlayerGui.MobileButtons.
+-- Detect it by (a) reading IsFireHeld off the equipped weapon (set by the
+-- game when the on-screen Shoot button is pressed), or (b) InputBegan on
+-- the Shoot GUI directly.
 _EclipseFireBtnHeld = false
-_EclipseAimBtnHeld  = false
-_EclipseJumpBtnHeld = false
-_EclipseReloadBtnHeld = false
-
-local _ECLIPSE_MOBILE_BTNS = {
-    Shoot  = function(v) _EclipseFireBtnHeld  = v end,
-    Fire   = function(v) _EclipseFireBtnHeld  = v end,
-    Aim    = function(v) _EclipseAimBtnHeld   = v end,
-    Jump   = function(v) _EclipseJumpBtnHeld  = v end,
-    Reload = function(v) _EclipseReloadBtnHeld = v end,
-}
-
 if _EclipseIsMobile then
     task.spawn(function()
+        local pg = LocalPlayer:WaitForChild("PlayerGui", 30)
+        if not pg then return end
         local function hook(btn)
             if not btn or btn:GetAttribute("_EclipseHooked") then return end
-            local setter = _ECLIPSE_MOBILE_BTNS[btn.Name]
-            if not setter then return end
             btn:SetAttribute("_EclipseHooked", true)
-            -- Publish the live Shoot button so _EclipseMobileFire can drive it.
-            if btn.Name == "Shoot" or btn.Name == "Fire" then
-                _EclipseMobileShootBtn = btn
-                pcall(function()
-                    btn.AncestryChanged:Connect(function(_, parent)
-                        if not parent and _EclipseMobileShootBtn == btn then
-                            _EclipseMobileShootBtn = nil
-                        end
-                    end)
-                end)
-            end
-            local function down() setter(true)  end
-            local function up()   setter(false) end
-            pcall(function() btn.MouseButton1Down:Connect(down) end)
-            pcall(function() btn.MouseButton1Up:Connect(up)     end)
-            pcall(function() btn.MouseButton1Click:Connect(function()
-                -- click is instantaneous: pulse for one frame so tap-fire
-                -- still registers on very fast taps.
-                setter(true); task.delay(0.05, up)
-            end) end)
             pcall(function()
                 btn.InputBegan:Connect(function(i)
                     if i.UserInputType == Enum.UserInputType.Touch
-                        or i.UserInputType == Enum.UserInputType.MouseButton1 then down() end
+                        or i.UserInputType == Enum.UserInputType.MouseButton1 then
+                        _EclipseFireBtnHeld = true
+                    end
                 end)
                 btn.InputEnded:Connect(function(i)
                     if i.UserInputType == Enum.UserInputType.Touch
-                        or i.UserInputType == Enum.UserInputType.MouseButton1 then up() end
-                end)
-            end)
-            -- Safety: if the button is destroyed while "held", release it.
-            pcall(function()
-                btn.AncestryChanged:Connect(function(_, parent)
-                    if not parent then up() end
-                end)
-            end)
-        end
-        local function scan(root)
-            if not root then return end
-            for _, d in ipairs(root:GetDescendants()) do
-                if _ECLIPSE_MOBILE_BTNS[d.Name]
-                    and (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton")) then
-                    hook(d)
-                end
-            end
-        end
-        local function watch(root)
-            if not root then return end
-            scan(root)
-            pcall(function()
-                root.DescendantAdded:Connect(function(d)
-                    if _ECLIPSE_MOBILE_BTNS[d.Name]
-                        and (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton")) then
-                        hook(d)
+                        or i.UserInputType == Enum.UserInputType.MouseButton1 then
+                        _EclipseFireBtnHeld = false
                     end
                 end)
             end)
         end
-        local pg = LocalPlayer:WaitForChild("PlayerGui", 30)
-        watch(pg)
-        pcall(function() watch(game:GetService("CoreGui")) end)
-        -- Also watch the template location (in case the game reparents live).
-        pcall(function()
-            local rs = game:GetService("ReplicatedStorage")
-            local mid = rs:FindFirstChild("Interface")
-                and rs.Interface:FindFirstChild("Screens")
-                and rs.Interface.Screens:FindFirstChild("Gameplay")
-                and rs.Interface.Screens.Gameplay:FindFirstChild("Middle")
-            if mid then watch(mid) end
+        local function scan(root)
+            for _, d in ipairs(root:GetDescendants()) do
+                if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton"))
+                    and (d.Name == "Shoot" or d.Name == "Fire") then hook(d) end
+            end
+        end
+        scan(pg)
+        pg.DescendantAdded:Connect(function(d)
+            if (d:IsA("GuiButton") or d:IsA("ImageButton") or d:IsA("TextButton"))
+                and (d.Name == "Shoot" or d.Name == "Fire") then hook(d) end
         end)
     end)
 end
@@ -7347,10 +7090,6 @@ local function _mobileFireHeld()
         if ok2 and held == true then return true end
     end
     return false
-end
-
-local function _mobileAimHeld()
-    return _EclipseAimBtnHeld == true
 end
 
 function updateAimbot()
@@ -7379,10 +7118,10 @@ function updateAimbot()
 
     local keyHeld = false
     if _EclipseIsMobile then
-        -- Mobile: aim engages while EITHER the Aim button OR the Shoot
-        -- button is held (matches the game's own inputs). Scoped weapons
-        -- and TriggerBot force-engage further down.
-        keyHeld = _mobileAimHeld() or _mobileFireHeld()
+        -- Mobile: aim engages only while the on-screen fire button is
+        -- pressed (matches the game's own Shoot input), when scoped, or
+        -- when TriggerBot is on.
+        keyHeld = _mobileFireHeld()
     else
         pcall(function()
             local kp = Library.Options and Library.Options.Aimbot_Key
@@ -7500,12 +7239,14 @@ function updateAimbot()
         elseif mag < 60 then alpha = math.min(1, alpha * 1.5) end
         if scoped then alpha = 1 end
 
-        local dx = delta.X * alpha
-        local dy = delta.Y * alpha
-        if mousemoverel and not _EclipseIsMobile then
-            mousemoverel(dx, dy)
-        elseif _EclipseIsMobile then
-            _EclipseMobileAim(dx, dy)
+        if _EclipseIsMobile then
+            -- Mobile: aim directly at the predicted world point. No pixel
+            -- delta, no per-frame CFrame fight with the touch controller.
+            _EclipseMobileAimAt(predictPos, alpha)
+        else
+            local dx = delta.X * alpha
+            local dy = delta.Y * alpha
+            if mousemoverel then mousemoverel(dx, dy) end
         end
 
     else
@@ -7863,9 +7604,6 @@ pcall(function()
 end)
 
 function _MV.spaceHeld()
-    -- Mobile: robust Shoot/Aim/Jump/Reload hook (see line ~6980) is the
-    -- primary signal. Fallback: legacy MobileButtons scan + JumpRequest.
-    if _EclipseJumpBtnHeld == true then return true end
     if _MV.mobileJumpDown then return true end
     local ok, down = pcall(function() return UserInput:IsKeyDown(Enum.KeyCode.Space) end)
     return ok and down or false
@@ -11912,13 +11650,9 @@ function CleanupScript()
 
     
     pcall(function()
-        for plr in pairs(CharmCache) do
-            local parts = CharmCache[plr]
-            if parts then
-                for _, box in pairs(parts) do pcall(function() if box then box:Destroy() end end) end
-            end
-            CharmCache[plr]    = nil
-            CharmVisCache[plr] = nil
+        for plr, hl in pairs(ChamsHL) do
+            pcall(function() if hl then hl:Destroy() end end)
+            ChamsHL[plr] = nil
         end
         if SoulEmitters then
             for root, em in pairs(SoulEmitters) do
@@ -12207,49 +11941,54 @@ task.spawn(function()
     end
 end)
 
-task.spawn(function()
-    while scriptRunning do
-        task.wait(1.5)
-        if Config.Skins.SkinChangerEnabled and IsAlive() then
-            pcall(_applySelectedGloveSkin)
-            pcall(_TW_ApplyAllCameraSkins)
-        end
-    end
-end)
+-- ============================================================
+-- Unified SkinChanger dispatcher (refactor).
+-- Substitui 3 loops concorrentes + spawns aninhados por 1 único
+-- consumidor rodando em Heartbeat, com dirty flags coalescidas
+-- e throttling por tipo. Comportamento externo idêntico:
+--   * glove/camera reapply após Camera.ChildAdded (2 passes ~0.28s)
+--   * camera reapply debounced 0.25s após BasePart entrar em Camera
+--   * glove reapply após parte de glove/arm entrar (2 passes ~0.22s)
+--   * VM reconcile adaptativo (0.22..2s) — mesma lógica Bankroll
+--   * glove watchdog ~0.9s comparando EclipseSkinSource
+--   * safety sweep 1.5s (glove + camera skins)
+-- Ganho: sem 4 threads dormindo + sem spawns por evento; um único
+-- laço por frame, cada apply chamado no máx. 1× por frame.
+-- ============================================================
 
-task.spawn(function()
-    while scriptRunning do
-        local living = IsAlive()
-        local ck = _findCameraBaseKnife()
-        -- Bankroll-style reconcile: only rebuild when the VM was actually
-        -- destroyed externally (respawn cleared Camera). Do NOT force a
-        -- rebuild just because SelectedKnife changed mid-round -- the
-        -- Bankroll GetCameraModel hook will return the new knife on the
-        -- next natural respawn.
-        if SkinSystem.spawned then
-            local vm = SkinSystem.vm
-            local staleVm = (not vm) or (not vm.Parent)
-            if staleVm then
-                SkinSystem.spawned = false
-                SkinSystem.vm = nil
-            end
-        end
-        ck = _findCameraBaseKnife()
-        if SkinSystem.scriptRunning and living and ck and not SkinSystem.spawned then
-            spawnViewmodel(ck)
-            if SkinSystem.spawned then
-                pcall(_TW_ApplyAllCameraSkinsNow or _TW_ApplyAllCameraSkins)
-                pcall(_applySelectedGloveSkin)
-                SkinSystem._lastRealtimeKey = _EclipseCurrentSkinRealtimeKey()
-                -- HUD override fires only AFTER the knife actually exists in
-                -- Camera (Bankroll behavior + user requirement).
-                pcall(_applyHUDKnife, true)
-            end
-        elseif (not SkinSystem.scriptRunning or not ck or not living) and SkinSystem.spawned then removeViewmodel() end
-        task.wait(ES152.adaptiveInterval(0.22, 2))
-    end
-end)
+local _SkinDX = {
+    skinsDirty      = false,   -- pede _TW_ApplyAllCameraSkins
+    gloveDirty      = false,   -- pede _applySelectedGloveSkin
+    skinsMinTs      = 0,       -- horário mínimo para próxima aplicação
+    gloveMinTs      = 0,
+    lastSkins       = 0,       -- última aplicação efetiva
+    lastGlove       = 0,
+    lastVMCheck     = 0,
+    lastWatchdog    = 0,
+    lastSafety      = 0,
+    -- reapply agendado (substitui os `for i=1,2 do task.wait(...)` spawns).
+    -- Cada slot guarda o próximo horário em que precisamos reaplicar.
+    skinsRepeatTs   = 0,
+    gloveRepeatTs   = 0,
+}
 
+local function _skinMarkSkinsDirty(delay)
+    delay = delay or 0
+    local t = os.clock() + delay
+    if not _SkinDX.skinsDirty or t < _SkinDX.skinsMinTs then
+        _SkinDX.skinsMinTs = t
+    end
+    _SkinDX.skinsDirty = true
+end
+
+local function _skinMarkGloveDirty(delay)
+    delay = delay or 0
+    local t = os.clock() + delay
+    if not _SkinDX.gloveDirty or t < _SkinDX.gloveMinTs then
+        _SkinDX.gloveMinTs = t
+    end
+    _SkinDX.gloveDirty = true
+end
 
 -- Force viewmodel reset on death so respawn always rebuilds with SelectedKnife
 pcall(function()
@@ -12261,47 +12000,102 @@ pcall(function()
     end))
 end)
 
-connectSignal(Camera.ChildAdded:Connect(function(obj)
+connectSignal(Camera.ChildAdded:Connect(function(_obj)
     if not scriptRunning then return end
-    if Config.Skins.SkinChangerEnabled and IsAlive() then
-        task.spawn(function()
-            for i=1,2 do
-                task.wait(0.28)
-                pcall(_applySelectedGloveSkin)
-                pcall(_TW_ApplyAllCameraSkins)
-            end
-        end)
-    end
+    if not (Config.Skins.SkinChangerEnabled and IsAlive()) then return end
+    -- Antes: task.spawn { for i=1,2 do wait(0.28); apply end }.
+    -- Agora: primeira passada em 0.28s + segunda em 0.56s via repeatTs.
+    _skinMarkGloveDirty(0.28)
+    _skinMarkSkinsDirty(0.28)
+    _SkinDX.gloveRepeatTs = os.clock() + 0.56
+    _SkinDX.skinsRepeatTs = os.clock() + 0.56
 end))
-_EclipseSkinDescReapplyPending = false
+
 connectSignal(Camera.DescendantAdded:Connect(function(d)
     if not scriptRunning then return end
     if not (Config.Skins.SkinChangerEnabled and IsAlive()) then return end
-    if d:IsA("BasePart") then
-        if not _EclipseSkinDescReapplyPending then
-            _EclipseSkinDescReapplyPending = true
-            task.delay(0.25, function()
-                _EclipseSkinDescReapplyPending = false
-                if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() then pcall(_TW_ApplyAllCameraSkins) end
-            end)
-        end
-        -- glove parts often attach late when swapping to a knife; reapply gloves.
-        if d.Name == "Glove" or (d.Parent and (d.Parent.Name == "Left Arm" or d.Parent.Name == "Right Arm")) then
-            task.spawn(function()
-                for i=1,2 do task.wait(0.22); pcall(_applySelectedGloveSkin) end
-            end)
-        end
+    if not d:IsA("BasePart") then return end
+    -- BasePart em Camera → reapply camera skins (debounce 0.25s).
+    _skinMarkSkinsDirty(0.25)
+    -- Glove/arm parts → reapply glove (2 passes ~0.22s).
+    if d.Name == "Glove" or (d.Parent and (d.Parent.Name == "Left Arm" or d.Parent.Name == "Right Arm")) then
+        _skinMarkGloveDirty(0.22)
+        _SkinDX.gloveRepeatTs = os.clock() + 0.44
     end
 end))
 
--- Persistent glove watchdog: garante que ao pegar uma faca (ou qualquer
--- swap de viewmodel que reanexa Glove), a skin selecionada volte a ser
--- aplicada mesmo se ChildAdded/DescendantAdded escaparem por timing.
-task.spawn(function()
-    while scriptRunning do
-        task.wait(0.9)
-        if not scriptRunning then break end
-        if scriptRunning and Config.Skins.SkinChangerEnabled and IsAlive() then
+-- Único consumidor. Roda em Heartbeat mas cada apply é gated por horário
+-- alvo/last-run, então o custo real por frame é ~0 exceto no frame em que
+-- de fato precisa aplicar (idêntico ao acordar de task.wait).
+connectSignal(RunService.Heartbeat:Connect(function()
+    if not scriptRunning then return end
+    local now = os.clock()
+
+    -- Repeats agendados por eventos (substituem os spawns 2×).
+    if _SkinDX.skinsRepeatTs > 0 and now >= _SkinDX.skinsRepeatTs then
+        _SkinDX.skinsRepeatTs = 0
+        _skinMarkSkinsDirty(0)
+    end
+    if _SkinDX.gloveRepeatTs > 0 and now >= _SkinDX.gloveRepeatTs then
+        _SkinDX.gloveRepeatTs = 0
+        _skinMarkGloveDirty(0)
+    end
+
+    -- Safety sweep (antigo loop task.wait(1.5)).
+    if now - _SkinDX.lastSafety >= 1.5 then
+        _SkinDX.lastSafety = now
+        if Config.Skins.SkinChangerEnabled and IsAlive() then
+            _skinMarkGloveDirty(0)
+            _skinMarkSkinsDirty(0)
+        end
+    end
+
+    -- Aplicações coalescidas: no máx 1× por frame cada.
+    if _SkinDX.skinsDirty and now >= _SkinDX.skinsMinTs then
+        _SkinDX.skinsDirty = false
+        if Config.Skins.SkinChangerEnabled and IsAlive() then
+            _SkinDX.lastSkins = now
+            pcall(_TW_ApplyAllCameraSkins)
+        end
+    end
+    if _SkinDX.gloveDirty and now >= _SkinDX.gloveMinTs then
+        _SkinDX.gloveDirty = false
+        if Config.Skins.SkinChangerEnabled and IsAlive() then
+            _SkinDX.lastGlove = now
+            pcall(_applySelectedGloveSkin)
+        end
+    end
+
+    -- VM reconcile (antigo loop com adaptiveInterval 0.22..2).
+    local vmInterval = ES152.adaptiveInterval(0.22, 2)
+    if now - _SkinDX.lastVMCheck >= vmInterval then
+        _SkinDX.lastVMCheck = now
+        local living = IsAlive()
+        if SkinSystem.spawned then
+            local vm = SkinSystem.vm
+            if (not vm) or (not vm.Parent) then
+                SkinSystem.spawned = false
+                SkinSystem.vm = nil
+            end
+        end
+        local ck = _findCameraBaseKnife()
+        if SkinSystem.scriptRunning and living and ck and not SkinSystem.spawned then
+            spawnViewmodel(ck)
+            if SkinSystem.spawned then
+                pcall(_TW_ApplyAllCameraSkinsNow or _TW_ApplyAllCameraSkins)
+                pcall(_applySelectedGloveSkin)
+                SkinSystem._lastRealtimeKey = _EclipseCurrentSkinRealtimeKey()
+                pcall(_applyHUDKnife, true)
+            end
+        elseif (not SkinSystem.scriptRunning or not ck or not living) and SkinSystem.spawned then
+            removeViewmodel()
+        end
+    end
+
+    -- Glove watchdog (antigo loop task.wait(0.9)).
+    if now - _SkinDX.lastWatchdog >= 0.9 then
+        _SkinDX.lastWatchdog = now
+        if Config.Skins.SkinChangerEnabled and IsAlive() then
             local expected
             for gt in pairs(GLOVES) do
                 local s = Config.Skins.SelectedSkins[gt]
@@ -12320,7 +12114,7 @@ task.spawn(function()
                             local lg = la and la:FindFirstChild("Glove")
                             if (rg and rg:GetAttribute("EclipseSkinSource") ~= expected)
                                or (lg and lg:GetAttribute("EclipseSkinSource") ~= expected) then
-                                pcall(_applySelectedGloveSkin)
+                                _skinMarkGloveDirty(0)
                             end
                             break
                         end
@@ -12329,7 +12123,10 @@ task.spawn(function()
             end
         end
     end
-end)
+end))
+
+-- Compat: alguns pontos antigos referenciam essa flag; mantida como no-op.
+_EclipseSkinDescReapplyPending = false
 
 
 
@@ -12683,7 +12480,10 @@ EspGB:AddToggle("ESP_Weapon",    { Text="ESP WEAPON", Default=false, Callback=fu
 Config.ESP.Ammo = false
 
 Config.ESP.HeadDot = false
-Config.ESP.Skeleton = false
+EspGB:AddToggle("ESP_Skeleton", { Text="SKELETON", Default=false, Callback=function(v) Config.ESP.Skeleton=v end })
+    :AddColorPicker("ESP_SkelCol", { Default=Config.ESP.SkeletonColor, Title="Skeleton color", Callback=function(c) Config.ESP.SkeletonColor=c end })
+EspGB:AddToggle("ESP_ChinaHat", { Text="CHINA HAT", Default=false, Callback=function(v) Config.ESP.ChinaHat=v end })
+    :AddColorPicker("ESP_ChinaHatCol", { Default=Config.ESP.ChinaHatColor, Title="China hat color", Callback=function(c) Config.ESP.ChinaHatColor=c end })
 
 EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=function(v) Config.ESP.Chams=v end })
     
@@ -14888,111 +14688,89 @@ do
     Config.Misc.AutoSkillRespectBuy = true
     Config.Misc.AutoSkillRefill     = true
 
+    -- RAPID RELOAD — standalone Misc helper. (Rapid Fire removed per request.)
+    Config.Misc.RapidReload = Config.Misc.RapidReload or false
+    local RRGB = MiscGB
+    RRGB:AddToggle("RR_Enable", { Text = "RAPID RELOAD", Default = false,
+        Callback = function(v) Config.Misc.RapidReload = v end })
+
     -- ============================================================
-    -- NO SPREAD (Except Snipers) — port from Obsidian/Tripleware dump.
-    -- Requires every weapon ModuleScript under ReplicatedStorage.Database.
-    -- Custom.Weapons, caches original Spread values, and zeroes them
-    -- while the toggle is on. Snipers are skipped so AWP/SSG/G3/SCAR-20
-    -- keep their intended spread.
+    -- NO SPREAD — Bullet Direction Hook (port from davix source).
+    -- Hooks InventoryController.ShootWeapon and rewrites every outgoing
+    -- Bullet.Direction to the camera's LookVector so all pellets follow
+    -- the crosshair. Bypasses per-weapon Spread tables entirely (works
+    -- even when weapon data is protected).
+    -- The old module-based NoSpread (deep-patch of Weapons.*.Spread)
+    -- was removed: it was redundant with this hook, added ~200 lines of
+    -- getgc/setreadonly churn, and made snipers inconsistent. This is
+    -- the single canonical No Spread implementation.
     -- ============================================================
     Config.Misc.NoSpread = Config.Misc.NoSpread or false
     do
-        local _NS_CACHE = {}   -- name -> { Data=table, Orig={Spread={..}, FireModes={n={..}}}, IsSniper=bool }
-        local _NS_INIT  = false
-
-        -- Deep snapshot: numbers are copied; nested tables (e.g. {Min=,Max=})
-        -- are cloned recursively so we can restore the original structure.
-        local function _nsSnapshotSpread(sp)
-            if type(sp) ~= "table" then return nil end
-            local out = {}
-            for k, v in pairs(sp) do
-                if type(v) == "number" then
-                    out[k] = v
-                elseif type(v) == "table" then
-                    out[k] = _nsSnapshotSpread(v)
-                end
-            end
-            return out
-        end
-
-        -- Deep apply: keeps sub-tables intact and only zeroes numeric leaves.
-        -- Avoids "attempt to index number with 'Min'" when Spread fields are
-        -- tables like {Min=..., Max=...}.
-        local function _nsSetSpread(dst, src, zero)
-            if type(dst) ~= "table" or type(src) ~= "table" then return end
-            pcall(function() if setreadonly then setreadonly(dst, false) end end)
-            for k, v in pairs(src) do
-                if type(v) == "number" then
-                    local dv = dst[k]
-                    if type(dv) == "number" or dv == nil then
-                        dst[k] = zero and 0 or v
-                    end
-                elseif type(v) == "table" then
-                    if type(dst[k]) == "table" then
-                        _nsSetSpread(dst[k], v, zero)
-                    end
-                end
-            end
-            pcall(function() if setreadonly then setreadonly(dst, true) end end)
-        end
-
-
-        local function _nsInit()
-            if _NS_INIT then return end
-            local db = ReplicatedSt:FindFirstChild("Database")
-            local custom = db and db:FindFirstChild("Custom")
-            local weapons = custom and custom:FindFirstChild("Weapons")
-            if not weapons then return end
-            for _, mod in ipairs(weapons:GetChildren()) do
-                if mod:IsA("ModuleScript") then
-                    local okReq, data = pcall(require, mod)
-                    if okReq and type(data) == "table" then
-                        local orig = { Spread = _nsSnapshotSpread(data.Spread), FireModes = {} }
-                        if type(data.FireModes) == "table" then
-                            for k, fm in pairs(data.FireModes) do
-                                if type(fm) == "table" and fm.Spread then
-                                    orig.FireModes[k] = { Spread = _nsSnapshotSpread(fm.Spread) }
-                                end
-                            end
-                        end
-                        _NS_CACHE[mod.Name] = {
-                            Data = data,
-                            Orig = orig,
-                            IsSniper = SniperWeapons[mod.Name] == true,
-                        }
-                    end
-                end
-            end
-            _NS_INIT = true
-        end
-
-        local function _nsApply(zero)
-            _nsInit()
-            for _, entry in pairs(_NS_CACHE) do
-                if not entry.IsSniper then
-                    local d, o = entry.Data, entry.Orig
-                    pcall(function() if setreadonly then setreadonly(d, false) end end)
-                    if d.Spread and o.Spread then _nsSetSpread(d.Spread, o.Spread, zero) end
-                    if type(d.FireModes) == "table" and type(o.FireModes) == "table" then
-                        for k, fm in pairs(d.FireModes) do
-                            local of = o.FireModes[k]
-                            if fm and fm.Spread and of and of.Spread then
-                                _nsSetSpread(fm.Spread, of.Spread, zero)
-                            end
+        local hooked = false
+        local function tryHook()
+            if hooked then return end
+            local ok, IC = pcall(require, ReplicatedStorage:WaitForChild("Controllers"):WaitForChild("InventoryController"))
+            if not ok or type(IC) ~= "table" or type(IC.ShootWeapon) ~= "function" then return end
+            local Orig = IC.ShootWeapon
+            local function hk(self, Data)
+                if Toggles.NoSpread_Enable and Toggles.NoSpread_Enable.Value
+                   and type(Data) == "table" and type(Data.Bullets) == "table" then
+                    local cam = workspace.CurrentCamera
+                    local lv = cam and cam.CFrame.LookVector
+                    if lv then
+                        for _, b in ipairs(Data.Bullets) do
+                            if type(b) == "table" then b.Direction = lv end
                         end
                     end
-                    pcall(function() if setreadonly then setreadonly(d, true) end end)
                 end
+                return Orig(self, Data)
             end
+            IC.ShootWeapon = (newcclosure and newcclosure(hk)) or hk
+            hooked = true
         end
-
         MiscGB:AddToggle("NoSpread_Enable", {
-
-            Text = "NO SPREAD (Except Snipers)",
+            Text = "NO SPREAD",
             Default = false,
             Callback = function(v)
                 Config.Misc.NoSpread = v
-                pcall(_nsApply, v)
+                if v then pcall(tryHook) end
+            end,
+        })
+    end
+
+
+    -- ============================================================
+    -- NO CAMERA RECOIL — port from davix source.
+    -- Overrides CameraController.weaponKick and setWeaponRecoil with
+    -- no-ops so the view never punches on fire. Stores originals so
+    -- disabling the toggle restores the game's natural camera kick.
+    -- ============================================================
+    Config.Misc.NoCamRecoil = Config.Misc.NoCamRecoil or false
+    do
+        local CC, OrigKick, OrigSet
+        local function ensure()
+            if CC then return true end
+            local ok, mod = pcall(require, ReplicatedStorage:WaitForChild("Controllers"):WaitForChild("CameraController"))
+            if not ok or type(mod) ~= "table" then return false end
+            CC = mod
+            OrigKick = CC.weaponKick
+            OrigSet  = CC.setWeaponRecoil
+            return true
+        end
+        MiscGB:AddToggle("NoCamRecoil_Enable", {
+            Text = "NO CAMERA RECOIL",
+            Default = false,
+            Callback = function(v)
+                Config.Misc.NoCamRecoil = v
+                if not ensure() then return end
+                if v then
+                    CC.weaponKick       = function() end
+                    CC.setWeaponRecoil  = function() end
+                else
+                    if type(OrigKick) == "function" then CC.weaponKick      = OrigKick end
+                    if type(OrigSet)  == "function" then CC.setWeaponRecoil = OrigSet  end
+                end
             end,
         })
     end
@@ -15246,43 +15024,33 @@ end
 do
     local RunS = game:GetService("RunService")
     local _highlights = {} -- model -> {fill, rim, shells}
-    local _whLegacyShellsPurged = false
-    local _WH_PART_LIMIT = 48
-    local _WH_PART_SCAN_INTERVAL = 0.65
-    local _WH_MIXED_SCAN_INTERVAL = 1.20
     local function _clearOne(m)
         local h = _highlights[m]; if not h then return end
         if h.fill  then pcall(function() h.fill:Destroy()  end) end
         if h.rim   then pcall(function() h.rim:Destroy()   end) end
         if h.light then pcall(function() h.light:Destroy() end) end
         if h.shells then
-            for part, shell in next, h.shells do
+            for part, shell in pairs(h.shells) do
                 if shell then pcall(function() shell:Destroy() end) end
                 h.shells[part] = nil
-            end
-        end
-        if h.partHi then
-            for part, hi in next, h.partHi do
-                if hi then pcall(function() hi:Destroy() end) end
-                h.partHi[part] = nil
             end
         end
         _highlights[m] = nil
     end
     local function _clearAll()
-        for m in next, _highlights do _clearOne(m) end
-        -- IMPORTANT: never scan workspace here. Weapon chams live only inside
-        -- CurrentCamera/viewmodel; workspace:GetDescendants() on death/equip is
-        -- the freeze/2 FPS culprit on large maps.
+        for m,_ in pairs(_highlights) do _clearOne(m) end
+        -- Hard purge stale/orphan shells/highlights left behind by weapon swaps,
+        -- skinchanger rebuilds, death/spectate swaps or previous script versions.
         pcall(function()
-            local cam = workspace.CurrentCamera
-            if not cam then return end
-            local desc = cam:GetDescendants()
-            for i = 1, #desc do
-                local d = desc[i]
-                if (d:IsA("BasePart") and (d:GetAttribute("EclipseWHShell") or d.Name == "EclipseWHShell"))
-                or (d:IsA("Highlight") and (d.Name == "EclipseWH" or d.Name == "EclipseWHRim" or d.Name == "EclipseWHPart")) then
-                    pcall(function() d:Destroy() end)
+            for _, root in ipairs({ workspace.CurrentCamera, workspace }) do
+                if root then
+                    for _, d in ipairs(root:GetDescendants()) do
+                    if (d:IsA("BasePart") and (d:GetAttribute("EclipseWHShell") or d.Name == "EclipseWHShell"))
+                    or (d:IsA("Highlight") and (d.Name == "EclipseWH" or d.Name == "EclipseWHRim")) then
+
+                        pcall(function() d:Destroy() end)
+                    end
+                end
                 end
             end
         end)
@@ -15290,8 +15058,7 @@ do
     _G.EclipseWHClear = _clearAll
 
     if LocalPlayer then
-        connectSignal(LocalPlayer.CharacterAdded:Connect(function() if scriptRunning then task.defer(_clearAll) end end))
-        connectSignal(LocalPlayer.CharacterRemoving:Connect(function() task.defer(_clearAll) end))
+        connectSignal(LocalPlayer.CharacterAdded:Connect(function() if scriptRunning then _clearAll(); task.wait(0.5) end end))
     end
 
     local KNIFE_KEYWORDS = {
@@ -15301,8 +15068,8 @@ do
     }
     local function _isKnifeName(n)
         n = tostring(n or ""):lower()
-        for i = 1, #KNIFE_KEYWORDS do
-            if n:find(KNIFE_KEYWORDS[i], 1, true) then return true end
+        for _, kw in ipairs(KNIFE_KEYWORDS) do
+            if n:find(kw, 1, true) then return true end
         end
         return false
     end
@@ -15329,38 +15096,31 @@ do
         return false
     end
     local function _whModelMixed(model)
-        local desc = model:GetDescendants()
-        for i = 1, #desc do
-            local d = desc[i]
+        for _, d in ipairs(model:GetDescendants()) do
             if _whHasWord(d.Name, WH_BODY_WORDS) then return true end
         end
         return false
     end
 
     local function _collectVMWeapons()
-        local out, seen, outN = {}, {}, 0
+        local out, seen = {}, {}
         local function add(m)
             if m and m:IsA("Model") and not seen[m]
                and m:IsDescendantOf(workspace.CurrentCamera or Camera) then
                 seen[m] = true
-                outN = outN + 1
-                out[outN] = m
+                table.insert(out, m)
             end
         end
         local cam = workspace.CurrentCamera
         if cam then
-            local tops = cam:GetChildren()
-            for i = 1, #tops do
-                local top = tops[i]
+            for _, top in ipairs(cam:GetChildren()) do
                 if top:IsA("Model") then
                     local addedChild = false
-                    local kids = top:GetChildren()
-                    for j = 1, #kids do
-                        local ch = kids[j]
+                    for _, ch in ipairs(top:GetChildren()) do
                         if ch:IsA("Model") then
                             local n = ch.Name:lower()
-                            if n ~= "arms" and n ~= "gloves" and not n:find("hand", 1, true)
-                               and not n:find("arm", 1, true) and not n:find("glove", 1, true) then
+                            if n ~= "arms" and n ~= "gloves" and not n:find("hand")
+                               and not n:find("arm") and not n:find("glove") then
                                 add(ch)
                                 addedChild = true
                             end
@@ -15410,84 +15170,126 @@ do
         return true
     end
 
-    local function _purgeLegacyShellsOnce()
-        if _whLegacyShellsPurged then return end
-        _whLegacyShellsPurged = true
-        pcall(function()
-            local cam = workspace.CurrentCamera
-            if not cam then return end
-            local desc = cam:GetDescendants()
-            for i = 1, #desc do
-                local d = desc[i]
-                if d:IsA("BasePart") and (d:GetAttribute("EclipseWHShell") or d.Name == "EclipseWHShell") then
+    local function _findShellOn(part)
+        for _, ch in ipairs(part:GetChildren()) do
+            if ch:IsA("BasePart") and (ch:GetAttribute("EclipseWHShell") or ch.Name == "EclipseWHShell") then
+                return ch
+            end
+        end
+        return nil
+    end
+
+    local function _purgeDupShells(part, keep)
+        for _, ch in ipairs(part:GetChildren()) do
+            if ch:IsA("BasePart")
+               and (ch:GetAttribute("EclipseWHShell") or ch.Name == "EclipseWHShell")
+               and ch ~= keep then
+                pcall(function() ch:Destroy() end)
+            end
+        end
+    end
+
+    local function _ensureWHShell(rec, part, color, trans, scale)
+        rec.shells = rec.shells or {}
+        local sh = rec.shells[part]
+        if not (sh and sh.Parent == part) then
+            sh = _findShellOn(part)
+            if sh then rec.shells[part] = sh end
+        end
+        _purgeDupShells(part, sh)
+        if not (sh and sh.Parent == part) then
+            local ok, clone = pcall(function() return part:Clone() end)
+            if not ok or not clone then return end
+            for _, c in ipairs(clone:GetDescendants()) do
+                if c:IsA("SurfaceAppearance") or c:IsA("Decal") or c:IsA("Texture")
+                   or c:IsA("Highlight") or c:IsA("PointLight") or c:IsA("SpotLight")
+                   or c:IsA("Beam") or c:IsA("Trail") or c:IsA("Script") or c:IsA("LocalScript")
+                   or c:IsA("Attachment") or c:IsA("Constraint") or c:IsA("JointInstance")
+                   or (c:IsA("BasePart") and (c:GetAttribute("EclipseWHShell") or c.Name == "EclipseWHShell")) then
+                    pcall(function() c:Destroy() end)
+                end
+            end
+            pcall(function()
+                clone.Name = "EclipseWHShell"
+                clone:SetAttribute("EclipseWHShell", true)
+                clone.Anchored = false
+                clone.CanCollide = false
+                clone.CanQuery = false
+                clone.CanTouch = false
+                clone.Massless = true
+                clone.CastShadow = false
+                clone.Material = Enum.Material.Neon
+                clone.Reflectance = 0
+                clone.Color = color
+                clone.Transparency = trans
+                clone.LocalTransparencyModifier = 0
+                -- Strip texture on MeshPart clones — otherwise the mesh texture
+                -- overrides Neon material and only parts of the weapon glow.
+                if clone:IsA("MeshPart") then
+                    pcall(function() clone.TextureID = "" end)
+                end
+                -- Nested SpecialMesh textures too (older weapon models).
+                for _, m in ipairs(clone:GetDescendants()) do
+                    if m:IsA("SpecialMesh") then
+                        pcall(function() m.TextureId = "" end)
+                    end
+                end
+                clone.Size = part.Size * (scale or 1.010)
+                clone.CFrame = part.CFrame
+                clone.Parent = part
+                local w = Instance.new("WeldConstraint")
+                w.Part0 = part; w.Part1 = clone; w.Parent = clone
+            end)
+            rec.shells[part] = clone
+        else
+            pcall(function()
+                sh.Color = color
+                sh.Transparency = trans
+                sh.Material = Enum.Material.Neon
+                sh.Reflectance = 0
+                sh.LocalTransparencyModifier = 0
+                if sh:IsA("MeshPart") and sh.TextureID ~= "" then
+                    sh.TextureID = ""
+                end
+                sh.Size = part.Size * (scale or 1.010)
+            end)
+        end
+    end
+
+    local function _syncWHShells(model, rec, color, inten)
+        rec.shells = rec.shells or {}
+        local a = math.clamp(inten or 1, 0.2, 3.0)
+        local shellT = math.clamp(0.88 - a * 0.18, 0.55, 0.94)
+        -- Very thin uniform offset: prevents "inflated / deformed" shell over
+        -- weapons whose MeshPart geometry doesn't scale linearly (P90, AWP, snipers).
+        local scale  = 1.003 + math.clamp(a - 1, 0, 2) * 0.0015
+        local eligible, seen = {}, {}
+        for _, part in ipairs(model:GetDescendants()) do
+            if _isWHPart(part, model) then
+                eligible[part] = true
+                seen[part] = true
+                _ensureWHShell(rec, part, color, shellT, scale)
+            end
+        end
+        -- Global sweep across the whole model: any shell whose parent isn't
+        -- currently eligible (rifle bodies swapped by skinchanger, orphaned
+        -- clones, duplicates from previous cycles) gets destroyed. Prevents
+        -- the "multiple stacked material layers" bug on rifles/snipers.
+        for _, d in ipairs(model:GetDescendants()) do
+            if d:IsA("BasePart")
+               and (d:GetAttribute("EclipseWHShell") or d.Name == "EclipseWHShell") then
+                local host = d.Parent
+                if not (host and eligible[host]) then
+                    pcall(function() d:Destroy() end)
+                elseif rec.shells[host] and rec.shells[host] ~= d then
                     pcall(function() d:Destroy() end)
                 end
             end
-        end)
-    end
-
-    local function _styleWHHighlight(hi, color, inten)
-        local a = math.clamp(tonumber(inten) or 1, 0.2, 3.0)
-        hi.FillColor = color
-        hi.OutlineColor = color
-        hi.FillTransparency = math.clamp(0.54 - a * 0.20, 0.08, 0.72)
-        hi.OutlineTransparency = math.clamp(0.20 - a * 0.16, 0.00, 0.38)
-        hi.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hi.Enabled = true
-    end
-
-    local function _dropWHPartHighlights(rec)
-        if not rec.partHi then return end
-        for part, hi in next, rec.partHi do
-            if hi then pcall(function() hi:Destroy() end) end
-            rec.partHi[part] = nil
         end
-    end
-
-    local function _ensureWHPartHighlight(rec, part, color, inten)
-        rec.partHi = rec.partHi or {}
-        local hi = rec.partHi[part]
-        if not (hi and hi.Parent == part) then
-            if hi then pcall(function() hi:Destroy() end) end
-            hi = Instance.new("Highlight")
-            hi.Name = "EclipseWHPart"
-            hi.Adornee = part
-            hi.Parent = part
-            rec.partHi[part] = hi
-        end
-        pcall(_styleWHHighlight, hi, color, inten)
-    end
-
-    local function _syncWHPartHighlights(model, rec, color, inten)
-        rec.partHi = rec.partHi or {}
-        local now = tick()
-        if rec._partScanAt and (now - rec._partScanAt) < _WH_PART_SCAN_INTERVAL then
-            for part, hi in next, rec.partHi do
-                if part and part.Parent and hi and hi.Parent then
-                    pcall(_styleWHHighlight, hi, color, inten)
-                else
-                    if hi then pcall(function() hi:Destroy() end) end
-                    rec.partHi[part] = nil
-                end
-            end
-            return
-        end
-        rec._partScanAt = now
-        local desc = model:GetDescendants()
-        local seen, used = {}, 0
-        for i = 1, #desc do
-            local part = desc[i]
-            if _isWHPart(part, model) then
-                used = used + 1
-                seen[part] = true
-                _ensureWHPartHighlight(rec, part, color, inten)
-                if used >= _WH_PART_LIMIT then break end
-            end
-        end
-        for part, hi in next, rec.partHi do
-            if (not seen[part]) or (not part.Parent) or (not part:IsDescendantOf(model)) then
-                if hi then pcall(function() hi:Destroy() end) end
-                rec.partHi[part] = nil
+        for part, shell in pairs(rec.shells) do
+            if not seen[part] or not part.Parent then
+                if shell then pcall(function() shell:Destroy() end) end
+                rec.shells[part] = nil
             end
         end
     end
@@ -15496,7 +15298,6 @@ do
 
     local function _ensureHighlight(model, color, inten)
         if not model or not model.Parent then return end
-        _purgeLegacyShellsOnce()
         local rec = _highlights[model]
         if not rec then
             rec = {}
@@ -15505,32 +15306,29 @@ do
             rec.lightHost = nil
             _highlights[model] = rec
         end
-        local now = tick()
-        if (not rec._mixedAt) or ((now - rec._mixedAt) >= _WH_MIXED_SCAN_INTERVAL) then
-            rec._mixed = _whModelMixed(model)
-            rec._mixedAt = now
-        end
-        local mixed = rec._mixed
+        local mixed = _whModelMixed(model)
         if mixed then
             -- Mixed viewmodels (arms/gloves + knife/gun) must not get a model-wide
             -- Highlight; it tints the body and can fight skinchanger animations.
-            -- Per-part Highlight applies only to actual weapon/knife parts, without
-            -- cloning meshes/welds. This fixes knife equip freezes and death spikes.
+            -- Per-part shells below still apply to the weapon/knife pieces only.
             if rec.fill then pcall(function() rec.fill:Destroy() end); rec.fill = nil end
             if rec.rim  then pcall(function() rec.rim:Destroy()  end); rec.rim  = nil end
-            _syncWHPartHighlights(model, rec, color, inten)
         else
-            _dropWHPartHighlights(rec)
             if not (rec.rim and rec.rim.Parent) then
                 rec.rim = Instance.new("Highlight")
                 rec.rim.Name = "EclipseWHRim"
                 rec.rim.Adornee = model
+                rec.rim.DepthMode = Enum.HighlightDepthMode.Occluded
                 rec.rim.Parent = model
             end
             if not (rec.fill and rec.fill.Parent) then
                 rec.fill = Instance.new("Highlight")
                 rec.fill.Name = "EclipseWH"
                 rec.fill.Adornee = model
+                -- Occluded so the real weapon mesh is visible; without this the
+                -- always-on-top fill covers the deagle/knife and they appear to
+                -- "disappear" behind a colored silhouette.
+                rec.fill.DepthMode = Enum.HighlightDepthMode.Occluded
                 rec.fill.Parent = model
             end
         end
@@ -15546,14 +15344,13 @@ do
                 rec.fill.OutlineColor        = color
                 rec.fill.FillTransparency    = fillT
                 rec.fill.OutlineTransparency = outT
-                rec.fill.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
                 rec.rim.FillColor            = color
                 rec.rim.OutlineColor         = color
                 rec.rim.FillTransparency     = rimFT
                 rec.rim.OutlineTransparency  = rimOT
-                rec.rim.DepthMode            = Enum.HighlightDepthMode.AlwaysOnTop
             end)
         end
+        _syncWHShells(model, rec, color, a)
     end
 
 
@@ -15570,19 +15367,18 @@ do
             if next(_highlights) then _clearAll() end
             return
         end
-        -- ES-152 adaptive throttle: responsive weapon swap, but heavy part scans
-        -- are internally throttled. No mesh clones/welds = no equip/death freeze.
-        if not ES152.tick("WH.sync", 0.10) then return end
+        -- ES-152 adaptive throttle: ~7Hz baseline, backs off under high frame load.
+        if not ES152.tick("WH.sync", 0.15) then return end
         local list = _collectVMWeapons()
         local active = {}
-        for i = 1, #list do active[list[i]] = true end
-        for m in next, _highlights do
+        for _, m in ipairs(list) do active[m] = true end
+        for m,_ in pairs(_highlights) do
             if not active[m] or not m.Parent then _clearOne(m) end
         end
         local inten = tonumber(Config.Misc.WeaponHighlightIntensity) or 1.0
         if inten < 0.2 then inten = 0.2 end
         local col = Config.Misc.WeaponHighlightColor or Color3.fromRGB(0, 170, 255)
-        for i = 1, #list do _ensureHighlight(list[i], col, inten) end
+        for _, m in ipairs(list) do _ensureHighlight(m, col, inten) end
     end)))
 
 end
@@ -20647,6 +20443,24 @@ end)
                     break
                 end
 
+                -- Fast-path knife gate: cheap Tool name check on the
+                -- character BEFORE hitting getgc/_findEquippedWeapon.
+                -- When a knife is out this skips the expensive weapon
+                -- table scan entirely, killing the lag spike the user
+                -- reported when swapping to melee.
+                do
+                    local ch = LocalPlayer and LocalPlayer.Character
+                    local tool = ch and ch:FindFirstChildOfClass("Tool")
+                    local tn = tool and tool.Name and tool.Name:lower() or ""
+                    if tn ~= "" and (tn:find("knife", 1, true) or tn:find("bayonet", 1, true)
+                        or tn:find("karambit", 1, true) or tn:find("melee", 1, true)) then
+                        _weaponTable = nil
+                        _lastTarget  = nil
+                        task.wait(ES152.adaptiveInterval(0.6, 3))
+                        break
+                    end
+                end
+
                 local w = _findEquippedWeapon()
                 if not w then break end
                 if _isMeleeWeapon(w) then
@@ -20658,6 +20472,7 @@ end)
                     task.wait(ES152.adaptiveInterval(0.6, 3))
                     break
                 end
+
                 local rounds = rawget(w, "Rounds") or 0
                 if rounds <= 0 then pcall(_tryRefill, w); break end
 
@@ -21010,6 +20825,42 @@ end)()
 
 -- BULLET TRACER ENGINE removed per user request.
 _G.EclipseBulletTracerFire = function() end
+
+
+
+-- FPS BOOST removed by user request.
+
+
+
+
+
+
+-- ============================================================
+-- RAPID RELOAD (Misc) — reuses AutoSkill's refill helpers.
+-- Independent loop; safe when AutoSkill is disabled.
+-- ============================================================
+-- Rapid Reload runs in a passive loop while the toggle is on — no key press
+-- required. The loop yields with task.wait so it costs no FPS; it only touches
+-- the refill helper when a non-melee weapon is equipped.
+;(function()
+    task.spawn(function()
+        while scriptRunning do
+            task.wait(0.15)
+            if not scriptRunning then break end
+            if Config and Config.Misc and Config.Misc.RapidReload then
+                local find    = _G.EclipseAS_FindEquipped
+                local refill  = _G.EclipseAS_TryRefill
+                local isMelee = _G.EclipseAS_IsMelee
+                if type(find) == "function" and type(refill) == "function" then
+                    local ok, w = pcall(find)
+                    if ok and w and not (type(isMelee) == "function" and isMelee(w)) then
+                        pcall(refill, w)
+                    end
+                end
+            end
+        end
+    end)
+end)()
 
 -- ============================================================
 -- BULLET TRACER v8 — SAFE OBSERVER MODE
@@ -21544,12 +21395,12 @@ task.defer(function() pcall(function()
     -- ------------------------------------------------------------
     local TGB = (rawget(getfenv(0), "PVGB")) or safeGB(Tabs.Visuals, "R", "PLAYER VISUALS", "user")
     pcall(function() TGB:AddDivider() end)
-    TGB:AddToggle("HVH_Tracers", { Text = "BULLET TRACERS", Default = false, Compact = true,
+    TGB:AddToggle("HVH_Tracers", { Text = "Enable Bullet Tracers", Default = false,
         Callback = function(v) if v then forceOff("PV_BulletTracer") end end })
-        :AddColorPicker("HVH_TracerColor", { Default = Color3.fromRGB(255,50,50), Title = "Tracer color" })
-    TGB:AddSlider("HVH_TracerThick", { Text = "THICKNESS",    Default = 0.15, Min = 0.01, Max = 1, Rounding = 2, Compact = true })
-    TGB:AddSlider("HVH_TracerTrans", { Text = "TRANSPARENCY", Default = 0,    Min = 0,    Max = 1, Rounding = 2, Compact = true })
-    TGB:AddSlider("HVH_TracerLife",  { Text = "LIFETIME",     Default = 0.5,  Min = 0.1,  Max = 3, Rounding = 1, Suffix = "s", Compact = true })
+        :AddColorPicker("HVH_TracerColor", { Default = Color3.fromRGB(255,50,50), Title = "Tracer Color" })
+    TGB:AddSlider("HVH_TracerThick", { Text = "Thickness",    Default = 0.15, Min = 0.01, Max = 1, Rounding = 2 })
+    TGB:AddSlider("HVH_TracerTrans", { Text = "Transparency", Default = 0,    Min = 0,    Max = 1, Rounding = 2 })
+    TGB:AddSlider("HVH_TracerLife",  { Text = "Lifetime",     Default = 0.5,  Min = 0.1,  Max = 3, Rounding = 1, Suffix = "s" })
 
     local function drawTracer(from, to)
         local a0 = Instance.new("Attachment"); a0.WorldPosition = from; a0.Parent = Workspace.Terrain
@@ -21682,11 +21533,12 @@ task.defer(function() pcall(function()
     -- ------------------------------------------------------------
     local HMGB = (rawget(getfenv(0), "PVGB")) or safeGB(Tabs.Visuals, "R", "PLAYER VISUALS", "user")
     pcall(function() HMGB:AddDivider() end)
-    HMGB:AddToggle("HVH_Hitmarker",   { Text = "HITMARKER", Default = true, Compact = true })
-        :AddColorPicker("HVH_HM_Body", { Default = Color3.fromRGB(255,255,120), Title = "Body damage color" })
-        :AddColorPicker("HVH_HM_Head", { Default = Color3.fromRGB(255,80,80),   Title = "Head damage color" })
-    HMGB:AddSlider("HVH_HM_Size",     { Text = "TEXT SIZE", Default = 34, Min = 18, Max = 72, Rounding = 0, Compact = true })
-    HMGB:AddSlider("HVH_HM_Life",     { Text = "LIFETIME",  Default = 0.9, Min = 0.3, Max = 3, Rounding = 1, Suffix = "s", Compact = true })
+    HMGB:AddLabel("Hitmarker")
+    HMGB:AddToggle("HVH_Hitmarker",   { Text = "Enable Hitmarker", Default = true })
+    HMGB:AddLabel("Body Damage Color"):AddColorPicker("HVH_HM_Body", { Default = Color3.fromRGB(255,255,120) })
+    HMGB:AddLabel("Head Damage Color"):AddColorPicker("HVH_HM_Head", { Default = Color3.fromRGB(255,80,80)   })
+    HMGB:AddSlider("HVH_HM_Size",     { Text = "Text Size", Default = 34, Min = 18, Max = 72, Rounding = 0 })
+    HMGB:AddSlider("HVH_HM_Life",     { Text = "Lifetime",  Default = 0.9, Min = 0.3, Max = 3, Rounding = 1, Suffix = "s" })
 
     local function showHitmarker(worldPos, dmg, isHead)
         pcall(function()
@@ -21834,7 +21686,11 @@ task.defer(function() pcall(function()
             local spd   = math.rad(tonumber(Options.HVH_SpinSpeed.Value) or 80)
 
             pcall(function()
-                local pos = hrp.Position
+                -- Reference source (Davix dump) does exactly this per frame:
+                --   HRP.CFrame = HRP.CFrame * CFrame.Angles(0, rad(SpinSpeed), 0)
+                --   Camera.CFrame = Camera.CFrame
+                -- We keep that exact behavior for Forward/Up/Down and only add
+                -- a Neck tilt for Up/Down. Freeze locks yaw to camera at entry.
                 if mode == "Freeze" then
                     _restoreNeck(char)
                     local st = _G.__EclipseAA or { mode = nil, yawRad = 0 }
@@ -21845,19 +21701,21 @@ task.defer(function() pcall(function()
                         st.mode = mode
                         _G.__EclipseAA = st
                     end
-                    hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, st.yawRad, 0)
-                elseif mode == "Up" or mode == "Down" then
-                    _setNeckPitch(char, mode == "Up" and 60 or -60)
-                    local _, ry = hrp.CFrame:ToOrientation()
-                    ry = ry + spd * (1/60)
-                    hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, ry, 0)
-                    _G.__EclipseAA = { mode = mode, yawRad = ry }
-                else -- Forward
-                    _restoreNeck(char)
-                    local _, ry = hrp.CFrame:ToOrientation()
-                    ry = ry + spd * (1/60)
-                    hrp.CFrame = CFrame.new(pos) * CFrame.Angles(0, ry, 0)
-                    _G.__EclipseAA = { mode = "Forward", yawRad = ry }
+                    hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, st.yawRad, 0)
+                else
+                    if mode == "Up" then
+                        _setNeckPitch(char, 60)
+                    elseif mode == "Down" then
+                        _setNeckPitch(char, -60)
+                    else
+                        _restoreNeck(char)
+                    end
+                    -- Multiplicative spin — identical to the reference source.
+                    -- Never rebuild from CFrame.new(pos) with a re-extracted yaw:
+                    -- ToOrientation flips signs when pitch crosses ±90°, which
+                    -- was flipping Up<->Down and breaking Forward on this build.
+                    hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
+                    _G.__EclipseAA = { mode = mode }
                 end
                 if cam and camCF then cam.CFrame = camCF end
             end)
@@ -21888,31 +21746,11 @@ task.defer(function() pcall(function()
     _G.EclipseHVH_PlaySound = playSound
 
     -- ------------------------------------------------------------
-    -- MISC TAB — RELOAD (No Reload + Reload Time)
+    -- (removed) NO RELOAD / RELOAD TIME — completely stripped per user
+    -- request. The WM.reload hook and its UI group were the entire
+    -- feature; no other code path depends on HVH_NoReload / HVH_ReloadTime.
     -- ------------------------------------------------------------
-    local RGB = safeGB(Tabs.Misc, "L", "RELOAD", "refresh-cw")
-    RGB:AddToggle("HVH_NoReload",   { Text = "NO RELOAD", Default = false })
-    RGB:AddSlider("HVH_ReloadTime", { Text = "RELOAD TIME", Default = 2.5, Min = 1.0, Max = 5.0, Rounding = 1, Suffix = "s" })
 
-    pcall(function()
-        local WM = require(ReplicatedStorage.Components.Weapon)
-        local Orig = WM.reload
-        local function hooked(self, ...)
-            if Toggles.HVH_NoReload and Toggles.HVH_NoReload.Value then
-                if self.IsDestroyed or self.IsReloading or self.IsShooting then return end
-                if self.Properties.Rounds == self.Rounds then return end
-                local need = self.Properties.Rounds - self.Rounds
-                local add = math.min(need, self.Capacity)
-                self.Rounds = self.Rounds + add
-                self.Capacity = self.Capacity - add
-                self.IsReloading = false; self.IsInspecting = false; self.IsShooting = false
-                self.CurrentReloadIdentity = nil
-            else
-                return Orig(self, ...)
-            end
-        end
-        WM.reload = (newcclosure and newcclosure(hooked)) or hooked
-    end)
 
     -- ------------------------------------------------------------
     -- (removed) ShootWeapon:FireServer passive observer.
@@ -22363,5 +22201,264 @@ do
     end
     pcall(_G.EclipseInstallSilentBypass)
 end
+
+
+-- ============================================================
+-- ECLIPSE CPM: First-Person Arm Swap
+-- Substitui os braços do LP pelos braços do MODELO SELECIONADO em
+-- primeira pessoa, em tempo real. O overlay já segue as CFrames dos
+-- braços do LP a cada frame (relay em _targetCFrameFor). Aqui só
+-- resolvemos a camada de visibilidade:
+--   * Em 1ª pessoa: esconde 100% os braços do LP e forca os braços
+--     + gloves do overlay totalmente visíveis. O resto do overlay
+--     (torso/cabeca/pernas) fica invisivel pra nao poluir a tela.
+--   * Em 3ª pessoa: overlay inteiro visivel, LP com transparencia
+--     controlada pelo sistema CPM original.
+-- Single RenderStepped consumer, dirty-flag por frame de estado,
+-- zero task.spawn/task.wait em loop -> nao pesa em FPS.
+-- ============================================================
+do
+    local Players    = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local LP         = Players.LocalPlayer
+    local Cam        = workspace.CurrentCamera
+
+    local ARM_NAMES = {
+        ["Left Arm"]=true, ["Right Arm"]=true,
+        ["LeftHand"]=true, ["RightHand"]=true,
+        ["LeftLowerArm"]=true, ["LeftUpperArm"]=true,
+        ["RightLowerArm"]=true, ["RightUpperArm"]=true,
+    }
+    local GLOVE_KEYWORDS = { "glove", "hand", "wrist", "sleeve", "cuff", "bracer", "gauntlet" }
+    local ATTR_LP_ORIG   = "EclipseCPMArmLPOrig"
+    local ATTR_OV_ORIG   = "EclipseCPMPartOVOrig"
+
+    local function _lc(s) return string.lower(tostring(s or "")) end
+    local function _isArmPart(p)
+        if not (p and p:IsA("BasePart")) then return false end
+        if ARM_NAMES[p.Name] then return true end
+        local n = _lc(p.Name)
+        for _, kw in ipairs(GLOVE_KEYWORDS) do
+            if string.find(n, kw, 1, true) then return true end
+        end
+        return false
+    end
+    local function _isGloveAcc(a)
+        if not (a and a:IsA("Accessory")) then return false end
+        local n = _lc(a.Name)
+        for _, kw in ipairs(GLOVE_KEYWORDS) do
+            if string.find(n, kw, 1, true) then return true end
+        end
+        return false
+    end
+
+    local function _saveOrig(p, key)
+        if p:GetAttribute(key) == nil then
+            p:SetAttribute(key, p.Transparency)
+        end
+    end
+    local function _restoreOrig(p, key)
+        local o = p:GetAttribute(key)
+        if o ~= nil then
+            pcall(function() p.LocalTransparencyModifier = 0 end)
+            pcall(function() p.Transparency = o end)
+            p:SetAttribute(key, nil)
+        end
+    end
+
+    -- Detects Roblox's built-in first-person auto-fade. Cheap: single
+    -- distance check between camera position and Head. Robust: doesn't
+    -- rely on CameraMode enum (some games force LockFirstPerson only
+    -- while zooming). Threshold 1.5 studs matches Roblox's own trigger.
+    local function _isFirstPerson(ch)
+        local head = ch and ch:FindFirstChild("Head")
+        if not head then return false end
+        return (Cam.CFrame.Position - head.Position).Magnitude < 1.5
+    end
+
+    local function _findOverlay()
+        -- CPM system parents the overlay to workspace with attribute
+        -- EclipseCPMOverlay=true and welds it to LP's HumanoidRootPart.
+        local ok, ov = pcall(function() return workspace:FindFirstChild("EclipseCPMOverlay") end)
+        if ok and ov and ov.Parent then return ov end
+        return nil
+    end
+
+    -- Apply state to LP + overlay for the current frame.
+    local _lastState = nil -- "fp_on" | "tp_on" | "off"
+    local _lastOverlay = nil
+
+    local function _hideLPArmsFully(ch)
+        for _, d in ipairs(ch:GetDescendants()) do
+            if d:IsA("BasePart") and _isArmPart(d) then
+                _saveOrig(d, ATTR_LP_ORIG)
+                pcall(function() d.LocalTransparencyModifier = 1 end)
+                pcall(function() d.Transparency = 1 end)
+            elseif d:IsA("Accessory") and _isGloveAcc(d) then
+                for _, p in ipairs(d:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        _saveOrig(p, ATTR_LP_ORIG)
+                        pcall(function() p.LocalTransparencyModifier = 1 end)
+                        pcall(function() p.Transparency = 1 end)
+                    end
+                end
+            end
+        end
+    end
+    local function _restoreLPArms(ch)
+        for _, d in ipairs(ch:GetDescendants()) do
+            if d:IsA("BasePart") then _restoreOrig(d, ATTR_LP_ORIG) end
+        end
+    end
+
+    local function _showOverlayArmsOnly(ov)
+        -- Braços/gloves totalmente opacos; resto do overlay invisivel
+        -- (fica so o braço aparecendo em 1ª pessoa).
+        for _, d in ipairs(ov:GetDescendants()) do
+            if d:IsA("BasePart") then
+                _saveOrig(d, ATTR_OV_ORIG)
+                if _isArmPart(d) then
+                    pcall(function() d.LocalTransparencyModifier = 0 end)
+                    pcall(function() d.Transparency = 0 end)
+                else
+                    pcall(function() d.LocalTransparencyModifier = 1 end)
+                    pcall(function() d.Transparency = 1 end)
+                end
+            elseif d:IsA("Decal") or d:IsA("Texture") then
+                pcall(function() d.Transparency = 1 end)
+            end
+        end
+        -- Accessories: gloves visible, outros invisiveis
+        for _, a in ipairs(ov:GetChildren()) do
+            if a:IsA("Accessory") then
+                local show = _isGloveAcc(a)
+                for _, p in ipairs(a:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        _saveOrig(p, ATTR_OV_ORIG)
+                        pcall(function() p.LocalTransparencyModifier = show and 0 or 1 end)
+                        pcall(function() p.Transparency = show and 0 or 1 end)
+                    end
+                end
+            end
+        end
+    end
+
+    local function _showOverlayAll(ov)
+        for _, d in ipairs(ov:GetDescendants()) do
+            if d:IsA("BasePart") then _restoreOrig(d, ATTR_OV_ORIG) end
+        end
+    end
+
+    local function _hideOverlayAll(ov)
+        for _, d in ipairs(ov:GetDescendants()) do
+            if d:IsA("BasePart") then
+                _saveOrig(d, ATTR_OV_ORIG)
+                pcall(function() d.LocalTransparencyModifier = 1 end)
+                pcall(function() d.Transparency = 1 end)
+            end
+        end
+    end
+
+    local function _apply()
+        local ch = LP.Character
+        if not ch then return end
+        local cpmOn = _G.EclipseCPMActive == true
+        local ov    = _findOverlay()
+
+        -- Clean up if overlay was recreated
+        if _lastOverlay and _lastOverlay ~= ov then
+            pcall(function() _showOverlayAll(_lastOverlay) end)
+        end
+        _lastOverlay = ov
+
+        local state
+        if not cpmOn or not ov then
+            state = "off"
+        elseif _isFirstPerson(ch) then
+            state = "fp_on"
+        else
+            state = "tp_on"
+        end
+
+        if state == _lastState then
+            -- Re-assert visibility on the arm parts only (cheap): Roblox
+            -- resets LocalTransparencyModifier every frame in 1ª pessoa.
+            if state == "fp_on" and ov then
+                for _, d in ipairs(ov:GetDescendants()) do
+                    if d:IsA("BasePart") and _isArmPart(d) then
+                        pcall(function() d.LocalTransparencyModifier = 0 end)
+                    end
+                end
+                for _, d in ipairs(ch:GetDescendants()) do
+                    if d:IsA("BasePart") and _isArmPart(d) then
+                        pcall(function() d.LocalTransparencyModifier = 1 end)
+                    end
+                end
+            end
+            return
+        end
+        _lastState = state
+
+        if state == "off" then
+            _restoreLPArms(ch)
+            if ov then _showOverlayAll(ov) end
+        elseif state == "fp_on" then
+            _hideLPArmsFully(ch)
+            _showOverlayArmsOnly(ov)
+        else -- tp_on
+            _restoreLPArms(ch)
+            _showOverlayAll(ov)
+        end
+    end
+
+    -- Single RenderStepped consumer (mesma prioridade da camera para
+    -- reagir imediatamente a transicoes 1ª<->3ª pessoa).
+    RunService:BindToRenderStep("EclipseCPMArmSwap", Enum.RenderPriority.Camera.Value + 1, function()
+        pcall(_apply)
+    end)
+
+    -- Public refresh (used by wrappers below).
+    _G.EclipseCPMFirstPersonRefresh = function()
+        _lastState = nil -- force re-apply
+        pcall(_apply)
+    end
+
+    -- Wrap apply/clear to trigger a refresh after CPM state changes.
+    local _origApply = _G.EclipseApplyPlayerModel
+    _G.EclipseApplyPlayerModel = function(name)
+        if _origApply then
+            local ok, err = pcall(_origApply, name)
+            if not ok then warn("[Eclipse] CPM apply err: "..tostring(err)) end
+        end
+        task.delay(0.15, function() pcall(_G.EclipseCPMFirstPersonRefresh) end)
+    end
+    local _origClear = _G.EclipseCPMClear
+    _G.EclipseCPMClear = function()
+        if _origClear then pcall(_origClear) end
+        local ch = LP.Character
+        if ch then _restoreLPArms(ch) end
+        if _lastOverlay then pcall(function() _showOverlayAll(_lastOverlay) end) end
+        _lastOverlay = nil
+        _lastState = nil
+    end
+
+    -- Auto-apply CPM regardless of ThirdPerson setting.
+    task.spawn(function()
+        while true do
+            task.wait(1.0)
+            local cfg = rawget(_G, "Config") or Config
+            local wanted = cfg and cfg.Misc and cfg.Misc.CustomPlayerModel
+            local ch = LP.Character
+            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+            if wanted and wanted ~= "Off" and hum and hum.Health > 0 and not _G.EclipseCPMActive then
+                pcall(_G.EclipseApplyPlayerModel, wanted)
+            end
+        end
+    end)
+end
+-- ============================================================
+-- END CPM First-Person Arm Swap
+-- ============================================================
+
 
 end)()
