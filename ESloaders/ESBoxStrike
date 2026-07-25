@@ -4599,7 +4599,242 @@ local ESP_TAG_GRAD_B = Color3.fromRGB(90, 180, 255)
 local ESP_TAG_GRAD_SEGS = 12
 
 _ESP_ANIM = _ESP_ANIM or { on=false, t0=-1e9, dur=0.28 }
+-- ============================================================
+-- ESP PREMIUM OVERLAY (ScreenGui pooled)
+-- Substitui a Drawing API pelas ESPs "box" e "headdot" com um
+-- visual premium: Frame + UIGradient + UIStroke + UICorner.
+-- - Um ScreenGui unico compartilhado por todos os players.
+-- - Cada `data` (ESPObjects[plr]) tem seus proprios elementos
+--   Gui{Box,HeadDot} instanciados sob demanda (_espEnsure*).
+-- - Alpha eh mesclado pelo _espApplyAlpha (novo bloco no final),
+--   respeitando fade in/out e freeze-on-death.
+-- ============================================================
+local _ESP_OVERLAY_GUI = nil
+function _espGetOverlay()
+    if _ESP_OVERLAY_GUI and _ESP_OVERLAY_GUI.Parent then return _ESP_OVERLAY_GUI end
+    local g = Instance.new("ScreenGui")
+    g.Name = "EclipseESPOverlay"
+    g.ResetOnSpawn = false
+    g.IgnoreGuiInset = true
+    g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    g.DisplayOrder = 20
+    local ok = pcall(function() g.Parent = (gethui and gethui()) or CoreGui end)
+    if not ok then pcall(function() g.Parent = LocalPlayer:WaitForChild("PlayerGui", 5) end) end
+    _ESP_OVERLAY_GUI = g
+    return g
+end
+
+function _espEnsureBoxGui(data)
+    if data.GuiBox and data.GuiBox.Parent then return data.GuiBox end
+    local parent = _espGetOverlay(); if not parent then return nil end
+    local f = Instance.new("Frame")
+    f.Name = "ESPBox"
+    f.AnchorPoint = Vector2.new(0, 0)
+    f.BorderSizePixel = 0
+    f.BackgroundColor3 = Color3.fromRGB(255, 80, 180)
+    f.BackgroundTransparency = 0.55
+    f.Visible = false
+    f.ZIndex = 21
+    local corner = Instance.new("UICorner", f); corner.CornerRadius = UDim.new(0, 3)
+    local grad = Instance.new("UIGradient", f)
+    grad.Rotation = 90
+    grad.Color = ColorSequence.new(Color3.fromRGB(255, 120, 220), Color3.fromRGB(140, 60, 220))
+    grad.Transparency = NumberSequence.new(0.30, 0.10)
+    local stroke = Instance.new("UIStroke", f)
+    stroke.Thickness = 1.2
+    stroke.Color = Color3.fromRGB(255, 255, 255)
+    stroke.Transparency = 0.10
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    f.Parent = parent
+    data.GuiBox = f
+    data.GuiBoxGrad = grad
+    data.GuiBoxStroke = stroke
+    return f
+end
+
+function _espEnsureHeadDotGui(data)
+    if data.GuiHeadDot and data.GuiHeadDot.Parent then return data.GuiHeadDot end
+    local parent = _espGetOverlay(); if not parent then return nil end
+    local f = Instance.new("Frame")
+    f.Name = "ESPHeadDot"
+    f.AnchorPoint = Vector2.new(0.5, 0.5)
+    f.BorderSizePixel = 0
+    f.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    f.Visible = false
+    f.ZIndex = 22
+    Instance.new("UICorner", f).CornerRadius = UDim.new(1, 0)
+    local stroke = Instance.new("UIStroke", f)
+    stroke.Thickness = 1
+    stroke.Color = Color3.fromRGB(0, 0, 0)
+    stroke.Transparency = 0.25
+    f.Parent = parent
+    data.GuiHeadDot = f
+    data.GuiHeadDotStroke = stroke
+    return f
+end
+
+-- ============================================================
+-- Premium TAG (Name + Distance) — Frame + UIGradient + UIStroke.
+-- ============================================================
+function _espEnsureTagGui(data)
+    if data.GuiTag and data.GuiTag.Parent then return data.GuiTag end
+    local parent = _espGetOverlay(); if not parent then return nil end
+    local f = Instance.new("Frame")
+    f.Name = "ESPTag"
+    f.AnchorPoint = Vector2.new(0.5, 0)
+    f.BorderSizePixel = 0
+    f.BackgroundColor3 = Color3.fromRGB(14, 12, 22)
+    f.BackgroundTransparency = 0.35
+    f.Visible = false
+    f.ZIndex = 23
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 4)
+    local stroke = Instance.new("UIStroke", f)
+    stroke.Thickness = 1
+    stroke.Color = Color3.fromRGB(255, 255, 255)
+    stroke.Transparency = 0.35
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    local grad = Instance.new("UIGradient", f)
+    grad.Rotation = 90
+    grad.Color = ColorSequence.new(Color3.fromRGB(40, 30, 70), Color3.fromRGB(14, 12, 22))
+    grad.Transparency = NumberSequence.new(0.15, 0.35)
+    local pad = Instance.new("UIPadding", f)
+    pad.PaddingLeft   = UDim.new(0, 8)
+    pad.PaddingRight  = UDim.new(0, 8)
+    pad.PaddingTop    = UDim.new(0, 3)
+    pad.PaddingBottom = UDim.new(0, 3)
+    local lbl = Instance.new("TextLabel", f)
+    lbl.Name = "Label"
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.fromScale(1, 1)
+    lbl.Font = Enum.Font.GothamSemibold
+    lbl.TextSize = 12
+    lbl.TextColor3 = Color3.fromRGB(240, 240, 250)
+    lbl.TextXAlignment = Enum.TextXAlignment.Center
+    lbl.TextYAlignment = Enum.TextYAlignment.Center
+    lbl.TextStrokeTransparency = 0.4
+    lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    lbl.ZIndex = 24
+    lbl.Text = ""
+    f.Parent = parent
+    data.GuiTag = f
+    data.GuiTagLbl = lbl
+    data.GuiTagStroke = stroke
+    data.GuiTagGrad = grad
+    return f
+end
+
+-- ============================================================
+-- Premium AMMO bar (thin gradient bar acima do box).
+-- ============================================================
+function _espEnsureAmmoGui(data)
+    if data.GuiAmmo and data.GuiAmmo.Parent then return data.GuiAmmo end
+    local parent = _espGetOverlay(); if not parent then return nil end
+    local bg = Instance.new("Frame")
+    bg.Name = "ESPAmmoBg"
+    bg.AnchorPoint = Vector2.new(0.5, 1)
+    bg.BorderSizePixel = 0
+    bg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    bg.BackgroundTransparency = 0.35
+    bg.Visible = false
+    bg.ZIndex = 23
+    Instance.new("UICorner", bg).CornerRadius = UDim.new(1, 0)
+    local fill = Instance.new("Frame", bg)
+    fill.Name = "Fill"
+    fill.BorderSizePixel = 0
+    fill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    fill.Size = UDim2.fromScale(1, 1)
+    fill.ZIndex = 24
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+    bg.Parent = parent
+    data.GuiAmmo = bg
+    data.GuiAmmoFill = fill
+    return bg
+end
+
+-- Premium MONEY label — TextLabel com stroke.
+function _espEnsureMoneyGui(data)
+    if data.GuiMoney and data.GuiMoney.Parent then return data.GuiMoney end
+    local parent = _espGetOverlay(); if not parent then return nil end
+    local t = Instance.new("TextLabel")
+    t.Name = "ESPMoney"
+    t.AnchorPoint = Vector2.new(0.5, 0)
+    t.BackgroundTransparency = 1
+    t.Font = Enum.Font.GothamBold
+    t.TextSize = 12
+    t.TextColor3 = Color3.fromRGB(80, 220, 110)
+    t.TextStrokeTransparency = 0.3
+    t.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    t.Size = UDim2.fromOffset(140, 14)
+    t.Visible = false
+    t.ZIndex = 24
+    t.Parent = parent
+    data.GuiMoney = t
+    return t
+end
+
+-- Premium 2D LINE (Frame rotacionado) — usado pelo Skeleton e China Hat.
+-- Cada linha e' um Frame fino ancorado no ponto A, com Size = comprimento
+-- em pixels e Rotation em graus. Isso substitui Drawing.new("Line") sem
+-- perda de qualidade e permite gradiente/stroke premium.
+function _espEnsureLine(data, key, i)
+    data[key] = data[key] or {}
+    local pool = data[key]
+    if pool[i] and pool[i].Parent then return pool[i] end
+    local parent = _espGetOverlay(); if not parent then return nil end
+    local f = Instance.new("Frame")
+    f.Name = "ESPLine_" .. key .. "_" .. i
+    f.AnchorPoint = Vector2.new(0, 0.5)
+    f.BorderSizePixel = 0
+    f.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    f.BackgroundTransparency = 0
+    f.Visible = false
+    f.ZIndex = 22
+    Instance.new("UICorner", f).CornerRadius = UDim.new(1, 0)
+    f.Parent = parent
+    pool[i] = f
+    return f
+end
+
+function _espSetLine(f, ax, ay, bx, by, color, thickness)
+    if not f then return end
+    local dx, dy = bx - ax, by - ay
+    local len = math.sqrt(dx*dx + dy*dy)
+    f.Position = UDim2.fromOffset(ax, ay)
+    f.Size     = UDim2.fromOffset(len, thickness or 1)
+    f.Rotation = math.deg(math.atan2(dy, dx))
+    if color then f.BackgroundColor3 = color end
+    f.Visible = true
+end
+
+-- Premium off-screen ARROW — TextLabel com glyph triangular rotacionado.
+function _espEnsureArrowGui(data)
+    if data.GuiArrow and data.GuiArrow.Parent then return data.GuiArrow end
+    local parent = _espGetOverlay(); if not parent then return nil end
+    local t = Instance.new("TextLabel")
+    t.Name = "ESPArrow"
+    t.AnchorPoint = Vector2.new(0.5, 0.5)
+    t.BackgroundTransparency = 1
+    t.Font = Enum.Font.GothamBold
+    t.TextSize = 26
+    t.Text = "\u{25B2}"
+    t.TextColor3 = Color3.fromRGB(180, 100, 255)
+    t.TextStrokeTransparency = 0.2
+    t.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    t.Size = UDim2.fromOffset(32, 32)
+    t.Visible = false
+    t.ZIndex = 22
+    t.Parent = parent
+    data.GuiArrow = t
+    return t
+end
+
+
+
+
+
+
 function _espAnimScale()
+
     local dt = tick() - _ESP_ANIM.t0
     local p  = math.clamp(dt / math.max(0.01, _ESP_ANIM.dur), 0, 1)
     
@@ -4658,7 +4893,108 @@ function _espApplyAlpha(data, alpha)
             end
         end
     end
+    -- Premium ScreenGui fade (BOX + HEAD DOT).
+    if data.GuiBox then
+        pcall(function()
+            if alpha <= 0.02 then
+                data.GuiBox.Visible = false
+            elseif data.GuiBox.Visible then
+                if data.GuiBox.BackgroundTransparency < 1 then
+                    data.GuiBox.BackgroundTransparency = 1 - (1 - 0.55) * alpha
+                end
+                if data.GuiBoxStroke then
+                    data.GuiBoxStroke.Transparency = 1 - (1 - 0.10) * alpha
+                end
+                if data.GuiBoxGrad then
+                    data.GuiBoxGrad.Transparency = NumberSequence.new(
+                        1 - (1 - 0.30) * alpha,
+                        1 - (1 - 0.10) * alpha
+                    )
+                end
+            end
+        end)
+    end
+    if data.GuiHeadDot then
+        pcall(function()
+            if alpha <= 0.02 then
+                data.GuiHeadDot.Visible = false
+            elseif data.GuiHeadDot.Visible then
+                data.GuiHeadDot.BackgroundTransparency = 1 - alpha
+                if data.GuiHeadDotStroke then
+                    data.GuiHeadDotStroke.Transparency = 1 - 0.75 * alpha
+                end
+            end
+        end)
+    end
+    if data.GuiTag then
+        pcall(function()
+            if alpha <= 0.02 then
+                data.GuiTag.Visible = false
+            elseif data.GuiTag.Visible then
+                data.GuiTag.BackgroundTransparency = 1 - (1 - 0.35) * alpha
+                if data.GuiTagStroke then data.GuiTagStroke.Transparency = 1 - (1 - 0.35) * alpha end
+                if data.GuiTagGrad   then
+                    data.GuiTagGrad.Transparency = NumberSequence.new(
+                        1 - (1 - 0.15) * alpha, 1 - (1 - 0.35) * alpha)
+                end
+                if data.GuiTagLbl then
+                    data.GuiTagLbl.TextTransparency = 1 - alpha
+                    data.GuiTagLbl.TextStrokeTransparency = 1 - (1 - 0.4) * alpha
+                end
+            end
+        end)
+    end
+    if data.GuiAmmo then
+        pcall(function()
+            if alpha <= 0.02 then
+                data.GuiAmmo.Visible = false
+            elseif data.GuiAmmo.Visible then
+                data.GuiAmmo.BackgroundTransparency = 1 - (1 - 0.35) * alpha
+                if data.GuiAmmoFill then
+                    data.GuiAmmoFill.BackgroundTransparency = 1 - alpha
+                end
+            end
+        end)
+    end
+    if data.GuiMoney then
+        pcall(function()
+            if alpha <= 0.02 then
+                data.GuiMoney.Visible = false
+            elseif data.GuiMoney.Visible then
+                data.GuiMoney.TextTransparency = 1 - alpha
+                data.GuiMoney.TextStrokeTransparency = 1 - (1 - 0.3) * alpha
+            end
+        end)
+    end
+    -- Skeleton / China Hat (Frame lines) — fade via BackgroundTransparency.
+    for _, key in ipairs({"GuiSkeleton", "GuiChinaHat"}) do
+        local pool = data[key]
+        if pool then
+            for _, f in pairs(pool) do
+                pcall(function()
+                    if alpha <= 0.02 then
+                        f.Visible = false
+                    elseif f.Visible then
+                        f.BackgroundTransparency = 1 - alpha
+                    end
+                end)
+            end
+        end
+    end
+    if data.GuiArrow then
+        pcall(function()
+            if alpha <= 0.02 then
+                data.GuiArrow.Visible = false
+            elseif data.GuiArrow.Visible then
+                data.GuiArrow.TextTransparency = 1 - alpha
+                data.GuiArrow.TextStrokeTransparency = 1 - (1 - 0.2) * alpha
+            end
+        end)
+    end
 end
+
+
+
 
 function _espFadeTick()
     -- Smooth per-player fade with death-freeze. When an ESP is marked
@@ -4818,7 +5154,17 @@ function hideESP(data)
     if data.TagText then data.TagText.Visible=false end
     if data.MoneyText then data.MoneyText.Visible=false end
     if data.WeaponIcon then data.WeaponIcon.Visible=false end
+    if data.GuiBox then data.GuiBox.Visible = false end
+    if data.GuiHeadDot then data.GuiHeadDot.Visible = false end
+    if data.GuiTag then data.GuiTag.Visible = false end
+    if data.GuiAmmo then data.GuiAmmo.Visible = false end
+    if data.GuiMoney then data.GuiMoney.Visible = false end
+    if data.GuiSkeleton then for _, f in pairs(data.GuiSkeleton) do f.Visible = false end end
+    if data.GuiChinaHat then for _, f in pairs(data.GuiChinaHat) do f.Visible = false end end
+    if data.GuiArrow then data.GuiArrow.Visible = false end
 end
+
+
 
 function _espDestroyObjects(data)
     if not data then return end
@@ -4847,8 +5193,18 @@ function _espDestroyObjects(data)
         pcall(function() if data.TagText then data.TagText:Remove() end end)
         pcall(function() if data.MoneyText then data.MoneyText:Remove() end end)
         pcall(function() if data.WeaponIcon then data.WeaponIcon:Destroy() end end)
+        pcall(function() if data.GuiBox then data.GuiBox:Destroy() end end)
+        pcall(function() if data.GuiHeadDot then data.GuiHeadDot:Destroy() end end)
+        pcall(function() if data.GuiTag then data.GuiTag:Destroy() end end)
+        pcall(function() if data.GuiAmmo then data.GuiAmmo:Destroy() end end)
+        pcall(function() if data.GuiMoney then data.GuiMoney:Destroy() end end)
+        pcall(function() if data.GuiArrow then data.GuiArrow:Destroy() end end)
+        if data.GuiSkeleton then for _, f in pairs(data.GuiSkeleton) do pcall(function() f:Destroy() end) end end
+        if data.GuiChinaHat then for _, f in pairs(data.GuiChinaHat) do pcall(function() f:Destroy() end) end end
     end)
+
 end
+
 
 function syncAllESP()
     for _, d in pairs(ESPObjects) do hideESP(d) end
@@ -4856,15 +5212,15 @@ function syncAllESP()
 end
 
 function _espDrawArrow(data, root)
-    local arrow = ensureESPArrow(data)
-    if not arrow then return end
+    -- desliga o Drawing triangle legacy
+    if data.Arrow then data.Arrow.Visible = false end
+    local t = _espEnsureArrowGui(data)
+    if not t then return end
     local vs = Camera.ViewportSize
     local cx, cy = vs.X/2, vs.Y/2
     local sp = Camera:WorldToViewportPoint(root.Position)
     local sx, sy, behind = sp.X, sp.Y, (sp.Z <= 0)
     if behind then
-        -- Mirror across the screen center so the arrow points
-        -- toward where the player actually is (behind the camera).
         sx = vs.X - sx
         sy = vs.Y - sy
     end
@@ -4872,28 +5228,27 @@ function _espDrawArrow(data, root)
     if dx == 0 and dy == 0 then dx = 0.0001 end
     local onScreen = (not behind) and sx >= 0 and sx <= vs.X and sy >= 0 and sy <= vs.Y
     if onScreen then
-        arrow.Visible = false
+        t.Visible = false
         return
     end
     local ang = math.atan2(dy, dx)
     local rad = math.min(cx, cy) - 80
     local tipX = cx + math.cos(ang) * rad
     local tipY = cy + math.sin(ang) * rad
-    local size = 12
-    local fx, fy = math.cos(ang), math.sin(ang)
-    local perpX, perpY = -fy, fx
-    local baseX = tipX - fx * size * 1.8
-    local baseY = tipY - fy * size * 1.8
-    arrow.PointA = Vector2.new(tipX, tipY)
-    arrow.PointB = Vector2.new(baseX + perpX*size, baseY + perpY*size)
-    arrow.PointC = Vector2.new(baseX - perpX*size, baseY - perpY*size)
-    arrow.Color = Config.ESP.ArrowsColor
-    arrow.Filled = true
-    arrow.Transparency = 1
-    arrow.Visible = true
+    t.Position = UDim2.fromOffset(tipX, tipY)
+    -- glyph "▲" aponta para cima (-Y); soma 90 graus.
+    t.Rotation = math.deg(ang) + 90
+    t.TextColor3 = Config.ESP.ArrowsColor
+    t.Visible = true
 end
 
 function _espDrawCornerBox(data, plr, L, R, T, B, cW, cH)
+    -- PREMIUM ESP BOX (ScreenGui).
+    -- Substitui a antiga Drawing box (8 linhas + glow) por um Frame
+    -- unico com UIGradient vertical + UIStroke + UICorner. Segue o
+    -- estilo escolhido em Config.ESP.CornerBoxStyle:
+    --   * Full / Corner (default) -> gradient fill + stroke
+    --   * Outline                 -> stroke-only, sem preenchimento
     local col
     if Config.ESP.VisibleCheck and not IsAlly(plr) then
         local ch = plr.Character
@@ -4905,70 +5260,48 @@ function _espDrawCornerBox(data, plr, L, R, T, B, cW, cH)
     end
     if typeof(col) ~= "Color3" then col = Color3.fromRGB(230, 45, 55) end
 
-    local style   = tostring(Config.ESP.CornerBoxStyle or "Corner")
-    local ln      = data.CornerLines
-    local glow    = data.BoxGlow
-    local glowOff = 1
-    local shadow  = Color3.fromRGB(0, 0, 0)
+    -- Hide legacy Drawing box + glow (premium GUI toma o lugar).
+    if data.CornerLines then for _, l in pairs(data.CornerLines) do l.Visible = false end end
+    if data.BoxGlow     then for _, l in pairs(data.BoxGlow)     do l.Visible = false end end
 
-    -- Full: draw the four full sides (top/left/right/bottom) using the 8 slots.
-    -- Corner (default): eight short corner strokes.
-    -- Outline: thin single-pixel outline, no glow.
-    local function setLn(idx, thick, trans, from, to, c)
-        ln[idx].Thickness   = thick
-        ln[idx].Transparency= trans
-        ln[idx].From        = from
-        ln[idx].To          = to
-        ln[idx].Color       = c
-        ln[idx].Visible     = true
-    end
-    local function setGlow(idx, thick, trans, from, to, c, vis)
-        glow[idx].Thickness   = thick
-        glow[idx].Transparency= trans
-        glow[idx].From        = from
-        glow[idx].To          = to
-        glow[idx].Color       = c
-        glow[idx].Visible     = vis and true or false
+    local f = _espEnsureBoxGui(data)
+    if not f then return end
+
+    local style = tostring(Config.ESP.CornerBoxStyle or "Corner")
+    local w = math.max(2, R - L)
+    local h = math.max(2, B - T)
+    f.Position = UDim2.fromOffset(math.floor(L), math.floor(T))
+    f.Size     = UDim2.fromOffset(math.floor(w), math.floor(h))
+
+    -- Gradient: cor selecionada no topo -> variante mais escura embaixo.
+    local darker = Color3.new(
+        math.clamp(col.R * 0.45, 0, 1),
+        math.clamp(col.G * 0.30, 0, 1),
+        math.clamp(col.B * 0.65, 0, 1)
+    )
+    if data.GuiBoxGrad then
+        data.GuiBoxGrad.Color = ColorSequence.new(col, darker)
     end
 
-    if style == "Full" then
-        setLn(1, 1.6, 1, Vector2.new(L,T), Vector2.new(R,T), col) -- top
-        setLn(2, 1.6, 1, Vector2.new(L,B), Vector2.new(R,B), col) -- bottom
-        setLn(3, 1.6, 1, Vector2.new(L,T), Vector2.new(L,B), col) -- left
-        setLn(4, 1.6, 1, Vector2.new(R,T), Vector2.new(R,B), col) -- right
-        for i = 5, 8 do ln[i].Visible = false end
-        setGlow(1, 3, 0.72, Vector2.new(L-glowOff,T-glowOff), Vector2.new(R+glowOff,T-glowOff), shadow, true)
-        setGlow(2, 3, 0.72, Vector2.new(L-glowOff,B+glowOff), Vector2.new(R+glowOff,B+glowOff), shadow, true)
-        setGlow(3, 3, 0.72, Vector2.new(L-glowOff,T-glowOff), Vector2.new(L-glowOff,B+glowOff), shadow, true)
-        setGlow(4, 3, 0.72, Vector2.new(R+glowOff,T-glowOff), Vector2.new(R+glowOff,B+glowOff), shadow, true)
-        for i = 5, 8 do glow[i].Visible = false end
-    elseif style == "Outline" then
-        setLn(1, 1, 1, Vector2.new(L,T), Vector2.new(R,T), col)
-        setLn(2, 1, 1, Vector2.new(L,B), Vector2.new(R,B), col)
-        setLn(3, 1, 1, Vector2.new(L,T), Vector2.new(L,B), col)
-        setLn(4, 1, 1, Vector2.new(R,T), Vector2.new(R,B), col)
-        for i = 5, 8 do ln[i].Visible = false end
-        for i = 1, 8 do glow[i].Visible = false end
+    if style == "Outline" then
+        f.BackgroundTransparency = 1
+        if data.GuiBoxStroke then
+            data.GuiBoxStroke.Color = col
+            data.GuiBoxStroke.Thickness = 1.4
+            data.GuiBoxStroke.Transparency = 0.05
+        end
     else
-        -- Corner style (default)
-        setLn(1, 2.2, 1, Vector2.new(L,T),   Vector2.new(L+cW,T), col)
-        setLn(2, 2.2, 1, Vector2.new(L,T),   Vector2.new(L,T+cH), col)
-        setLn(3, 2.2, 1, Vector2.new(R,T),   Vector2.new(R-cW,T), col)
-        setLn(4, 2.2, 1, Vector2.new(R,T),   Vector2.new(R,T+cH), col)
-        setLn(5, 2.2, 1, Vector2.new(L,B),   Vector2.new(L+cW,B), col)
-        setLn(6, 2.2, 1, Vector2.new(L,B),   Vector2.new(L,B-cH), col)
-        setLn(7, 2.2, 1, Vector2.new(R,B),   Vector2.new(R-cW,B), col)
-        setLn(8, 2.2, 1, Vector2.new(R,B),   Vector2.new(R,B-cH), col)
-        setGlow(1, 3.4, 0.72, Vector2.new(L-glowOff,T-glowOff), Vector2.new(L+cW-glowOff,T-glowOff), shadow, true)
-        setGlow(2, 3.4, 0.72, Vector2.new(L-glowOff,T-glowOff), Vector2.new(L-glowOff,T+cH-glowOff), shadow, true)
-        setGlow(3, 3.4, 0.72, Vector2.new(R+glowOff,T-glowOff), Vector2.new(R-cW+glowOff,T-glowOff), shadow, true)
-        setGlow(4, 3.4, 0.72, Vector2.new(R+glowOff,T-glowOff), Vector2.new(R+glowOff,T+cH-glowOff), shadow, true)
-        setGlow(5, 3.4, 0.72, Vector2.new(L-glowOff,B+glowOff), Vector2.new(L+cW-glowOff,B+glowOff), shadow, true)
-        setGlow(6, 3.4, 0.72, Vector2.new(L-glowOff,B+glowOff), Vector2.new(L-glowOff,B-cH+glowOff), shadow, true)
-        setGlow(7, 3.4, 0.72, Vector2.new(R+glowOff,B+glowOff), Vector2.new(R-cW+glowOff,B+glowOff), shadow, true)
-        setGlow(8, 3.4, 0.72, Vector2.new(R+glowOff,B+glowOff), Vector2.new(R+glowOff,B-cH+glowOff), shadow, true)
+        f.BackgroundColor3 = col
+        f.BackgroundTransparency = 0.55
+        if data.GuiBoxStroke then
+            data.GuiBoxStroke.Color = Color3.fromRGB(255, 255, 255)
+            data.GuiBoxStroke.Thickness = 1.2
+            data.GuiBoxStroke.Transparency = 0.10
+        end
     end
+    f.Visible = true
 end
+
 
 function _espNum(v)
     if type(v) == "number" then return v end
@@ -5094,31 +5427,32 @@ function _espDrawSkeleton(data, char)
     local col = Config.ESP.SkeletonColor
     local shown = {}
     for i, bone in ipairs(SkeletonBones) do
-        local ln = data.Skeleton[i]
+        if data.Skeleton and data.Skeleton[i] then data.Skeleton[i].Visible = false end
         local a = char:FindFirstChild(bone[1])
         local b = char:FindFirstChild(bone[2])
         if a and b and a:IsA("BasePart") and b:IsA("BasePart") then
             local pa, oa = Camera:WorldToViewportPoint(a.Position)
             local pb, ob = Camera:WorldToViewportPoint(b.Position)
             if oa and ob then
-                ln.From = Vector2.new(pa.X, pa.Y)
-                ln.To   = Vector2.new(pb.X, pb.Y)
-                ln.Color = col; ln.Visible = true
-                shown[i] = true
+                local f = _espEnsureLine(data, "GuiSkeleton", i)
+                if f then
+                    _espSetLine(f, pa.X, pa.Y, pb.X, pb.Y, col, 1.5)
+                    shown[i] = true
+                end
             end
         end
     end
-    for i, ln in ipairs(data.Skeleton) do if not shown[i] then ln.Visible = false end end
+    if data.GuiSkeleton then
+        for i, f in pairs(data.GuiSkeleton) do if not shown[i] then f.Visible = false end end
+    end
 end
 
--- China Hat: classic 3D cone above the head. Base circle sits around Head,
--- peak sits 1 stud higher. Each spoke is projected in world space so the
--- shape leans correctly with the head orientation instead of being a flat
--- 2D triangle. 10 spokes give a smooth silhouette without adding lag.
+-- China Hat premium — 10 spokes via Frame lines rotacionados (ScreenGui).
 function _espDrawChinaHat(data, char)
+    if data.ChinaHat then for _, l in pairs(data.ChinaHat) do l.Visible = false end end
     local head = char:FindFirstChild("Head")
     if not head or not head:IsA("BasePart") then
-        for _, l in pairs(data.ChinaHat) do l.Visible = false end
+        if data.GuiChinaHat then for _, f in pairs(data.GuiChinaHat) do f.Visible = false end end
         return
     end
     local col     = Config.ESP.ChinaHatColor or Color3.fromRGB(220,220,220)
@@ -5129,24 +5463,25 @@ function _espDrawChinaHat(data, char)
     local peakCF  = cf * CFrame.new(0, peakUp, 0)
     local pk, pkOn = Camera:WorldToViewportPoint(peakCF.Position)
     if not pkOn then
-        for _, l in pairs(data.ChinaHat) do l.Visible = false end
+        if data.GuiChinaHat then for _, f in pairs(data.GuiChinaHat) do f.Visible = false end end
         return
     end
-    local peak2D = Vector2.new(pk.X, pk.Y)
-    local n = #data.ChinaHat
+    local n = 10
+    local shown = {}
     for i = 1, n do
         local ang = (i - 1) * (math.pi * 2 / n)
         local off = cf * CFrame.new(math.cos(ang) * baseR, 0, math.sin(ang) * baseR)
         local sp, spOn = Camera:WorldToViewportPoint(off.Position)
-        local ln = data.ChinaHat[i]
         if spOn then
-            ln.From = Vector2.new(sp.X, sp.Y)
-            ln.To   = peak2D
-            ln.Color = col
-            ln.Visible = true
-        else
-            ln.Visible = false
+            local f = _espEnsureLine(data, "GuiChinaHat", i)
+            if f then
+                _espSetLine(f, sp.X, sp.Y, pk.X, pk.Y, col, 1.2)
+                shown[i] = true
+            end
         end
+    end
+    if data.GuiChinaHat then
+        for i, f in pairs(data.GuiChinaHat) do if not shown[i] then f.Visible = false end end
     end
 end
 
@@ -5218,28 +5553,30 @@ end
 function _espHideAmmo(data)
     if data.TagAmmoBg then data.TagAmmoBg.Visible = false end
     if data.TagAmmoFill then data.TagAmmoFill.Visible = false end
+    if data.GuiAmmo then data.GuiAmmo.Visible = false end
 end
 
 function _espDrawAmmo(data, L, R, T, cx, plr, weaponName)
     local cur, mx = _espGetPlayerAmmo(plr, weaponName)
     if not cur or not mx or mx <= 0 then _espHideAmmo(data); return end
     local pct = math.clamp(cur / mx, 0, 1)
+    -- Legacy Drawing off.
+    if data.TagAmmoBg   then data.TagAmmoBg.Visible = false end
+    if data.TagAmmoFill then data.TagAmmoFill.Visible = false end
+    local bg = _espEnsureAmmoGui(data); if not bg then return end
     local width = math.clamp((R - L) + 28, 42, 118)
-    local x1, x2 = cx - width / 2, cx + width / 2
-    local y = T - 8
-    data.TagAmmoBg.From = Vector2.new(x1, y)
-    data.TagAmmoBg.To = Vector2.new(x2, y)
-    data.TagAmmoBg.Thickness = 3
-    data.TagAmmoBg.Color = Color3.fromRGB(0, 0, 0)
-    data.TagAmmoBg.Transparency = 0.55
-    data.TagAmmoBg.Visible = true
-    data.TagAmmoFill.From = Vector2.new(x1, y)
-    data.TagAmmoFill.To = Vector2.new(x1 + width * pct, y)
-    data.TagAmmoFill.Thickness = 2
-    data.TagAmmoFill.Color = Config.ESP.AmmoColor or Color3.fromRGB(255, 255, 255)
-    data.TagAmmoFill.Transparency = 1
-    data.TagAmmoFill.Visible = pct > 0.001
+    local y = math.floor(T - 6)
+    bg.Position = UDim2.fromOffset(math.floor(cx), y)
+    bg.Size     = UDim2.fromOffset(math.floor(width), 4)
+    bg.Visible  = true
+    if data.GuiAmmoFill then
+        local col = Config.ESP.AmmoColor or Color3.fromRGB(255, 255, 255)
+        data.GuiAmmoFill.BackgroundColor3 = col
+        data.GuiAmmoFill.Size = UDim2.new(pct, 0, 1, 0)
+        data.GuiAmmoFill.Visible = pct > 0.001
+    end
 end
+
 
 local _warmT, _warmVal = 0, false
 local _warmModule, _warmModuleT = nil, 0
@@ -5382,27 +5719,35 @@ end
     
     
 function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
+    -- PREMIUM TAG (ScreenGui): NAME + DISTANCE em um Frame com
+    -- UIGradient + UIStroke + UICorner. WeaponIcon (ImageLabel)
+    -- e MoneyText (TextLabel) continuam premium. Todas as
+    -- Drawings antigas (TagBg/TagBorder/TagGrad/TagText) desligam.
+    local function hideLegacyBox()
+        if data.TagBg then data.TagBg.Visible = false end
+        if data.TagBorder then for _, l in ipairs(data.TagBorder) do l.Visible = false end end
+        if data.TagGrad   then for _, l in ipairs(data.TagGrad)   do l.Visible = false end end
+        if data.TagText   then data.TagText.Visible = false end
+    end
+
     local s = _espAnimScale()
     if s <= 0.001 then
-        data.TagBg.Visible=false
-        for _,l in pairs(data.TagBorder) do l.Visible=false end
-        for _,l in pairs(data.TagGrad)   do l.Visible=false end
-        data.TagAmmoBg.Visible=false; data.TagAmmoFill.Visible=false
-        data.TagText.Visible=false
-        if data.WeaponIcon then data.WeaponIcon.Visible=false end
+        hideLegacyBox()
+        if data.GuiTag   then data.GuiTag.Visible = false end
+        if data.GuiMoney then data.GuiMoney.Visible = false end
+        _espHideAmmo(data)
+        if data.WeaponIcon then data.WeaponIcon.Visible = false end
         return 0
     end
+
     local hasWeapon = Config.ESP.WeaponName and weaponName and weaponName ~= ""
     local weaponIconAsset = hasWeapon and _espIconAssetForWeapon(weaponName) or nil
-
-    
     if hasWeapon and not weaponIconAsset and data.LastWeaponIcon then
         weaponIconAsset = data.LastWeaponIcon
     end
     local showIcon = hasWeapon and weaponIconAsset ~= nil
-    local baseW = math.max(170, math.min(250, (R - L) + 48))
 
-    
+    -- Weapon icon sizing (mesma lógica de antes).
     local ICON_BASE = 34
     local _wn = tostring(weaponName or "")
     local _wnLower = _wn:lower()
@@ -5410,58 +5755,17 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     local _isRifleW = (_wn == "AK-47" or _wn == "M4A1-S" or _wn == "M4A4" or _wn == "FAMAS" or _wn == "Galil AR" or _wn == "AUG" or _wn == "SG 553")
     local _isKnifeW = (KNIVES and KNIVES[_wn] == true) or _wnLower:find("knife", 1, true) ~= nil or _wnLower:find("bayonet", 1, true) ~= nil or _wnLower == "karambit"
     local ICON_SIZE
-    if _isSniperW or _isRifleW then
-        ICON_SIZE = math.floor(ICON_BASE * 1.45 + 0.5)
-    elseif _isKnifeW then
-        ICON_SIZE = math.floor(ICON_BASE * 1.32 + 0.5)
-    else
-        ICON_SIZE = ICON_BASE
-    end
-    local ICON_PAD  = 3
+    if _isSniperW or _isRifleW then ICON_SIZE = math.floor(ICON_BASE * 1.45 + 0.5)
+    elseif _isKnifeW then           ICON_SIZE = math.floor(ICON_BASE * 1.32 + 0.5)
+    else                            ICON_SIZE = ICON_BASE end
 
-    local baseH = 24
-
-    local width  = math.floor(baseW * (0.68 + 0.32 * math.min(1, s)))
-    local height = math.floor(baseH * (0.68 + 0.32 * math.min(1, s)))
-    local x  = math.floor(cx - width / 2)
-    local y  = math.floor((B or (T + 120)) + 12)
-    local trBase = 1 * math.min(1, s)  
-
-    -- Container (background + borders + gradient) só aparece se NAMES ou DISTANCE
-    -- estiverem ativos. Weapon icon, money e outros elementos continuam sendo
-    -- desenhados independentemente, sem exigir o container.
-    local showBox = (Config.ESP.Name or Config.ESP.Distance) and true or false
-    if showBox then
-        data.TagBg.Size = Vector2.new(width, height)
-        data.TagBg.Position = Vector2.new(x, y)
-        data.TagBg.Filled = true; data.TagBg.Color = Color3.fromRGB(8,10,16)
-        data.TagBg.Transparency = 0.40 * math.min(1, s); data.TagBg.Visible = true
-        local tl, tr, bl, br = Vector2.new(x,y), Vector2.new(x+width,y), Vector2.new(x,y+height), Vector2.new(x+width,y+height)
-        data.TagBorder[1].From, data.TagBorder[1].To = tl, tr
-        data.TagBorder[2].From, data.TagBorder[2].To = tr, br
-        data.TagBorder[3].From, data.TagBorder[3].To = br, bl
-        data.TagBorder[4].From, data.TagBorder[4].To = bl, tl
-        for _, l in ipairs(data.TagBorder) do l.Thickness = 1.4; l.Transparency = 0.45 * math.min(1,s); l.Color = Color3.fromRGB(120, 190, 255); l.Visible = true end
-
-        local segs = ESP_TAG_GRAD_SEGS
-        local segW = width / segs
-        local a, b = ESP_TAG_GRAD_A, ESP_TAG_GRAD_B
-        for i = 1, segs do
-            local t = (i - 0.5) / segs
-            local ln = data.TagGrad[i]
-            ln.From = Vector2.new(x + (i-1)*segW, y + 1)
-            ln.To   = Vector2.new(x + i*segW,      y + 1)
-            ln.Color = Color3.new(a.R + (b.R-a.R)*t, a.G + (b.G-a.G)*t, a.B + (b.B-a.B)*t)
-            ln.Thickness = 2; ln.Transparency = trBase; ln.Visible = true
-        end
-    else
-        data.TagBg.Visible = false
-        for _, l in ipairs(data.TagBorder) do l.Visible = false end
-        for _, l in ipairs(data.TagGrad)   do l.Visible = false end
-    end
+    -- Coleta as partes de texto.
     local nameParts = {}
-    if Config.ESP.Name then table.insert(nameParts, plr.Name) end
+    if Config.ESP.Name     then table.insert(nameParts, plr.Name) end
     if Config.ESP.Distance then table.insert(nameParts, math.floor(dist) .. "m") end
+    local labelText = (#nameParts > 0) and table.concat(nameParts, "  •  ") or ""
+
+    -- Money (warmup only).
     local moneyStr = nil
     if Config.ESP.IdentifyMoney and _isWarmup and _isWarmup() then
         local m = tonumber(plr:GetAttribute("Money")) or tonumber(plr:GetAttribute("Cash"))
@@ -5481,36 +5785,46 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     end
     _espHideAmmo(data)
 
-    local lines = {}
-    if #nameParts > 0 then table.insert(lines, table.concat(nameParts, "  •  ")) end
-    data.TagText.Size = 12
-    data.TagText.Text = table.concat(lines, "\n")
-    
-    local textY = math.floor(y + 6)
+    -- Desliga sempre a caixa legacy.
+    hideLegacyBox()
+
+    -- === Container premium ===
+    local baseW = math.max(160, math.min(240, (R - L) + 40))
+    local width = math.floor(baseW * (0.68 + 0.32 * math.min(1, s)))
+    local height = math.floor(22 * (0.72 + 0.28 * math.min(1, s)))
+    local y = math.floor((B or (T + 120)) + 10)
+    local showBox = (Config.ESP.Name or Config.ESP.Distance) and labelText ~= ""
+    if showBox then
+        local f = _espEnsureTagGui(data)
+        if f then
+            f.Size     = UDim2.fromOffset(width, height)
+            f.Position = UDim2.fromOffset(math.floor(cx), y)
+            f.Visible  = true
+            if data.GuiTagLbl then
+                data.GuiTagLbl.Text = labelText
+                data.GuiTagLbl.TextColor3 = Config.ESP.NameColor or Color3.fromRGB(240, 240, 250)
+            end
+        end
+    elseif data.GuiTag then
+        data.GuiTag.Visible = false
+    end
+
+    -- === Weapon icon (mantido — já era ScreenGui) ===
     if showIcon then
         local iconSize = ICON_SIZE
         local img = _ensureESPWeaponIcon(data)
         if img then
-
             if data.LastWeaponIcon ~= weaponIconAsset then
                 img.Image = weaponIconAsset
-                img.ImageRectOffset = Vector2.new(0,0)
-                img.ImageRectSize = Vector2.new(0,0)
+                img.ImageRectOffset = Vector2.new(0, 0)
+                img.ImageRectSize   = Vector2.new(0, 0)
                 data.LastWeaponIcon = weaponIconAsset
             end
-
-            
-            
             _forceESPWeaponIconVisual(img)
             img.Size = UDim2.fromOffset(iconSize, iconSize)
-
-            
             local headTop = T or (y - 20)
-            local iconX = math.floor(cx - iconSize / 2)
-            local iconY = math.floor(headTop - iconSize - 8)
-            img.Position = UDim2.fromOffset(iconX, iconY)
+            img.Position = UDim2.fromOffset(math.floor(cx - iconSize / 2), math.floor(headTop - iconSize - 8))
             img.Visible = true
-
             local now = tick()
             if not data.NextIconVisualFix or now >= data.NextIconVisualFix then
                 data.NextIconVisualFix = now + 0.18
@@ -5522,28 +5836,24 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
         data.WeaponIcon.Visible = false
     end
 
-    data.TagText.Position = Vector2.new(cx, textY)
-    data.TagText.Color = Config.ESP.NameColor or Color3.fromRGB(240,240,245)
-    data.TagText.Transparency = trBase
-    data.TagText.Visible = #lines > 0
-
+    -- === Money (premium TextLabel) ===
     if moneyStr then
-        if not data.MoneyText then
-            data.MoneyText = Drawing.new("Text")
-            data.MoneyText.Font=2; data.MoneyText.Size=12; data.MoneyText.Outline=true
-            data.MoneyText.OutlineColor=Color3.new(0,0,0); data.MoneyText.Center=true
+        if data.MoneyText then data.MoneyText.Visible = false end
+        local m = _espEnsureMoneyGui(data)
+        if m then
+            m.Text = moneyStr
+            m.TextColor3 = Color3.fromRGB(80, 220, 110)
+            m.Position = UDim2.fromOffset(math.floor(cx), y + height + 2)
+            m.Visible = true
         end
-        data.MoneyText.Text = moneyStr
-        data.MoneyText.Color = Color3.fromRGB(60,220,90)
-        data.MoneyText.Transparency = trBase
-
-        data.MoneyText.Position = Vector2.new(cx, y + height + 9)
-        data.MoneyText.Visible = true
-    elseif data.MoneyText then
-        data.MoneyText.Visible = false
+    else
+        if data.MoneyText then data.MoneyText.Visible = false end
+        if data.GuiMoney  then data.GuiMoney.Visible = false end
     end
-    return height + (moneyStr and 27 or 12)
+
+    return height + (moneyStr and 22 or 10)
 end
+
 
 ESP_SLOT_CYCLES = {
     Name     = {"Top","Bottom","Left","Right"},
@@ -5595,26 +5905,55 @@ function _espProcessPlayer(plr, myRoot, center)
     end
     local char = GetCharacter(plr)
     local data = ESPObjects[plr]
-    -- Freeze-on-death / freeze-on-char-removal: keep the last drawn
-    -- position, let _espFadeTick fade alpha to 0 over ~0.9s, then
-    -- destroy. Do NOT re-run any drawing code while frozen.
+    -- Freeze-on-death: snapshot last known WORLD positions so the ESP
+    -- keeps rendering AT the spot the player died in the world (fades
+    -- out in place). Camera can move freely and the frozen ESP
+    -- projects to screen normally instead of being glued to a screen coord.
     local function _freeze(d)
         if not d then return end
         d._wantVisible = false
         if not d._frozen then
-            d._frozen  = true
-            d._deathAt = tick()
+            d._frozen       = true
+            d._deathAt      = tick()
+            d._deathHeadPos = d._lastHeadPos
+            d._deathRootPos = d._lastRootPos
+            d._deathHP      = d._lastHP
+            d._deathMaxHP   = d._lastMaxHP
         end
     end
-    if not char then _freeze(data); return nil end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    local head = char:FindFirstChild("Head")
-    local hum  = char:FindFirstChildOfClass("Humanoid")
-    if not root or not head or not hum then _freeze(data); return nil end
-    local hp, maxHp = _espHealthValues(plr, char, hum)
-    if not hp or hp <= 0 or hum.Health <= 0 then _freeze(data); return nil end
 
-    local dist = (myRoot.Position - root.Position).Magnitude
+    local root, head, hum
+    if char then
+        root = char:FindFirstChild("HumanoidRootPart")
+        head = char:FindFirstChild("Head")
+        hum  = char:FindFirstChildOfClass("Humanoid")
+    end
+
+    local aliveOk = char and root and head and hum and hum.Health > 0
+    local hp, maxHp
+    if aliveOk then
+        hp, maxHp = _espHealthValues(plr, char, hum)
+        if not hp or hp <= 0 then aliveOk = false end
+    end
+
+    local isFrozen = false
+    local headPos, rootPos
+    if aliveOk then
+        headPos = head.Position
+        rootPos = root.Position
+    else
+        _freeze(data)
+        if not (data and data._deathHeadPos and data._deathRootPos) then
+            return nil
+        end
+        isFrozen = true
+        headPos  = data._deathHeadPos
+        rootPos  = data._deathRootPos
+        hp       = data._deathHP or 0
+        maxHp    = data._deathMaxHP or 100
+    end
+
+    local dist = (myRoot.Position - rootPos).Magnitude
     local maxD = Config.ESP.MaxDistance
     if Config.Aimbot.Enabled then maxD = math.max(maxD, 600) end
     if dist > maxD then if data then data._wantVisible = false end; return nil end
@@ -5624,18 +5963,25 @@ function _espProcessPlayer(plr, myRoot, center)
         ESPObjects[plr] = data
         data._alpha = 0
     end
-    -- Target came back alive/valid: clear any prior freeze.
-    if data._frozen then data._frozen = false; data._deathAt = nil end
+    -- Save last-known world state while alive; clear freeze on revive.
+    if not isFrozen then
+        data._lastHeadPos = headPos
+        data._lastRootPos = rootPos
+        data._lastHP      = hp
+        data._lastMaxHP   = maxHp
+        if data._frozen then data._frozen = false; data._deathAt = nil end
+    end
 
-
-    local hP, hOn = Camera:WorldToViewportPoint(head.Position + Vector3.new(0,0.5,0))
-    local fP, fOn = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,3,0))
+    local hP, hOn = Camera:WorldToViewportPoint(headPos + Vector3.new(0,0.5,0))
+    local fP, fOn = Camera:WorldToViewportPoint(rootPos - Vector3.new(0,3,0))
     local onScreen = hOn and fOn and hP.Z > 0 and fP.Z > 0
     if not onScreen then
         data._wantVisible = false
-        if Config.ESP.Arrows then _espDrawArrow(data, root) end
+        if Config.ESP.Arrows and not isFrozen then _espDrawArrow(data, { Position = rootPos }) end
         return nil
     end
+
+
 
 
     local height  = math.abs(hP.Y - fP.Y); local width = height * 0.6
@@ -5655,7 +6001,8 @@ function _espProcessPlayer(plr, myRoot, center)
         local anyInside = (cx >= -margin and cx <= vs.X + margin and cy >= -margin and cy <= vs.Y + margin)
         if not anyInside then
             data._wantVisible = false
-            if Config.ESP.Arrows then _espDrawArrow(data, root) end
+            if Config.ESP.Arrows and not isFrozen then _espDrawArrow(data, { Position = rootPos }) end
+
             return nil
         end
         L = math.clamp(L, 0, vs.X); R = math.clamp(R, 0, vs.X)
@@ -5666,7 +6013,12 @@ function _espProcessPlayer(plr, myRoot, center)
 
     if Config.ESP.CornerBox then
         _espDrawCornerBox(data, plr, L, R, T, B, width*0.25, height*0.25)
-    else for _, l in pairs(data.CornerLines) do l.Visible=false end end
+    else
+        for _, l in pairs(data.CornerLines) do l.Visible=false end
+        if data.BoxGlow then for _, l in pairs(data.BoxGlow) do l.Visible=false end end
+        if data.GuiBox then data.GuiBox.Visible = false end
+    end
+
 
     local layout = _espTextLayout(L, R, T, B, cx)
     local weaponName = _espGetWeaponName(plr)
@@ -5707,18 +6059,27 @@ function _espProcessPlayer(plr, myRoot, center)
     
     local _unused_layout = layout
 
-    if Config.ESP.HeadDot and data.HeadDot then
-        data.HeadDot.Position = Vector2.new(hP.X, hP.Y)
-        data.HeadDot.Color = Config.ESP.HeadDotColor
-        data.HeadDot.Radius = math.clamp(height * 0.04, 2, 5)
-        data.HeadDot.Visible = true
-    elseif data.HeadDot then data.HeadDot.Visible = false end
+    if Config.ESP.HeadDot then
+        if data.HeadDot then data.HeadDot.Visible = false end -- legacy Drawing off
+        local dot = _espEnsureHeadDotGui(data)
+        if dot then
+            local r = math.clamp(height * 0.04, 2, 5)
+            dot.Size = UDim2.fromOffset(math.floor(r * 2), math.floor(r * 2))
+            dot.Position = UDim2.fromOffset(math.floor(hP.X), math.floor(hP.Y))
+            dot.BackgroundColor3 = Config.ESP.HeadDotColor
+            dot.Visible = true
+        end
+    else
+        if data.HeadDot then data.HeadDot.Visible = false end
+        if data.GuiHeadDot then data.GuiHeadDot.Visible = false end
+    end
 
-    if Config.ESP.Skeleton and data.Skeleton then
+
+    if Config.ESP.Skeleton and data.Skeleton and not isFrozen and char then
         _espDrawSkeleton(data, char)
     elseif data.Skeleton then for _, l in pairs(data.Skeleton) do l.Visible = false end end
 
-    if Config.ESP.ChinaHat and data.ChinaHat then
+    if Config.ESP.ChinaHat and data.ChinaHat and not isFrozen and char then
         _espDrawChinaHat(data, char)
     elseif data.ChinaHat then for _, l in pairs(data.ChinaHat) do l.Visible = false end end
 
@@ -5726,8 +6087,10 @@ function _espProcessPlayer(plr, myRoot, center)
 
     local aimDist = (Vector2.new(hP.X, hP.Y) - center).Magnitude
     data._wantVisible = true
+    if isFrozen then return nil end
     return { player=plr, head=head, root=root, hum=hum, dist=dist, aimDist=aimDist }
 end
+
 
 
 local ChamsHL = setmetatable({}, { __mode = "k" })
@@ -6222,8 +6585,8 @@ function ensureC4UI()
     f.Size = UDim2.fromOffset(238, 78)
     f.ClipsDescendants = false
     f.Visible = false; f.Active = true; f.ZIndex = 60
-    f.BackgroundColor3 = Color3.fromRGB(18, 17, 22)
-    f.BackgroundTransparency = 0.24
+    -- Premium clean look: no gray/dark rectangle behind the counter/text.
+    f.BackgroundTransparency = 1
     f.Parent = parent
 
     pcall(function()
@@ -6248,29 +6611,21 @@ function ensureC4UI()
         end))
     end)
     pcall(_bindPanelPosition, "C4Panel", f)
-    pcall(_applyNLPanelStyle, f, { Transparency = 0.24, Corner = 8, AccentBar = false })
-
-    local gloss = Instance.new("UIGradient", f)
-    gloss.Name = "EclipseC4Glass"
-    gloss.Rotation = 90
-    gloss.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(36, 32, 43)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 17, 22)),
-    }
+    -- (removido: _applyNLPanelStyle e UIGradient de fundo — sem retangulo cinza)
 
     -- =============== AVATAR ===============
     local avatarBox = Instance.new("Frame", f)
     avatarBox.Name = "AvatarBox"
-    avatarBox.BackgroundColor3 = Color3.fromRGB(12, 11, 15)
-    avatarBox.BackgroundTransparency = 0.15
+    avatarBox.BackgroundTransparency = 1
     avatarBox.BorderSizePixel = 0
     avatarBox.Position = UDim2.fromOffset(10, 11)
     avatarBox.Size = UDim2.fromOffset(56, 56)
     avatarBox.ZIndex = 62
     Instance.new("UICorner", avatarBox).CornerRadius = UDim.new(0, 8)
     local avatarStroke = Instance.new("UIStroke", avatarBox)
-    avatarStroke.Thickness = 1; avatarStroke.Transparency = 0.4
+    avatarStroke.Thickness = 1.2; avatarStroke.Transparency = 0.2
     avatarStroke.Color = Color3.fromRGB(170, 95, 255)
+
 
     local avatar = Instance.new("ImageLabel", avatarBox)
     avatar.Name = "Avatar"
@@ -6304,6 +6659,9 @@ function ensureC4UI()
     infoName.TextTruncate = Enum.TextTruncate.AtEnd
     infoName.Text = "C4 PLANTED"
     infoName.ZIndex = 62
+    infoName.TextStrokeTransparency = 0.35
+    infoName.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+
 
     local infoStatus = Instance.new("TextLabel", f)
     infoStatus.Name = "InfoStatus"
@@ -6317,6 +6675,9 @@ function ensureC4UI()
     infoStatus.TextTruncate = Enum.TextTruncate.AtEnd
     infoStatus.Text = "planted"
     infoStatus.ZIndex = 62
+    infoStatus.TextStrokeTransparency = 0.5
+    infoStatus.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+
 
     -- HP bar
     local hpBg = Instance.new("Frame", f)
@@ -6349,6 +6710,9 @@ function ensureC4UI()
     hpText.TextXAlignment = Enum.TextXAlignment.Left
     hpText.Text = ""
     hpText.ZIndex = 62
+    hpText.TextStrokeTransparency = 0.5
+    hpText.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+
 
     local distText = Instance.new("TextLabel", f)
     distText.Name = "DistText"
@@ -6361,6 +6725,9 @@ function ensureC4UI()
     distText.TextXAlignment = Enum.TextXAlignment.Right
     distText.Text = ""
     distText.ZIndex = 62
+    distText.TextStrokeTransparency = 0.5
+    distText.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+
 
     -- =============== CIRCULAR TIMER ===============
     local ringSize = 66
@@ -6433,10 +6800,12 @@ function ensureC4UI()
     timeLbl.ZIndex = 66
 
     local stroke = Instance.new("UIStroke", f)
-    stroke.Thickness = 1
+    stroke.Thickness = 0
+    stroke.Enabled = false
     stroke.Color = Color3.fromRGB(0, 0, 0)
-    stroke.Transparency = 0.5
+    stroke.Transparency = 1
     stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
 
     C4UI.gui         = g
     C4UI.frame       = f
@@ -6496,7 +6865,8 @@ function C4Hide()
     local tw = TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
         { BackgroundTransparency = 1 })
     tw:Play()
-    connectSignal(tw.Completed:Once(function() if scriptRunning and not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 0.24 end end))
+    connectSignal(tw.Completed:Once(function() if scriptRunning and not C4UI.shown then f.Visible = false; f.BackgroundTransparency = 1 end end))
+
 end
 
 function C4Show(status, timeText, sub, color, info)
@@ -6571,18 +6941,15 @@ function C4Show(status, timeText, sub, color, info)
     if color then
         if C4UI.time then C4UI.time.TextColor3 = color end
         if C4UI.avatarStroke then C4UI.avatarStroke.Color = color end
-        C4UI.stroke.Color = color; C4UI.stroke.Transparency = 0.45
-    else
-        C4UI.stroke.Color = Color3.new(1,1,1); C4UI.stroke.Transparency = 0.6
     end
 
     if not C4UI.shown then
         C4UI.shown = true
         C4UI.frame.Visible = true
+        -- Panel bg fica sempre transparente (visual premium sem retangulo cinza).
         C4UI.frame.BackgroundTransparency = 1
-        TweenService:Create(C4UI.frame, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            { BackgroundTransparency = 0.24 }):Play()
     end
+
 end
 
 function findDefuser()
@@ -12480,9 +12847,9 @@ EspGB:AddToggle("ESP_Weapon",    { Text="ESP WEAPON", Default=false, Callback=fu
 Config.ESP.Ammo = false
 
 Config.ESP.HeadDot = false
-EspGB:AddToggle("ESP_Skeleton", { Text="SKELETON", Default=false, Callback=function(v) Config.ESP.Skeleton=v end })
+EspGB:AddToggle("ESP_Skeleton", { Text="ESP SKELETON", Default=false, Callback=function(v) Config.ESP.Skeleton=v end })
     :AddColorPicker("ESP_SkelCol", { Default=Config.ESP.SkeletonColor, Title="Skeleton color", Callback=function(c) Config.ESP.SkeletonColor=c end })
-EspGB:AddToggle("ESP_ChinaHat", { Text="CHINA HAT", Default=false, Callback=function(v) Config.ESP.ChinaHat=v end })
+EspGB:AddToggle("ESP_ChinaHat", { Text="ESP CHINA HAT", Default=false, Callback=function(v) Config.ESP.ChinaHat=v end })
     :AddColorPicker("ESP_ChinaHatCol", { Default=Config.ESP.ChinaHatColor, Title="China hat color", Callback=function(c) Config.ESP.ChinaHatColor=c end })
 
 EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=function(v) Config.ESP.Chams=v end })
@@ -21703,19 +22070,25 @@ task.defer(function() pcall(function()
                     end
                     hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, st.yawRad, 0)
                 else
-                    if mode == "Up" then
-                        _setNeckPitch(char, 60)
-                    elseif mode == "Down" then
-                        _setNeckPitch(char, -60)
+                    if mode == "Up" or mode == "Down" then
+                        _setNeckPitch(char, mode == "Up" and 60 or -60)
+                        -- Up/Down: rebuild CFrame from HRP position + accumulated
+                        -- yaw. Position-anchored write prevents the multiplicative
+                        -- spin from drifting the character while the Neck is tilted
+                        -- (matches the older Eclipse behavior the user wants back).
+                        local st = _G.__EclipseAA
+                        if not st or st.mode ~= mode then
+                            st = { mode = mode, yawRad = 0 }
+                            _G.__EclipseAA = st
+                        end
+                        st.yawRad = (st.yawRad + spd) % (math.pi * 2)
+                        hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, st.yawRad, 0)
                     else
                         _restoreNeck(char)
+                        -- Forward: multiplicative spin — identical to the reference source.
+                        hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
+                        _G.__EclipseAA = { mode = mode }
                     end
-                    -- Multiplicative spin — identical to the reference source.
-                    -- Never rebuild from CFrame.new(pos) with a re-extracted yaw:
-                    -- ToOrientation flips signs when pitch crosses ±90°, which
-                    -- was flipping Up<->Down and breaking Forward on this build.
-                    hrp.CFrame = hrp.CFrame * CFrame.Angles(0, spd, 0)
-                    _G.__EclipseAA = { mode = mode }
                 end
                 if cam and camCF then cam.CFrame = camCF end
             end)
@@ -22203,262 +22576,10 @@ do
 end
 
 
--- ============================================================
--- ECLIPSE CPM: First-Person Arm Swap
--- Substitui os braços do LP pelos braços do MODELO SELECIONADO em
--- primeira pessoa, em tempo real. O overlay já segue as CFrames dos
--- braços do LP a cada frame (relay em _targetCFrameFor). Aqui só
--- resolvemos a camada de visibilidade:
---   * Em 1ª pessoa: esconde 100% os braços do LP e forca os braços
---     + gloves do overlay totalmente visíveis. O resto do overlay
---     (torso/cabeca/pernas) fica invisivel pra nao poluir a tela.
---   * Em 3ª pessoa: overlay inteiro visivel, LP com transparencia
---     controlada pelo sistema CPM original.
--- Single RenderStepped consumer, dirty-flag por frame de estado,
--- zero task.spawn/task.wait em loop -> nao pesa em FPS.
--- ============================================================
-do
-    local Players    = game:GetService("Players")
-    local RunService = game:GetService("RunService")
-    local LP         = Players.LocalPlayer
-    local Cam        = workspace.CurrentCamera
+-- (CPM first/third-person arm-swap block removed per user request:
+--  revert to original CPM behavior — overlay model is shown/hidden by
+--  the original CPM system without touching LP arm visibility.)
 
-    local ARM_NAMES = {
-        ["Left Arm"]=true, ["Right Arm"]=true,
-        ["LeftHand"]=true, ["RightHand"]=true,
-        ["LeftLowerArm"]=true, ["LeftUpperArm"]=true,
-        ["RightLowerArm"]=true, ["RightUpperArm"]=true,
-    }
-    local GLOVE_KEYWORDS = { "glove", "hand", "wrist", "sleeve", "cuff", "bracer", "gauntlet" }
-    local ATTR_LP_ORIG   = "EclipseCPMArmLPOrig"
-    local ATTR_OV_ORIG   = "EclipseCPMPartOVOrig"
-
-    local function _lc(s) return string.lower(tostring(s or "")) end
-    local function _isArmPart(p)
-        if not (p and p:IsA("BasePart")) then return false end
-        if ARM_NAMES[p.Name] then return true end
-        local n = _lc(p.Name)
-        for _, kw in ipairs(GLOVE_KEYWORDS) do
-            if string.find(n, kw, 1, true) then return true end
-        end
-        return false
-    end
-    local function _isGloveAcc(a)
-        if not (a and a:IsA("Accessory")) then return false end
-        local n = _lc(a.Name)
-        for _, kw in ipairs(GLOVE_KEYWORDS) do
-            if string.find(n, kw, 1, true) then return true end
-        end
-        return false
-    end
-
-    local function _saveOrig(p, key)
-        if p:GetAttribute(key) == nil then
-            p:SetAttribute(key, p.Transparency)
-        end
-    end
-    local function _restoreOrig(p, key)
-        local o = p:GetAttribute(key)
-        if o ~= nil then
-            pcall(function() p.LocalTransparencyModifier = 0 end)
-            pcall(function() p.Transparency = o end)
-            p:SetAttribute(key, nil)
-        end
-    end
-
-    -- Detects Roblox's built-in first-person auto-fade. Cheap: single
-    -- distance check between camera position and Head. Robust: doesn't
-    -- rely on CameraMode enum (some games force LockFirstPerson only
-    -- while zooming). Threshold 1.5 studs matches Roblox's own trigger.
-    local function _isFirstPerson(ch)
-        local head = ch and ch:FindFirstChild("Head")
-        if not head then return false end
-        return (Cam.CFrame.Position - head.Position).Magnitude < 1.5
-    end
-
-    local function _findOverlay()
-        -- CPM system parents the overlay to workspace with attribute
-        -- EclipseCPMOverlay=true and welds it to LP's HumanoidRootPart.
-        local ok, ov = pcall(function() return workspace:FindFirstChild("EclipseCPMOverlay") end)
-        if ok and ov and ov.Parent then return ov end
-        return nil
-    end
-
-    -- Apply state to LP + overlay for the current frame.
-    local _lastState = nil -- "fp_on" | "tp_on" | "off"
-    local _lastOverlay = nil
-
-    local function _hideLPArmsFully(ch)
-        for _, d in ipairs(ch:GetDescendants()) do
-            if d:IsA("BasePart") and _isArmPart(d) then
-                _saveOrig(d, ATTR_LP_ORIG)
-                pcall(function() d.LocalTransparencyModifier = 1 end)
-                pcall(function() d.Transparency = 1 end)
-            elseif d:IsA("Accessory") and _isGloveAcc(d) then
-                for _, p in ipairs(d:GetDescendants()) do
-                    if p:IsA("BasePart") then
-                        _saveOrig(p, ATTR_LP_ORIG)
-                        pcall(function() p.LocalTransparencyModifier = 1 end)
-                        pcall(function() p.Transparency = 1 end)
-                    end
-                end
-            end
-        end
-    end
-    local function _restoreLPArms(ch)
-        for _, d in ipairs(ch:GetDescendants()) do
-            if d:IsA("BasePart") then _restoreOrig(d, ATTR_LP_ORIG) end
-        end
-    end
-
-    local function _showOverlayArmsOnly(ov)
-        -- Braços/gloves totalmente opacos; resto do overlay invisivel
-        -- (fica so o braço aparecendo em 1ª pessoa).
-        for _, d in ipairs(ov:GetDescendants()) do
-            if d:IsA("BasePart") then
-                _saveOrig(d, ATTR_OV_ORIG)
-                if _isArmPart(d) then
-                    pcall(function() d.LocalTransparencyModifier = 0 end)
-                    pcall(function() d.Transparency = 0 end)
-                else
-                    pcall(function() d.LocalTransparencyModifier = 1 end)
-                    pcall(function() d.Transparency = 1 end)
-                end
-            elseif d:IsA("Decal") or d:IsA("Texture") then
-                pcall(function() d.Transparency = 1 end)
-            end
-        end
-        -- Accessories: gloves visible, outros invisiveis
-        for _, a in ipairs(ov:GetChildren()) do
-            if a:IsA("Accessory") then
-                local show = _isGloveAcc(a)
-                for _, p in ipairs(a:GetDescendants()) do
-                    if p:IsA("BasePart") then
-                        _saveOrig(p, ATTR_OV_ORIG)
-                        pcall(function() p.LocalTransparencyModifier = show and 0 or 1 end)
-                        pcall(function() p.Transparency = show and 0 or 1 end)
-                    end
-                end
-            end
-        end
-    end
-
-    local function _showOverlayAll(ov)
-        for _, d in ipairs(ov:GetDescendants()) do
-            if d:IsA("BasePart") then _restoreOrig(d, ATTR_OV_ORIG) end
-        end
-    end
-
-    local function _hideOverlayAll(ov)
-        for _, d in ipairs(ov:GetDescendants()) do
-            if d:IsA("BasePart") then
-                _saveOrig(d, ATTR_OV_ORIG)
-                pcall(function() d.LocalTransparencyModifier = 1 end)
-                pcall(function() d.Transparency = 1 end)
-            end
-        end
-    end
-
-    local function _apply()
-        local ch = LP.Character
-        if not ch then return end
-        local cpmOn = _G.EclipseCPMActive == true
-        local ov    = _findOverlay()
-
-        -- Clean up if overlay was recreated
-        if _lastOverlay and _lastOverlay ~= ov then
-            pcall(function() _showOverlayAll(_lastOverlay) end)
-        end
-        _lastOverlay = ov
-
-        local state
-        if not cpmOn or not ov then
-            state = "off"
-        elseif _isFirstPerson(ch) then
-            state = "fp_on"
-        else
-            state = "tp_on"
-        end
-
-        if state == _lastState then
-            -- Re-assert visibility on the arm parts only (cheap): Roblox
-            -- resets LocalTransparencyModifier every frame in 1ª pessoa.
-            if state == "fp_on" and ov then
-                for _, d in ipairs(ov:GetDescendants()) do
-                    if d:IsA("BasePart") and _isArmPart(d) then
-                        pcall(function() d.LocalTransparencyModifier = 0 end)
-                    end
-                end
-                for _, d in ipairs(ch:GetDescendants()) do
-                    if d:IsA("BasePart") and _isArmPart(d) then
-                        pcall(function() d.LocalTransparencyModifier = 1 end)
-                    end
-                end
-            end
-            return
-        end
-        _lastState = state
-
-        if state == "off" then
-            _restoreLPArms(ch)
-            if ov then _showOverlayAll(ov) end
-        elseif state == "fp_on" then
-            _hideLPArmsFully(ch)
-            _showOverlayArmsOnly(ov)
-        else -- tp_on
-            _restoreLPArms(ch)
-            _showOverlayAll(ov)
-        end
-    end
-
-    -- Single RenderStepped consumer (mesma prioridade da camera para
-    -- reagir imediatamente a transicoes 1ª<->3ª pessoa).
-    RunService:BindToRenderStep("EclipseCPMArmSwap", Enum.RenderPriority.Camera.Value + 1, function()
-        pcall(_apply)
-    end)
-
-    -- Public refresh (used by wrappers below).
-    _G.EclipseCPMFirstPersonRefresh = function()
-        _lastState = nil -- force re-apply
-        pcall(_apply)
-    end
-
-    -- Wrap apply/clear to trigger a refresh after CPM state changes.
-    local _origApply = _G.EclipseApplyPlayerModel
-    _G.EclipseApplyPlayerModel = function(name)
-        if _origApply then
-            local ok, err = pcall(_origApply, name)
-            if not ok then warn("[Eclipse] CPM apply err: "..tostring(err)) end
-        end
-        task.delay(0.15, function() pcall(_G.EclipseCPMFirstPersonRefresh) end)
-    end
-    local _origClear = _G.EclipseCPMClear
-    _G.EclipseCPMClear = function()
-        if _origClear then pcall(_origClear) end
-        local ch = LP.Character
-        if ch then _restoreLPArms(ch) end
-        if _lastOverlay then pcall(function() _showOverlayAll(_lastOverlay) end) end
-        _lastOverlay = nil
-        _lastState = nil
-    end
-
-    -- Auto-apply CPM regardless of ThirdPerson setting.
-    task.spawn(function()
-        while true do
-            task.wait(1.0)
-            local cfg = rawget(_G, "Config") or Config
-            local wanted = cfg and cfg.Misc and cfg.Misc.CustomPlayerModel
-            local ch = LP.Character
-            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-            if wanted and wanted ~= "Off" and hum and hum.Health > 0 and not _G.EclipseCPMActive then
-                pcall(_G.EclipseApplyPlayerModel, wanted)
-            end
-        end
-    end)
-end
--- ============================================================
--- END CPM First-Person Arm Swap
--- ============================================================
 
 
 end)()
