@@ -2944,7 +2944,7 @@ local Config = {
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
     Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, FreezeOnBuy=false, AutoStop=false, QuickStopOptions={} },
     World    = { Weather="None", WeatherSpeed=0 },
-    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=140, AutoSkillSmooth=0, AutoSkillDistance=600, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, AutoBuyMap={}, AutoBuyDelay=0.15, AutoBuyOnlyAlive=true, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false },
+    Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=140, AutoSkillSmooth=0, AutoSkillDistance=600, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, AutoBuyMap={}, AutoBuyDelay=0.15, AutoBuyOnlyAlive=true, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false, Test1=false },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
@@ -6305,12 +6305,12 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     hideLegacyBox()
 
     -- Layout: "NAME [dist m]" on ONE line above the box.
-    -- Below the box: only the weapon icon (no distance).
-    -- Sizes are FIXED regardless of distance so the tag never scales.
+    -- Below the box: weapon icon ponta-a-ponta with the ESP box width.
+    -- Height is derived from box width so it visually matches the box scale
+    -- instead of becoming a big floating tag at distance.
     local NAME_H = 14
-    -- Icon a bit smaller so it stays visible at range without dominating the
-    -- tag; width follows the enemy box, tighter clamp.
-    local ICON_H = 22
+    local BOX_W  = math.max(8, math.floor((R or cx) - (L or cx)))
+    local ICON_H = math.clamp(math.floor(BOX_W * 0.32), 10, 16)
     local GAP    = 2
 
     local anyTop = showName or showDist
@@ -6349,10 +6349,10 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
         totalH = totalH + NAME_H
     end
 
-    -- Bottom: weapon icon only (fixed size).
+    -- Bottom: weapon icon only, exactly from ESP box left edge to right edge.
     local fb = data.GuiTagBot
     if fb and anyBot then
-        fb.Size     = UDim2.fromOffset(baseW, ICON_H)
+        fb.Size     = UDim2.fromOffset(BOX_W, ICON_H)
         fb.Position = UDim2.fromOffset(math.floor(cx), math.floor((B or T or 0) + 4))
         fb.Visible  = true
 
@@ -6361,11 +6361,8 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
                 data.GuiTagIcon.Image = weaponIconAsset
                 data.LastWeaponIcon = weaponIconAsset
             end
-            -- Icon spans the bottom of the ESP box (ponta a ponta), height fixed.
-            -- Width acompanha a box (min 48, max 96) — nao escala com distancia
-            -- pra frente/tras, so segue a largura visual da box do inimigo.
-            local iconW = math.clamp(math.floor((R - L) + 4), 34, 62)
-            data.GuiTagIcon.Size = UDim2.fromOffset(iconW, ICON_H)
+            -- Ponta a ponta: mesma largura visual da ESP box.
+            data.GuiTagIcon.Size = UDim2.fromOffset(BOX_W, ICON_H)
             data.GuiTagIcon.Position = UDim2.new(0.5, 0, 0, 0)
             data.GuiTagIcon.Visible = true
         end
@@ -15989,12 +15986,29 @@ do
     -- Removi a flag legada RapidReload — nada mais depende dela.
     Config.Misc.NoReload = Config.Misc.NoReload or false
     Config.Misc.RapidReload = nil
+    Config.Misc.Test1 = Config.Misc.Test1 or false
     local RRGB = MiscGB
     RRGB:AddToggle("NoReload", { Text = "NO RELOAD", Default = false,
         Tooltip = "Recarga instantanea local (hook em WeaponModule.reload).",
         Callback = function(v)
             Config.Misc.NoReload = v and true or false
         end })
+
+    -- TEST #1 precisa ser criado aqui, junto do MiscGB principal. Criar esse
+    -- toggle muito tarde no arquivo pode falhar em alguns executores por troca
+    -- de thread/identity; o hook real é instalado mais abaixo quando os helpers
+    -- do AutoSkill já existem.
+    MiscGB:AddToggle("Test1_Enable", {
+        Text = "TEST #1",
+        Default = false,
+        Tooltip = "Enquanto MB1/fire está segurado: bloqueia o ShootWeapon do client e envia só o do script no inimigo mais próximo do mouse/FOV (Plastic).",
+        Callback = function(v)
+            Config.Misc.Test1 = v and true or false
+            if v and type(_G.ECLIPSE_HUBTest1TryHook) == "function" then
+                pcall(_G.ECLIPSE_HUBTest1TryHook)
+            end
+        end,
+    })
 
     -- ============================================================
     -- NO SPREAD — Bullet Direction Hook (port from davix source).
@@ -16184,31 +16198,30 @@ do
     -- anchored, camera-owned, skipped by viewmodel hiding, and positioned every
     -- RenderStepped so it stays locked to the hand without physics lag.
     local _mirrorClone, _mirrorSourceName, _mirrorSourceRef, _mirrorRootRel, _mirrorLastSeen, _mirrorNextUnhide
-    local _mirrorOffset
-    -- Per-category grip offset. Long guns need an extra Y rotation so the
-    -- barrel points along the hand's forward axis instead of down. Knives sit
-    -- tight in the palm with blade forward.
-    -- Todas as armas seguem a mesma orientacao base: X=-90 (levanta o cano
-    -- para frente) + Y=-90 (aponta o cano para longe do jogador, e nao para
-    -- o lado). So mudam a posicao (encaixe na palma) por categoria.
-    local _MIRROR_OFFSET_PISTOL = CFrame.new(0.10, -0.08, -0.30) * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-    local _MIRROR_OFFSET_LONG   = CFrame.new(0.12, -0.10, -0.28) * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-    local _MIRROR_OFFSET_SNIPER = CFrame.new(0.14, -0.08, -0.42) * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-    local _MIRROR_OFFSET_SHOTGUN= CFrame.new(0.12, -0.10, -0.34) * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-    local _MIRROR_OFFSET_SMG    = CFrame.new(0.11, -0.09, -0.26) * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-    local _MIRROR_OFFSET_HEAVY  = CFrame.new(0.14, -0.12, -0.34) * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
+    local _mirrorOffset, _mirrorBarrelAxis, _mirrorIsKnife
+    -- Per-category grip offset. Rotação de armas de fogo agora é resolvida de
+    -- forma automática: detectamos qual eixo local do modelo aponta para frente
+    -- no viewmodel original e alinhamos esse eixo ao LookVector do personagem.
+    -- Isso impede R8/Deagle/pistolas/etc de ficarem de lado mesmo quando o pivot
+    -- interno da arma é diferente. Aqui ficam apenas os encaixes na palma.
+    local _MIRROR_OFFSET_PISTOL = CFrame.new(0.08, -0.07, -0.24)
+    local _MIRROR_OFFSET_LONG   = CFrame.new(0.12, -0.10, -0.30)
+    local _MIRROR_OFFSET_SNIPER = CFrame.new(0.14, -0.08, -0.42)
+    local _MIRROR_OFFSET_SHOTGUN= CFrame.new(0.12, -0.10, -0.34)
+    local _MIRROR_OFFSET_SMG    = CFrame.new(0.10, -0.09, -0.27)
+    local _MIRROR_OFFSET_HEAVY  = CFrame.new(0.14, -0.12, -0.34)
     local _MIRROR_OFFSET_KNIFE  = CFrame.new(0.10, -0.06, -0.55) * CFrame.Angles(math.rad(-90), math.rad(-90), 0)
 
     -- Overrides por arma quando o pivot do modelo do jogo nao bate com o
     -- default da categoria (R8 fica fora da mao, Deagle empurrada pra tras,
     -- Dual Berettas encostada, etc).
     local _MIRROR_OFFSET_OVERRIDES = {
-        ["R8 Revolver"]    = CFrame.new(0.08, -0.06, -0.24) * CFrame.Angles(math.rad(-90), math.rad(-90), 0),
-        ["Desert Eagle"]   = CFrame.new(0.10, -0.08, -0.28) * CFrame.Angles(math.rad(-90), math.rad(-90), 0),
-        ["Dual Berettas"]  = CFrame.new(0.10, -0.08, -0.26) * CFrame.Angles(math.rad(-90), math.rad(-90), 0),
-        ["Five-SeveN"]     = CFrame.new(0.10, -0.08, -0.28) * CFrame.Angles(math.rad(-90), math.rad(-90), 0),
-        ["CZ75-Auto"]      = CFrame.new(0.10, -0.08, -0.28) * CFrame.Angles(math.rad(-90), math.rad(-90), 0),
-        ["Tec-9"]          = CFrame.new(0.10, -0.08, -0.30) * CFrame.Angles(math.rad(-90), math.rad(-90), 0),
+        ["R8 Revolver"]    = CFrame.new(0.06, -0.06, -0.18),
+        ["Desert Eagle"]   = CFrame.new(0.08, -0.08, -0.22),
+        ["Dual Berettas"]  = CFrame.new(0.09, -0.08, -0.22),
+        ["Five-SeveN"]     = CFrame.new(0.08, -0.08, -0.23),
+        ["CZ75-Auto"]      = CFrame.new(0.08, -0.08, -0.23),
+        ["Tec-9"]          = CFrame.new(0.08, -0.08, -0.25),
         ["Negev"]          = _MIRROR_OFFSET_HEAVY,
         ["M249"]           = _MIRROR_OFFSET_HEAVY,
         ["Nova"]           = _MIRROR_OFFSET_SHOTGUN,
@@ -16302,7 +16315,34 @@ do
         end
         _G.__ECLIPSE_MIRROR_CLONE = nil
         _mirrorSourceName, _mirrorSourceRef, _mirrorRootRel = nil, nil, nil
+        _mirrorBarrelAxis, _mirrorIsKnife = nil, nil
         _mirrorLastSeen, _mirrorNextUnhide = nil, nil
+    end
+
+    local function _axisFromViewmodel(root)
+        local cam = workspace.CurrentCamera
+        if not (root and root:IsA("BasePart") and cam) then return Vector3.new(0, 0, -1) end
+        local ok, localLook = pcall(function()
+            return root.CFrame:VectorToObjectSpace(cam.CFrame.LookVector)
+        end)
+        if not ok or not localLook then return Vector3.new(0, 0, -1) end
+        local ax, ay, az = math.abs(localLook.X), math.abs(localLook.Y), math.abs(localLook.Z)
+        if ax >= ay and ax >= az then
+            return Vector3.new(localLook.X >= 0 and 1 or -1, 0, 0)
+        elseif ay >= ax and ay >= az then
+            return Vector3.new(0, localLook.Y >= 0 and 1 or -1, 0)
+        end
+        return Vector3.new(0, 0, localLook.Z >= 0 and 1 or -1)
+    end
+
+    local function _axisToLookCorrection(axis)
+        axis = axis or Vector3.new(0, 0, -1)
+        if axis.X == 1 then return CFrame.Angles(0, math.rad(90), 0) end
+        if axis.X == -1 then return CFrame.Angles(0, math.rad(-90), 0) end
+        if axis.Y == 1 then return CFrame.Angles(math.rad(-90), 0, 0) end
+        if axis.Y == -1 then return CFrame.Angles(math.rad(90), 0, 0) end
+        if axis.Z == 1 then return CFrame.Angles(0, math.rad(180), 0) end
+        return CFrame.new()
     end
 
     local function _isViewmodelBlockedName(n)
@@ -16515,6 +16555,8 @@ do
         pcall(function() clone:ScaleTo(_mirrorScaleFor(weapon.Name)) end)
         _mirrorRootRel = clone:GetPivot():ToObjectSpace(root.CFrame)
         _mirrorOffset = _mirrorOffsetFor(weapon.Name)
+        _mirrorBarrelAxis = _axisFromViewmodel(root)
+        _mirrorIsKnife = _isKnife and true or false
         _mirrorClone = clone
         _mirrorSourceName = weapon.Name
         _mirrorSourceRef = weapon
@@ -16527,7 +16569,21 @@ do
         local rel = _mirrorRootRel or CFrame.new()
         pcall(function()
             local __off = _mirrorOffset or _MIRROR_OFFSET_LONG
-            _mirrorClone:PivotTo((hand.CFrame * __off) * rel:Inverse())
+            local rootCF
+            if _mirrorIsKnife then
+                rootCF = hand.CFrame * __off
+            else
+                local pos = hand.CFrame:PointToWorldSpace(__off.Position or Vector3.new())
+                local ch = LocalPlayer.Character
+                local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+                local forward = (hrp and hrp.CFrame.LookVector) or hand.CFrame.LookVector
+                forward = Vector3.new(forward.X, 0, forward.Z)
+                if forward.Magnitude < 0.01 then forward = hand.CFrame.LookVector end
+                forward = forward.Unit
+                local base = CFrame.lookAt(pos, pos + forward, Vector3.new(0, 1, 0))
+                rootCF = base * _axisToLookCorrection(_mirrorBarrelAxis)
+            end
+            _mirrorClone:PivotTo(rootCF * rel:Inverse())
         end)
         local now = tick()
         if not _mirrorNextUnhide or now >= _mirrorNextUnhide then
@@ -18714,9 +18770,14 @@ do
             local ch = LocalPlayer.Character; if not ch then return end
             for _, p in ipairs(ch:GetDescendants()) do
                 if p:IsA("BasePart") and not _inTool(p) and not p:IsDescendantOf(_overlay) then
+                    if p.Name ~= "HumanoidRootPart" and p.Transparency ~= 1 then
+                        p.Transparency = 1
+                    end
                     if p.LocalTransparencyModifier ~= 1 then
                         p.LocalTransparencyModifier = 1
                     end
+                elseif (p:IsA("Decal") or p:IsA("Texture")) and not _inTool(p) and not p:IsDescendantOf(_overlay) then
+                    if p.Transparency ~= 1 then p.Transparency = 1 end
                 end
             end
         end)
@@ -22792,15 +22853,21 @@ end)()
         _hookedT1 = true
     end
 
-    MiscGB:AddToggle("Test1_Enable", {
-        Text = "TEST #1",
-        Default = false,
-        Tooltip = "Enquanto MB1/fire está segurado: bloqueia o ShootWeapon do client e envia só o do script no inimigo mais próximo do mouse/FOV (Plastic).",
-        Callback = function(v)
-            Config.Misc.Test1 = v and true or false
-            if v then pcall(_tryHookT1) end
-        end,
-    })
+    _G.ECLIPSE_HUBTest1TryHook = _tryHookT1
+
+    if not (Toggles and Toggles.Test1_Enable) then
+        MiscGB:AddToggle("Test1_Enable", {
+            Text = "TEST #1",
+            Default = false,
+            Tooltip = "Enquanto MB1/fire está segurado: bloqueia o ShootWeapon do client e envia só o do script no inimigo mais próximo do mouse/FOV (Plastic).",
+            Callback = function(v)
+                Config.Misc.Test1 = v and true or false
+                if v then pcall(_tryHookT1) end
+            end,
+        })
+    elseif Config.Misc.Test1 then
+        pcall(_tryHookT1)
+    end
 
     -- Tenta hookar já; se AutoSkill/Silent ainda não expuseram os
     -- helpers, o hook só entra quando o toggle for ligado.
