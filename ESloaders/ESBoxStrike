@@ -113,12 +113,20 @@ do
         end
     end)
 end
--- Real-time mode: all scans run every frame. We keep the fault-guard and
--- coalesce helpers so a misbehaving module can't spam errors, and yieldEvery
--- still exists as a burst-prevention helper for huge one-shot scans.
+-- Budgeted tick: heavy systems pass a minimum interval and ES152 stretches it
+-- under frame pressure. This keeps ESP/chams/glass responsive without forcing
+-- every scan to run on every Heartbeat.
 function ES152.tick(name, _baseInterval)
     if not ES152.Enabled then return true end
     if ES152.Muted[name] then return false end
+    local base = tonumber(_baseInterval) or 0
+    if base <= 0 then return true end
+    local now = os.clock()
+    local key = "__tick_" .. tostring(name or "anon")
+    local interval = ES152.adaptiveInterval(base, 2.25)
+    local last = ES152.Timers[key]
+    if last and (now - last) < interval then return false end
+    ES152.Timers[key] = now
     return true
 end
 function ES152.guard(name, fn)
@@ -14246,6 +14254,9 @@ do
         arm=true, arms=true, hand=true, hands=true, glove=true, gloves=true, sleeve=true, sleeves=true,
         torso=true, upper=true, lower=true, leg=true, foot=true, feet=true, body=true, character=true,
         humanoid=true, viewmodel=true, view=true,
+        head=true, uppertorso=true, lowertorso=true, humanoidrootpart=true,
+        leftupperarm=true, leftlowerarm=true, lefthand=true, rightupperarm=true, rightlowerarm=true, righthand=true,
+        leftupperleg=true, leftlowerleg=true, leftfoot=true, rightupperleg=true, rightlowerleg=true, rightfoot=true,
     }
     local overlayWords = {
         glove=true, gloves=true, sleeve=true, sleeves=true, cloth=true, clothes=true, clothing=true,
@@ -14436,7 +14447,7 @@ do
     -- Style presets: tune shell material, reflectance, transparency and outline.
     local GLASS_STYLES = {
         Default = { mat=Enum.Material.SmoothPlastic, refl=0,    shellT=0.50, scale=1.040, fillT=0.55, outT=0.00, depth=Enum.HighlightDepthMode.AlwaysOnTop },
-        Ghost   = { mat=Enum.Material.ForceField,    refl=0,    shellT=0.55, scale=1.028, fillT=0.45, outT=0.00, depth=Enum.HighlightDepthMode.AlwaysOnTop },
+        Ghost   = { mat=Enum.Material.ForceField,    refl=0,    shellT=0.42, scale=1.034, fillT=0.30, outT=0.00, depth=Enum.HighlightDepthMode.AlwaysOnTop },
         Illum   = { mat=Enum.Material.Neon,          refl=0,    shellT=0.35, scale=1.045, fillT=0.35, outT=0.00, depth=Enum.HighlightDepthMode.AlwaysOnTop },
         Frost   = { mat=Enum.Material.Ice,           refl=0.25, shellT=0.55, scale=1.045, fillT=0.65, outT=0.00, depth=Enum.HighlightDepthMode.AlwaysOnTop },
         Neon    = { mat=Enum.Material.Neon,          refl=0,    shellT=0.20, scale=1.040, fillT=0.25, outT=0.00, depth=Enum.HighlightDepthMode.AlwaysOnTop },
@@ -14455,7 +14466,7 @@ do
         end
         if not ES152.tick("GlassFX.scan", 0.25) then return end
         local col       = Config.Visuals.GlassFXColor   or Color3.fromRGB(85, 190, 255)
-        local styleName = tostring(Config.Visuals.GlassFXStyle or "Default")
+        local styleName = "Ghost"
         local st        = GLASS_STYLES[styleName] or GLASS_STYLES.Default
         _glassMat          = st.mat
         _glassRefl         = st.refl
@@ -16187,32 +16198,29 @@ do
     -- anchored, camera-owned, skipped by viewmodel hiding, and positioned every
     -- RenderStepped so it stays locked to the hand without physics lag.
     local _mirrorClone, _mirrorSourceName, _mirrorSourceRef, _mirrorRootRel, _mirrorLastSeen, _mirrorNextUnhide
-    local _mirrorOffset, _mirrorBarrelAxis, _mirrorIsKnife
-    -- Per-category grip offset. Rotação de armas de fogo agora é resolvida de
-    -- forma automática: detectamos qual eixo local do modelo aponta para frente
-    -- no viewmodel original e alinhamos esse eixo ao LookVector do personagem.
-    -- Isso impede R8/Deagle/pistolas/etc de ficarem de lado mesmo quando o pivot
-    -- interno da arma é diferente. Aqui ficam apenas os encaixes na palma.
-    -- Offsets agora carregam ROTAÇÃO explícita. A rotação do offset é aplicada
-    -- em cima do lookAt(base), garantindo que pistolas/R8/Deagle apontem pra
-    -- frente igual às armas longas (o auto-axis falhava nesses modelos).
-    local _ROT_GUN    = CFrame.Angles(0, math.rad(-90), 0)     -- padrão: barril no +X → gira pra -Z (forward)
-    local _ROT_PISTOL = CFrame.Angles(0, math.rad(-90), 0)
-    local _MIRROR_OFFSET_PISTOL = CFrame.new(0.08, -0.07, -0.24) * _ROT_PISTOL
-    local _MIRROR_OFFSET_LONG   = CFrame.new(0.12, -0.10, -0.30) * _ROT_GUN
-    local _MIRROR_OFFSET_SNIPER = CFrame.new(0.14, -0.08, -0.42) * _ROT_GUN
-    local _MIRROR_OFFSET_SHOTGUN= CFrame.new(0.12, -0.10, -0.34) * _ROT_GUN
-    local _MIRROR_OFFSET_SMG    = CFrame.new(0.10, -0.09, -0.27) * _ROT_GUN
-    local _MIRROR_OFFSET_HEAVY  = CFrame.new(0.14, -0.12, -0.34) * _ROT_GUN
-    local _MIRROR_OFFSET_KNIFE  = CFrame.new(0.08, -0.05, -0.42) * CFrame.Angles(math.rad(-75), math.rad(-90), 0)
+    local _mirrorWeaponCache, _mirrorWeaponCacheAt = nil, 0
+    local _mirrorOffset
+    -- Source-style mirror: the clone follows the character hand CFrame directly.
+    -- The previous camera/axis correction made pistols/R8 drift sideways and
+    -- fought the player animation. These offsets keep the model locked to the
+    -- palm while all firearms share the same forward grip rotation.
+    local _MIRROR_ROT_FIREARM = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
+    local _MIRROR_ROT_KNIFE   = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
+    local _MIRROR_OFFSET_PISTOL = CFrame.new(0.10, -0.08, -0.30) * _MIRROR_ROT_FIREARM
+    local _MIRROR_OFFSET_LONG   = CFrame.new(0.12, -0.10, -0.28) * _MIRROR_ROT_FIREARM
+    local _MIRROR_OFFSET_SNIPER = CFrame.new(0.14, -0.08, -0.42) * _MIRROR_ROT_FIREARM
+    local _MIRROR_OFFSET_SHOTGUN= CFrame.new(0.12, -0.10, -0.34) * _MIRROR_ROT_FIREARM
+    local _MIRROR_OFFSET_SMG    = CFrame.new(0.11, -0.09, -0.26) * _MIRROR_ROT_FIREARM
+    local _MIRROR_OFFSET_HEAVY  = CFrame.new(0.14, -0.12, -0.34) * _MIRROR_ROT_FIREARM
+    local _MIRROR_OFFSET_KNIFE  = CFrame.new(0.10, -0.06, -0.55) * _MIRROR_ROT_KNIFE
 
     local _MIRROR_OFFSET_OVERRIDES = {
-        ["R8 Revolver"]    = CFrame.new(0.06, -0.06, -0.18) * _ROT_PISTOL,
-        ["Desert Eagle"]   = CFrame.new(0.08, -0.08, -0.22) * _ROT_PISTOL,
-        ["Dual Berettas"]  = CFrame.new(0.09, -0.08, -0.22) * _ROT_PISTOL,
-        ["Five-SeveN"]     = CFrame.new(0.08, -0.08, -0.23) * _ROT_PISTOL,
-        ["CZ75-Auto"]      = CFrame.new(0.08, -0.08, -0.23) * _ROT_PISTOL,
-        ["Tec-9"]          = CFrame.new(0.08, -0.08, -0.25) * _ROT_PISTOL,
+        ["R8 Revolver"]    = CFrame.new(0.08, -0.06, -0.24) * _MIRROR_ROT_FIREARM,
+        ["Desert Eagle"]   = CFrame.new(0.10, -0.08, -0.28) * _MIRROR_ROT_FIREARM,
+        ["Dual Berettas"]  = CFrame.new(0.10, -0.08, -0.26) * _MIRROR_ROT_FIREARM,
+        ["Five-SeveN"]     = CFrame.new(0.10, -0.08, -0.28) * _MIRROR_ROT_FIREARM,
+        ["CZ75-Auto"]      = CFrame.new(0.10, -0.08, -0.28) * _MIRROR_ROT_FIREARM,
+        ["Tec-9"]          = CFrame.new(0.10, -0.08, -0.30) * _MIRROR_ROT_FIREARM,
         ["Negev"]          = _MIRROR_OFFSET_HEAVY,
         ["M249"]           = _MIRROR_OFFSET_HEAVY,
         ["Nova"]           = _MIRROR_OFFSET_SHOTGUN,
@@ -16306,8 +16314,8 @@ do
         end
         _G.__ECLIPSE_MIRROR_CLONE = nil
         _mirrorSourceName, _mirrorSourceRef, _mirrorRootRel = nil, nil, nil
-        _mirrorBarrelAxis, _mirrorIsKnife = nil, nil
         _mirrorLastSeen, _mirrorNextUnhide = nil, nil
+        _mirrorWeaponCache, _mirrorWeaponCacheAt = nil, 0
     end
 
     local function _axisFromViewmodel(root)
@@ -16546,8 +16554,6 @@ do
         pcall(function() clone:ScaleTo(_mirrorScaleFor(weapon.Name)) end)
         _mirrorRootRel = clone:GetPivot():ToObjectSpace(root.CFrame)
         _mirrorOffset = _mirrorOffsetFor(weapon.Name)
-        _mirrorBarrelAxis = _axisFromViewmodel(root)
-        _mirrorIsKnife = _isKnife and true or false
         _mirrorClone = clone
         _mirrorSourceName = weapon.Name
         _mirrorSourceRef = weapon
@@ -16560,23 +16566,7 @@ do
         local rel = _mirrorRootRel or CFrame.new()
         pcall(function()
             local __off = _mirrorOffset or _MIRROR_OFFSET_LONG
-            local rootCF
-            if _mirrorIsKnife then
-                rootCF = hand.CFrame * __off
-            else
-                local pos = hand.CFrame:PointToWorldSpace(__off.Position)
-                -- forward = câmera (inclui pitch: aim pra baixo/cima acompanha)
-                local cam = workspace.CurrentCamera
-                local camLook = cam and cam.CFrame.LookVector or hand.CFrame.LookVector
-                local forward = camLook
-                if forward.Magnitude < 0.01 then forward = hand.CFrame.LookVector end
-                forward = forward.Unit
-                local base = CFrame.lookAt(pos, pos + forward, Vector3.new(0, 1, 0))
-                -- rotação vinda do offset (por-arma) + fallback de auto-axis
-                local offRot = __off - __off.Position
-                rootCF = base * offRot * _axisToLookCorrection(_mirrorBarrelAxis)
-            end
-            _mirrorClone:PivotTo(rootCF * rel:Inverse())
+            _mirrorClone:PivotTo((hand.CFrame * __off) * rel:Inverse())
         end)
         local now = tick()
         if not _mirrorNextUnhide or now >= _mirrorNextUnhide then
@@ -16585,7 +16575,6 @@ do
         end
     end
 
-    local _mirrorWeaponCache, _mirrorWeaponCacheAt = nil, 0
     local function _updateMirror()
         local ch = LocalPlayer.Character; if not ch then return _clearMirror() end
         local hum = ch:FindFirstChildOfClass("Humanoid")
@@ -16626,29 +16615,38 @@ do
         end
     end
 
-    local function _restoreVM()
-        local cam = workspace.CurrentCamera; if not cam then return end
-        for _, v in ipairs(cam:GetChildren()) do
-            if v:IsA("Model") or v:IsA("Folder") then
-                for _, p in ipairs(v:GetDescendants()) do
-                    if p:IsA("BasePart") or p:IsA("Decal") or p:IsA("Texture") then
-                        pcall(function() p.LocalTransparencyModifier = 0 end)
-                    end
-                end
-            end
-        end
-    end
-
-    local function _hideVM()
-        local cam = workspace.CurrentCamera; if not cam then return end
+    local _tpVMParts, _tpVMPartsAt = {}, 0
+    local function _getVMVisualParts()
+        local cam = workspace.CurrentCamera; if not cam then return {} end
+        local now = tick()
+        if _tpVMParts and (now - (_tpVMPartsAt or 0)) < 0.35 then return _tpVMParts end
+        local out = {}
         for _, v in ipairs(cam:GetChildren()) do
             if (v:IsA("Model") or v:IsA("Folder")) and not _isMirrorInstance(v) then
                 for _, p in ipairs(v:GetDescendants()) do
                     if p:IsA("BasePart") or p:IsA("Decal") or p:IsA("Texture") then
-                        p.LocalTransparencyModifier = 1
+                        out[#out + 1] = p
+                        ES152.yieldEvery(#out, 160)
                     end
                 end
             end
+        end
+        _tpVMParts, _tpVMPartsAt = out, now
+        return out
+    end
+
+    local function _restoreVM()
+        for _, p in ipairs(_getVMVisualParts()) do
+            if p and p.Parent then
+                pcall(function() p.LocalTransparencyModifier = 0 end)
+            end
+        end
+        _tpVMParts, _tpVMPartsAt = {}, 0
+    end
+
+    local function _hideVM()
+        for _, p in ipairs(_getVMVisualParts()) do
+            if p and p.Parent then p.LocalTransparencyModifier = 1 end
         end
     end
 
@@ -16683,7 +16681,7 @@ do
             _tpNextHeavy = _tpNextHeavy or 0
             local now = tick()
             if now < _tpNextHeavy then return end
-            _tpNextHeavy = now + 0.1
+            _tpNextHeavy = now + ES152.adaptiveInterval(0.16, 2)
             -- Reveal the character body...
             if not _G.ECLIPSE_HUBCPMActive then
                 for _, p in ipairs(ch:GetDescendants()) do
@@ -16693,15 +16691,7 @@ do
                 end
             end
             -- ...hide first-person viewmodel, but never hide the mirrored weapon.
-            for _, v in ipairs(cam:GetChildren()) do
-                if (v:IsA("Model") or v:IsA("Folder")) and not _isMirrorInstance(v) then
-                    for _, p in ipairs(v:GetDescendants()) do
-                        if p:IsA("BasePart") or p:IsA("Decal") or p:IsA("Texture") then
-                            p.LocalTransparencyModifier = 1
-                        end
-                    end
-                end
-            end
+            _hideVM()
         end))
         -- Self-heal: some maps steal the camera on the first frame, leaving
         -- the viewmodel/first-person locked. Re-apply the camera+zoom a couple
@@ -16925,6 +16915,18 @@ do
         return false
     end
 
+    local function _whModelWeaponLike(model)
+        if not model then return false end
+        if _whHasWord(model.Name, WH_WEAPON_WORDS) or _isKnifeName(model.Name) then return true end
+        local checked = 0
+        for _, d in ipairs(model:GetDescendants()) do
+            checked = checked + 1
+            if checked > 80 then break end
+            if _whHasWord(d.Name, WH_WEAPON_WORDS) or _isKnifeName(d.Name) then return true end
+        end
+        return false
+    end
+
     local function _collectVMWeapons()
         local out, seen = {}, {}
         local function add(m)
@@ -16941,9 +16943,9 @@ do
                 local added = false
                 for _, ch in ipairs(node:GetChildren()) do
                     if ch:IsA("Model") then
-                        local weaponLike = _whWeaponHint(ch, node) or _isKnifeName(ch.Name)
+                        local weaponLike = _whWeaponHint(ch, node) or _whModelWeaponLike(ch)
                         local bodyLike = _whHasWord(ch.Name, WH_BODY_WORDS)
-                        if weaponLike or (not bodyLike and ch:FindFirstChildWhichIsA("BasePart", true)) then
+                        if weaponLike and not bodyLike then
                             add(ch); added = true
                         end
                         if scan(ch, depth + 1) then added = true end
@@ -16956,7 +16958,7 @@ do
             for _, top in ipairs(cam:GetChildren()) do
                 if top:IsA("Model") then
                     local addedChild = scan(top, 1)
-                    if not addedChild and (_isKnifeName(top.Name) or _whWeaponHint(top, cam) or not _whHasWord(top.Name, WH_BODY_WORDS)) then
+                    if not addedChild and (_whModelWeaponLike(top) or _whWeaponHint(top, cam)) and not _whHasWord(top.Name, WH_BODY_WORDS) then
                         add(top)
                     end
                 end
@@ -17236,13 +17238,15 @@ do
         -- ES-152 adaptive throttle: ~7Hz baseline, backs off under high frame load.
         if not ES152.tick("WH.sync", 0.15) then return end
         local inTP = Config.Misc and Config.Misc.ThirdPerson
-        local list = _collectVMWeapons()
+        local list = nil
         local active = {}
         if inTP then
             -- Em terceira pessoa: NÃO destacar viewmodel (fica flutuando/vaza brilho).
             -- Destacar apenas o clone anexado à mão (mirror).
             local mc = _G.__ECLIPSE_MIRROR_CLONE
             if mc and mc.Parent then list = { mc } else list = {} end
+        else
+            list = _collectVMWeapons()
         end
         for _, m in ipairs(list) do active[m] = true end
         for m,_ in pairs(_highlights) do
@@ -18337,6 +18341,26 @@ do
         return false
     end
 
+    local _cpmHideList, _cpmHideAt = {}, 0
+    local function _getCPMHideList(ch, force)
+        if not ch then return {} end
+        local now = tick()
+        if not force and _cpmHideList and (now - (_cpmHideAt or 0)) < 0.28 then
+            return _cpmHideList
+        end
+        local out = {}
+        for _, p in ipairs(ch:GetDescendants()) do
+            if not _inTool(p) and not (_overlay and p:IsDescendantOf(_overlay)) then
+                if p:IsA("BasePart") or p:IsA("Decal") or p:IsA("Texture") then
+                    out[#out + 1] = p
+                    ES152.yieldEvery(#out, 180)
+                end
+            end
+        end
+        _cpmHideList, _cpmHideAt = out, now
+        return out
+    end
+
     local function _restoreOriginal()
         for inst, val in pairs(_hidden) do
             if inst and inst.Parent then
@@ -18423,6 +18447,7 @@ do
         _overlay = nil
         _cpmActive = false
         _G.ECLIPSE_HUBCPMActive = false
+        _cpmHideList, _cpmHideAt = {}, 0
         _restoreOriginal()
         if oldOverlay and oldOverlay.Parent then
             pcall(function() oldOverlay:Destroy() end)
@@ -18434,10 +18459,8 @@ do
     end
 
     local function _hideOriginal(ch)
-        for _, p in ipairs(ch:GetDescendants()) do
-            if _inTool(p) then
-                -- keep equipped weapon visible
-            elseif p:IsA("BasePart") then
+        for _, p in ipairs(_getCPMHideList(ch, true)) do
+            if p:IsA("BasePart") then
                 _hidden[p]    = p.Transparency
                 _hiddenLTM[p] = p.LocalTransparencyModifier
                 if p.Name == "HumanoidRootPart" then
@@ -18764,13 +18787,12 @@ do
     -- (Animate script, skin swap, respawn touch-up) flipped back on. Fast
     -- heartbeat so the overlay never blinks.
     task.spawn(function()
-        while true do
-            task.wait(0.15)
+        while scriptRunning do
+            task.wait(ES152.adaptiveInterval(0.28, 2))
             if _cpmActive and _overlay and LocalPlayer.Character then
                 local ch = LocalPlayer.Character
-                for _, p in ipairs(ch:GetDescendants()) do
-                    if not _inTool(p) and p:IsA("BasePart")
-                       and not p:IsDescendantOf(_overlay) then
+                for _, p in ipairs(_getCPMHideList(ch)) do
+                    if p:IsA("BasePart") then
                         -- New part we've never seen: snapshot + hide.
                         if _hidden[p] == nil then
                             _hidden[p]    = p.Transparency
@@ -18788,6 +18810,9 @@ do
                                 pcall(function() p.LocalTransparencyModifier = 1 end)
                             end
                         end
+                    elseif p:IsA("Decal") or p:IsA("Texture") then
+                        if _hidden[p] == nil then _hidden[p] = p.Transparency end
+                        if p.Transparency ~= 1 then pcall(function() p.Transparency = 1 end) end
                     end
                 end
             end
@@ -18801,15 +18826,15 @@ do
         RunService:BindToRenderStep("ECLIPSE_HUBCPMStomp", Enum.RenderPriority.Camera.Value + 6, function()
             if not (_cpmActive and _overlay and _overlay.Parent) then return end
             local ch = LocalPlayer.Character; if not ch then return end
-            for _, p in ipairs(ch:GetDescendants()) do
-                if p:IsA("BasePart") and not _inTool(p) and not p:IsDescendantOf(_overlay) then
+            for _, p in ipairs(_getCPMHideList(ch)) do
+                if p:IsA("BasePart") then
                     if p.Name ~= "HumanoidRootPart" and p.Transparency ~= 1 then
                         p.Transparency = 1
                     end
                     if p.LocalTransparencyModifier ~= 1 then
                         p.LocalTransparencyModifier = 1
                     end
-                elseif (p:IsA("Decal") or p:IsA("Texture")) and not _inTool(p) and not p:IsDescendantOf(_overlay) then
+                elseif p:IsA("Decal") or p:IsA("Texture") then
                     if p.Transparency ~= 1 then p.Transparency = 1 end
                 end
             end
