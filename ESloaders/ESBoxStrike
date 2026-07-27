@@ -16233,7 +16233,11 @@ do
     local _MIRROR_OFFSET_LONG   = CFrame.new(0.12, -0.10, -0.28) * _MIRROR_ROT_LONG
     local _MIRROR_OFFSET_SNIPER = CFrame.new(0.14, -0.08, -0.42) * _MIRROR_ROT_LONG
     local _MIRROR_OFFSET_SHOTGUN= CFrame.new(0.12, -0.10, -0.34) * _MIRROR_ROT_LONG
-    local _MIRROR_OFFSET_SMG    = CFrame.new(0.11, -0.09, -0.27) * _MIRROR_ROT_LONG
+    -- SMGs point sideways with the default LONG rotation because their
+    -- PrimaryPart is oriented differently — flip the yaw so the muzzle
+    -- faces forward like the rifles do.
+    local _MIRROR_ROT_SMG       = CFrame.Angles(math.rad(-90), math.rad(90), 0)
+    local _MIRROR_OFFSET_SMG    = CFrame.new(0.11, -0.09, -0.27) * _MIRROR_ROT_SMG
     local _MIRROR_OFFSET_HEAVY  = CFrame.new(0.14, -0.12, -0.34) * _MIRROR_ROT_LONG
     local _MIRROR_OFFSET_KNIFE  = CFrame.new(0.10, -0.06, -0.28) * _MIRROR_ROT_KNIFE
 
@@ -16250,6 +16254,15 @@ do
         ["XM1014"]         = _MIRROR_OFFSET_SHOTGUN,
         ["MAG-7"]          = _MIRROR_OFFSET_SHOTGUN,
         ["Sawed-Off"]      = _MIRROR_OFFSET_SHOTGUN,
+        -- Per-SMG overrides: some SMGs need the flipped yaw so the barrel
+        -- points forward instead of sideways/backward on the mirror.
+        ["MP9"]            = _MIRROR_OFFSET_SMG,
+        ["MAC-10"]         = _MIRROR_OFFSET_SMG,
+        ["MP7"]            = _MIRROR_OFFSET_SMG,
+        ["MP5-SD"]         = _MIRROR_OFFSET_SMG,
+        ["UMP-45"]         = _MIRROR_OFFSET_SMG,
+        ["P90"]            = _MIRROR_OFFSET_SMG,
+        ["PP-Bizon"]       = _MIRROR_OFFSET_SMG,
     }
 
     local function _mirrorOffsetFor(weaponName)
@@ -16674,6 +16687,91 @@ do
         end
     end
 
+    -- ============================================================
+    -- SELF-DUMMY: Third Person now ALWAYS renders the player as a
+    -- cloned dummy (same outfit / accessories / skin), even when
+    -- Custom Player Model is Off. Fixes the "flickering / blinking
+    -- original body" issue by replacing the animated character with
+    -- a rigid clone that follows every Motor6D via WeldConstraints.
+    -- The original character is kept alive (physics, hitbox, anims)
+    -- but hidden locally through LocalTransparencyModifier.
+    -- ============================================================
+    local _selfDummy, _selfHidden = nil, {}
+    local _selfDummyChar = nil
+
+    local function _clearSelfDummy()
+        if _selfDummy then pcall(function() _selfDummy:Destroy() end) end
+        _selfDummy = nil
+        _selfDummyChar = nil
+        for part, val in pairs(_selfHidden) do
+            if part and part.Parent then
+                pcall(function() part.LocalTransparencyModifier = val end)
+            end
+        end
+        _selfHidden = {}
+    end
+
+    local function _buildSelfDummy()
+        _clearSelfDummy()
+        -- CPM overlay already renders its own body; don't double up.
+        if _G.ECLIPSE_HUBCPMActive then return end
+        local ch = LocalPlayer.Character; if not ch then return end
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return end
+        for _, d in ipairs(ch:GetDescendants()) do pcall(function() d.Archivable = true end) end
+        pcall(function() ch.Archivable = true end)
+        local ok, clone = pcall(function() return ch:Clone() end)
+        if not ok or not clone then return end
+        clone.Name = "_EclipseSelfDummy"
+        -- Strip scripts / disable humanoid health bar on the clone.
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("Script") or d:IsA("LocalScript") or d:IsA("ModuleScript") then
+                pcall(function() d:Destroy() end)
+            elseif d:IsA("Humanoid") then
+                pcall(function()
+                    d.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                    d.HealthDisplayType   = Enum.HumanoidHealthDisplayType.AlwaysOff
+                    d.EvaluateStateMachine = false
+                end)
+            end
+        end
+        -- Rigid-weld every clone BasePart to the matching original part so
+        -- the dummy replicates animations 1:1 without extra per-frame work.
+        for _, cp in ipairs(clone:GetDescendants()) do
+            if cp:IsA("BasePart") then
+                local orig = ch:FindFirstChild(cp.Name, true)
+                if orig and orig:IsA("BasePart") then
+                    pcall(function()
+                        cp.Anchored   = false
+                        cp.CanCollide = false
+                        cp.CanQuery   = false
+                        cp.CanTouch   = false
+                        cp.Massless   = true
+                        cp.CFrame     = orig.CFrame
+                        local wc = Instance.new("WeldConstraint")
+                        wc.Name   = "_EclipseSelfWeld"
+                        wc.Part0  = orig
+                        wc.Part1  = cp
+                        wc.Parent = cp
+                    end)
+                end
+            end
+        end
+        clone.Parent = workspace
+        _selfDummy = clone
+        _selfDummyChar = ch
+        -- Hide the original locally (server-side character untouched).
+        for _, p in ipairs(ch:GetDescendants()) do
+            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                _selfHidden[p] = p.LocalTransparencyModifier or 0
+                pcall(function() p.LocalTransparencyModifier = 1 end)
+            end
+        end
+    end
+
+    _G.ECLIPSE_HUBSelfDummyBuild = _buildSelfDummy
+    _G.ECLIPSE_HUBSelfDummyClear = _clearSelfDummy
+
     local _tpOldType = nil
     local function _tpEnable()
         _tpOldMax  = _tpOldMax  or LocalPlayer.CameraMaxZoomDistance
@@ -16689,6 +16787,9 @@ do
         end)
         if _G.ECLIPSE_HUBGlassFXClear then pcall(_G.ECLIPSE_HUBGlassFXClear) end
         if _tpConn then pcall(function() _tpConn:Disconnect() end) end
+        -- Build the self-dummy right away so the flickering original body
+        -- is replaced from the first frame TP is enabled.
+        pcall(_buildSelfDummy)
         _tpConn = connectSignal(RunS.RenderStepped:Connect(function()
             if not scriptRunning then return end
             if not Config.Misc.ThirdPerson then return end
@@ -16701,6 +16802,11 @@ do
             cam.CameraSubject = ch:FindFirstChildOfClass("Humanoid") or cam.CameraSubject
             cam.CFrame = CFrame.new(hrp.Position + (cam.CFrame.LookVector * -10) + Vector3.new(0, 3, 0), hrp.Position)
             pcall(_updateMirror)
+            -- Rebuild the self-dummy if the character was swapped (respawn,
+            -- skin change) so it never desyncs from the original body.
+            if not _G.ECLIPSE_HUBCPMActive and (not _selfDummy or not _selfDummy.Parent or _selfDummyChar ~= ch) then
+                pcall(_buildSelfDummy)
+            end
             -- Everything below (character/viewmodel descendant stomps) is
             -- expensive. Throttle to ~10Hz; the mirror itself is already updated
             -- above every RenderStepped so it remains fixed in the hand.
@@ -16708,8 +16814,16 @@ do
             local now = tick()
             if now < _tpNextHeavy then return end
             _tpNextHeavy = now + ES152.adaptiveInterval(0.16, 2)
-            -- Reveal the character body...
-            if not _G.ECLIPSE_HUBCPMActive then
+            -- Keep the original body hidden while the self-dummy is what
+            -- the user actually sees. If CPM took over, it manages its own
+            -- overlay and hiding.
+            if not _G.ECLIPSE_HUBCPMActive and _selfDummy and _selfDummy.Parent then
+                for _, p in ipairs(ch:GetDescendants()) do
+                    if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                        pcall(function() p.LocalTransparencyModifier = 1 end)
+                    end
+                end
+            elseif not _G.ECLIPSE_HUBCPMActive then
                 for _, p in ipairs(ch:GetDescendants()) do
                     if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
                         pcall(function() p.LocalTransparencyModifier = 0 end)
@@ -16751,6 +16865,7 @@ do
         Config.Misc.ThirdPerson = false
         if _tpConn then pcall(function() _tpConn:Disconnect() end); _tpConn = nil end
         pcall(_clearMirror)
+        pcall(_clearSelfDummy)
         pcall(function()
             LocalPlayer.CameraMaxZoomDistance = _tpOldMax  or 0.5
             LocalPlayer.CameraMinZoomDistance = _tpOldMin  or 0.5
@@ -16775,10 +16890,8 @@ do
     connectSignal(LocalPlayer.CharacterAdded:Connect(function(ch)
         if not scriptRunning then return end
         pcall(_clearMirror)
+        pcall(_clearSelfDummy)
         if Config.Misc.ThirdPerson then
-            -- Self-heal: aguarda o HRP nascer antes de re-habilitar TP em vez
-            -- de dormir 0.3s fixo — vários mapas montam o Character em ordens
-            -- diferentes, e o delay fixo falhava (usuário precisava toggle off/on).
             task.spawn(function()
                 for _ = 1, 60 do
                     if ch and ch:FindFirstChild("HumanoidRootPart") then break end
@@ -16786,8 +16899,6 @@ do
                 end
                 if scriptRunning and Config.Misc.ThirdPerson then pcall(_tpEnable) end
             end)
-            -- Se algum outro sistema (respawn/anti-cheat) trocar o CameraType
-            -- ou reanexar viewmodel, reaplica ao detectar mudança relevante.
             local ccAdded
             ccAdded = ch.ChildAdded:Connect(function(c)
                 if not scriptRunning or not Config.Misc.ThirdPerson then return end
@@ -16801,6 +16912,7 @@ do
 
     connectSignal(LocalPlayer.CharacterRemoving:Connect(function()
         pcall(_clearMirror)
+        pcall(_clearSelfDummy)
     end))
 end
 
@@ -18728,6 +18840,8 @@ do
         local ch  = LocalPlayer.Character
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
         if not (ch and hum and hum.Health > 0) then return end
+        -- CPM takes over the visible body; retire the self-dummy first.
+        pcall(function() if _G.ECLIPSE_HUBSelfDummyClear then _G.ECLIPSE_HUBSelfDummyClear() end end)
         local model = _buildModel(name); if not model then return end
         -- Uniform final resize so limb offsets scale with the overall height.
         local cfg = OUTFITS[name]
@@ -18755,7 +18869,15 @@ do
         Callback = function(v)
             Config.Misc.CustomPlayerModel = v
             task.spawn(function()
-                if v == "Off" then _clearOverlay(); return end
+                if v == "Off" then
+                    _clearOverlay()
+                    -- CPM went Off: if TP is on, bring the self-dummy back
+                    -- so the player still sees a cloned body, not the original.
+                    if Config.Misc.ThirdPerson == true and _G.ECLIPSE_HUBSelfDummyBuild then
+                        pcall(_G.ECLIPSE_HUBSelfDummyBuild)
+                    end
+                    return
+                end
                 if Config.Misc.ThirdPerson == true then _applyModel(v) else _clearOverlay() end
             end)
         end
@@ -24494,6 +24616,5 @@ end
 
 
 end)()
-
 
 
