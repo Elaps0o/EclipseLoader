@@ -6753,50 +6753,50 @@ function updateChams()
     local invColor  = Config.ESP.InvisibleChamsColor or baseColor
 
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then continue end
-
-        if IsAlly(plr) and not (PresenceUsers and PresenceUsers[plr.UserId]) then
-            _destroyChamsFor(plr)
-        else
-            local char = plr.Character
-            local hum  = char and char:FindFirstChildOfClass("Humanoid")
-            if not char or not char.Parent or not hum or hum.Health <= 0 then
+        if plr ~= LocalPlayer then
+            if IsAlly(plr) and not (PresenceUsers and PresenceUsers[plr.UserId]) then
                 _destroyChamsFor(plr)
             else
-                local data = _getChamsData(plr, holder)
-                local col = baseColor
-                if Config.ESP.VisibleCheck then
-                    local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
-                    local vis = head and IsVisible(head)
-                    col = vis and visColor or invColor
-                end
-
-                local seen = {}
-                for _, part in ipairs(char:GetDescendants()) do
-                    if _chamsPartIncluded(part) then
-                        seen[part] = true
-                        local box = data.boxes[part]
-                        if not box or not box.Parent then
-                            box = Instance.new("BoxHandleAdornment")
-                            box.Name = "ECLIPSE_HUBChamsBox"
-                            box.AlwaysOnTop = true
-                            box.ZIndex = 5
-                            box.Transparency = 0.35
-                            box.Parent = holder
-                            data.boxes[part] = box
-                        end
-                        pcall(function()
-                            box.Adornee = part
-                            box.Size    = part.Size
-                            box.Color3  = col
-                        end)
+                local char = plr.Character
+                local hum  = char and char:FindFirstChildOfClass("Humanoid")
+                if not char or not char.Parent or not hum or hum.Health <= 0 then
+                    _destroyChamsFor(plr)
+                else
+                    local data = _getChamsData(plr, holder)
+                    local col = baseColor
+                    if Config.ESP.VisibleCheck then
+                        local head = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+                        local vis = head and IsVisible(head)
+                        col = vis and visColor or invColor
                     end
-                end
-                -- prune stale
-                for part, box in pairs(data.boxes) do
-                    if not seen[part] then
-                        pcall(function() box:Destroy() end)
-                        data.boxes[part] = nil
+
+                    local seen = {}
+                    for _, part in ipairs(char:GetDescendants()) do
+                        if _chamsPartIncluded(part) then
+                            seen[part] = true
+                            local box = data.boxes[part]
+                            if not box or not box.Parent then
+                                box = Instance.new("BoxHandleAdornment")
+                                box.Name = "ECLIPSE_HUBChamsBox"
+                                box.AlwaysOnTop = true
+                                box.ZIndex = 5
+                                box.Transparency = 0.35
+                                box.Parent = holder
+                                data.boxes[part] = box
+                            end
+                            pcall(function()
+                                box.Adornee = part
+                                box.Size    = part.Size
+                                box.Color3  = col
+                            end)
+                        end
+                    end
+                    -- prune stale
+                    for part, box in pairs(data.boxes) do
+                        if not seen[part] then
+                            pcall(function() box:Destroy() end)
+                            data.boxes[part] = nil
+                        end
                     end
                 end
             end
@@ -6842,12 +6842,13 @@ function updateESP()
     local seen = {}
 
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer then continue end
-        seen[plr] = true
-        local info = _espProcessPlayer(plr, myRoot, center)
-        if info and info.aimDist < closestDist then
-            closestDist = info.aimDist
-            closest = info
+        if plr ~= LocalPlayer then
+            seen[plr] = true
+            local info = _espProcessPlayer(plr, myRoot, center)
+            if info and info.aimDist < closestDist then
+                closestDist = info.aimDist
+                closest = info
+            end
         end
     end
 
@@ -8338,29 +8339,32 @@ function updateAimbot()
     end
     local closestPart, closestDist = nil, scopeFOV
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr == LocalPlayer or not IsEnemy(plr) then continue end
-        local char = GetCharacter(plr); if not char then continue end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then continue end
-        local part
-        if isAWP or isSniper then
-            part = char:FindFirstChild("Head") or GetAimbotTargetPart(char)
-        else
-            part = GetAimbotTargetPart(char)
-        end
+        if plr ~= LocalPlayer and IsEnemy(plr) then
+            local char = GetCharacter(plr)
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                local part
+                if isAWP or isSniper then
+                    part = char:FindFirstChild("Head") or GetAimbotTargetPart(char)
+                else
+                    part = GetAimbotTargetPart(char)
+                end
 
-        if not part then continue end
-
-        if Config.Aimbot.VisibilityCheck then
-            local okHit = _ECLIPSE_HUBHitPossible(part, Config.Aimbot.WallBang)
-            if not okHit then continue end
-        end
-
-        if Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then continue end
-        local sp, on = Camera:WorldToViewportPoint(part.Position)
-        if on and sp.Z > 0 and sp.X == sp.X and sp.Y == sp.Y then
-            local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
-            if d < closestDist then closestDist = d; closestPart = part end
+                local okTarget = part ~= nil
+                if okTarget and Config.Aimbot.VisibilityCheck then
+                    okTarget = _ECLIPSE_HUBHitPossible(part, Config.Aimbot.WallBang)
+                end
+                if okTarget and Config.Aimbot.DisableInSmoke and Camera and _aimRayHitsSmoke(Camera.CFrame.Position, part.Position) then
+                    okTarget = false
+                end
+                if okTarget then
+                    local sp, on = Camera:WorldToViewportPoint(part.Position)
+                    if on and sp.Z > 0 and sp.X == sp.X and sp.Y == sp.Y then
+                        local d = (Vector2.new(sp.X, sp.Y) - mp).Magnitude
+                        if d < closestDist then closestDist = d; closestPart = part end
+                    end
+                end
+            end
         end
     end
     if closestPart then
@@ -14181,7 +14185,9 @@ do
     local function _clearAll()
         for p, _ in pairs(touched) do _restorePart(p) end
         _clearOutlines()
-        pcall(function() RunService:UnbindFromRenderStep("ECLIPSE_HUBGlassHide") end)
+        -- Keep the RenderStep binding alive; it is gated by scriptRunning and
+        -- Config.Visuals.GlassFX. Unbinding here made GlassFX fail after toggling
+        -- Third Person off/on because the cleanup path is also used there.
         -- Belt-and-suspenders sweep: after a respawn/skinchanger rebuild the
         -- `touched` map may reference dead parts, leaving welded shell clones
         -- and Highlights orphaned on the fresh character. Walk the LP model
@@ -14358,10 +14364,12 @@ do
         local hosts = {}
         local ch = LP and LP.Character
         if _G.ECLIPSE_HUBCPMActive then
-            -- Com CPM ativo, o corpo real do LP fica invisível: pinta o overlay
-            -- dummy pra que Glass Effect continue visível em 3ª pessoa e faca.
-            local ov = workspace:FindFirstChild("ECLIPSE_HUBCPMOverlay")
-            if ov and ov.Parent then hosts[#hosts + 1] = ov end
+            -- Com CPM ativo fora do Third Person, pinta o overlay dummy. Quando
+            -- Third Person está ativo, o heartbeat do GlassFX limpa tudo antes.
+            if not (Config.Misc and Config.Misc.ThirdPerson) then
+                local ov = workspace:FindFirstChild("ECLIPSE_HUBCPMOverlay")
+                if ov and ov.Parent then hosts[#hosts + 1] = ov end
+            end
         elseif ch and ch.Parent then
             hosts[#hosts + 1] = ch
         end
@@ -14408,7 +14416,8 @@ do
         if part.Name == "ECLIPSE_HUBGlassShell" then return false end
         if _isHeadOrFace(part) or _isHelperPart(part) then return false end
         if LP and LP.Character and host == LP.Character then
-            if part:IsDescendantOf(LP.Character:FindFirstChildOfClass("Tool") or Instance.new("Folder")) then return false end
+            local tool = LP.Character:FindFirstChildOfClass("Tool")
+            if tool and part:IsDescendantOf(tool) then return false end
             if _insideClass(part, "Accessory") or _hasOverlayHint(part, host) then return false end
             return true
         end
@@ -14462,6 +14471,13 @@ do
         local on = Config.Visuals.GlassFX
         if not on then
             if next(touched) or next(outlines) then _clearAll() end
+            return
+        end
+        -- In Third Person the LP body/viewmodel is intentionally cleaned/hidden.
+        -- GlassFX must follow that same dynamic: no glass shell/outline should
+        -- remain visible while Third Person is active.
+        if Config.Misc and Config.Misc.ThirdPerson then
+            if next(touched) or next(outlines) or next(shells) then _clearAll() end
             return
         end
         if not ES152.tick("GlassFX.scan", 0.25) then return end
@@ -14543,10 +14559,13 @@ do
     pcall(function()
         RunService:BindToRenderStep("ECLIPSE_HUBGlassHide", Enum.RenderPriority.Camera.Value + 5, function()
             if not scriptRunning or not Config.Visuals.GlassFX then return end
+            if Config.Misc and Config.Misc.ThirdPerson then return end
             for p, _ in pairs(touched) do
                 if p and p.Parent then
-                    if p.Transparency ~= 1 then p.Transparency = 1 end
-                    if p.LocalTransparencyModifier ~= 0 then p.LocalTransparencyModifier = 0 end
+                    pcall(function()
+                        if p.Transparency ~= 1 then p.Transparency = 1 end
+                        if p.LocalTransparencyModifier ~= 0 then p.LocalTransparencyModifier = 0 end
+                    end)
                 end
             end
         end)
@@ -14581,18 +14600,19 @@ task.spawn(function()
     while scriptRunning do
         task.wait(1.0)
         if not scriptRunning then break end
-        if Library and Library.Toggled == false then continue end
-        local sg = Library and Library.ScreenGui
-        if sg then
-            local processed = 0
-            for _, d in ipairs(sg:GetDescendants()) do
-                processed = processed + 1
-                ES152.yieldEvery(processed, 120)
-                if d:IsA("Frame") and d.Name and (d.Name:find("Color") or d.Name:find("Picker") or d.Name:find("Palette")) then
-                    if d.Visible and d.Size and d.Size.X.Offset >= 120 then
-                        pcall(function() d.ZIndex = 500 end)
-                        for _, c in ipairs(d:GetDescendants()) do
-                            if c:IsA("GuiObject") then pcall(function() c.ZIndex = 501 end) end
+        if not (Library and Library.Toggled == false) then
+            local sg = Library and Library.ScreenGui
+            if sg then
+                local processed = 0
+                for _, d in ipairs(sg:GetDescendants()) do
+                    processed = processed + 1
+                    ES152.yieldEvery(processed, 120)
+                    if d:IsA("Frame") and d.Name and (d.Name:find("Color") or d.Name:find("Picker") or d.Name:find("Palette")) then
+                        if d.Visible and d.Size and d.Size.X.Offset >= 120 then
+                            pcall(function() d.ZIndex = 500 end)
+                            for _, c in ipairs(d:GetDescendants()) do
+                                if c:IsA("GuiObject") then pcall(function() c.ZIndex = 501 end) end
+                            end
                         end
                     end
                 end
@@ -16200,27 +16220,29 @@ do
     local _mirrorClone, _mirrorSourceName, _mirrorSourceRef, _mirrorRootRel, _mirrorLastSeen, _mirrorNextUnhide
     local _mirrorWeaponCache, _mirrorWeaponCacheAt = nil, 0
     local _mirrorOffset
-    -- Source-style mirror: the clone follows the character hand CFrame directly.
-    -- The previous camera/axis correction made pistols/R8 drift sideways and
-    -- fought the player animation. These offsets keep the model locked to the
-    -- palm while all firearms share the same forward grip rotation.
-    local _MIRROR_ROT_FIREARM = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-    local _MIRROR_ROT_KNIFE   = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-    local _MIRROR_OFFSET_PISTOL = CFrame.new(0.10, -0.08, -0.30) * _MIRROR_ROT_FIREARM
-    local _MIRROR_OFFSET_LONG   = CFrame.new(0.12, -0.10, -0.28) * _MIRROR_ROT_FIREARM
-    local _MIRROR_OFFSET_SNIPER = CFrame.new(0.14, -0.08, -0.42) * _MIRROR_ROT_FIREARM
-    local _MIRROR_OFFSET_SHOTGUN= CFrame.new(0.12, -0.10, -0.34) * _MIRROR_ROT_FIREARM
-    local _MIRROR_OFFSET_SMG    = CFrame.new(0.11, -0.09, -0.26) * _MIRROR_ROT_FIREARM
-    local _MIRROR_OFFSET_HEAVY  = CFrame.new(0.14, -0.12, -0.34) * _MIRROR_ROT_FIREARM
-    local _MIRROR_OFFSET_KNIFE  = CFrame.new(0.10, -0.06, -0.55) * _MIRROR_ROT_KNIFE
+    -- Mirror grip remaster:
+    -- Rifles/snipers/SMGs use the original source-style -90/-90 hand rotation.
+    -- Pistols/R8/Deagle do NOT share that axis in the game assets; forcing the
+    -- rifle rotation is what made them point sideways. Keep the dedicated
+    -- pistol axis from the source and only tune translation per class.
+    local _MIRROR_ROT_LONG   = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
+    local _MIRROR_ROT_PISTOL = CFrame.Angles(math.rad(-90), 0, math.rad(2))
+    local _MIRROR_ROT_KNIFE  = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
+    local _MIRROR_OFFSET_PISTOL = CFrame.new(0.18, -0.18, -0.46) * _MIRROR_ROT_PISTOL
+    local _MIRROR_OFFSET_LONG   = CFrame.new(0.12, -0.10, -0.28) * _MIRROR_ROT_LONG
+    local _MIRROR_OFFSET_SNIPER = CFrame.new(0.14, -0.08, -0.42) * _MIRROR_ROT_LONG
+    local _MIRROR_OFFSET_SHOTGUN= CFrame.new(0.12, -0.10, -0.34) * _MIRROR_ROT_LONG
+    local _MIRROR_OFFSET_SMG    = CFrame.new(0.11, -0.09, -0.27) * _MIRROR_ROT_LONG
+    local _MIRROR_OFFSET_HEAVY  = CFrame.new(0.14, -0.12, -0.34) * _MIRROR_ROT_LONG
+    local _MIRROR_OFFSET_KNIFE  = CFrame.new(0.10, -0.06, -0.28) * _MIRROR_ROT_KNIFE
 
     local _MIRROR_OFFSET_OVERRIDES = {
-        ["R8 Revolver"]    = CFrame.new(0.08, -0.06, -0.24) * _MIRROR_ROT_FIREARM,
-        ["Desert Eagle"]   = CFrame.new(0.10, -0.08, -0.28) * _MIRROR_ROT_FIREARM,
-        ["Dual Berettas"]  = CFrame.new(0.10, -0.08, -0.26) * _MIRROR_ROT_FIREARM,
-        ["Five-SeveN"]     = CFrame.new(0.10, -0.08, -0.28) * _MIRROR_ROT_FIREARM,
-        ["CZ75-Auto"]      = CFrame.new(0.10, -0.08, -0.28) * _MIRROR_ROT_FIREARM,
-        ["Tec-9"]          = CFrame.new(0.10, -0.08, -0.30) * _MIRROR_ROT_FIREARM,
+        ["R8 Revolver"]    = CFrame.new(0.18, -0.18, -0.42) * _MIRROR_ROT_PISTOL,
+        ["Desert Eagle"]   = CFrame.new(0.18, -0.18, -0.44) * _MIRROR_ROT_PISTOL,
+        ["Dual Berettas"]  = CFrame.new(0.17, -0.17, -0.42) * _MIRROR_ROT_PISTOL,
+        ["Five-SeveN"]     = CFrame.new(0.18, -0.18, -0.44) * _MIRROR_ROT_PISTOL,
+        ["CZ75-Auto"]      = CFrame.new(0.18, -0.18, -0.44) * _MIRROR_ROT_PISTOL,
+        ["Tec-9"]          = CFrame.new(0.18, -0.18, -0.45) * _MIRROR_ROT_PISTOL,
         ["Negev"]          = _MIRROR_OFFSET_HEAVY,
         ["M249"]           = _MIRROR_OFFSET_HEAVY,
         ["Nova"]           = _MIRROR_OFFSET_SHOTGUN,
@@ -16314,6 +16336,7 @@ do
         end
         _G.__ECLIPSE_MIRROR_CLONE = nil
         _mirrorSourceName, _mirrorSourceRef, _mirrorRootRel = nil, nil, nil
+        _mirrorOffset = nil
         _mirrorLastSeen, _mirrorNextUnhide = nil, nil
         _mirrorWeaponCache, _mirrorWeaponCacheAt = nil, 0
     end
@@ -16377,7 +16400,7 @@ do
             or s:find("edge")   or s:find("knife")  or s:find("bayonet")
             or s:find("karambit") or s:find("dagger") or s:find("kukri")
             or s:find("butterfly") or s:find("flip") or s:find("stiletto")
-            or s:find("skeleton") or s:find("mesh") or s:find("part")
+            or s:find("skeleton")
             or s == "root" or s == "primarypart"
     end
 
@@ -16477,12 +16500,12 @@ do
             elseif d:IsA("BasePart") then
                 if _mirrorIsBodyDesc(d, clone) then
                     pcall(function() d:Destroy() end)
-                    continue
+                else
+                    d.CanCollide = false; d.CanQuery = false; d.CanTouch = false
+                    d.Massless   = true
+                    d.Anchored   = true
+                    pcall(function() d.LocalTransparencyModifier = 0 end)
                 end
-                d.CanCollide = false; d.CanQuery = false; d.CanTouch = false
-                d.Massless   = true
-                d.Anchored   = true
-                pcall(function() d.LocalTransparencyModifier = 0 end)
             elseif d:IsA("Decal") or d:IsA("Texture") then
                 pcall(function() d.LocalTransparencyModifier = 0 end)
             elseif d:IsA("Light") or d:IsA("PointLight") or d:IsA("SpotLight")
@@ -16646,7 +16669,7 @@ do
 
     local function _hideVM()
         for _, p in ipairs(_getVMVisualParts()) do
-            if p and p.Parent then p.LocalTransparencyModifier = 1 end
+            if p and p.Parent then pcall(function() p.LocalTransparencyModifier = 1 end) end
         end
     end
 
@@ -16655,13 +16678,15 @@ do
         _tpOldMax  = _tpOldMax  or LocalPlayer.CameraMaxZoomDistance
         _tpOldMin  = _tpOldMin  or LocalPlayer.CameraMinZoomDistance
         _tpOldMode = _tpOldMode or LocalPlayer.CameraMode
-        _tpOldType = _tpOldType or workspace.CurrentCamera.CameraType
+        local _camNow = workspace.CurrentCamera
+        _tpOldType = _tpOldType or ((_camNow and _camNow.CameraType) or Enum.CameraType.Custom)
         pcall(function()
             LocalPlayer.CameraMode = Enum.CameraMode.Classic
             LocalPlayer.CameraMaxZoomDistance = 40
             LocalPlayer.CameraMinZoomDistance = 0.5
             workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
         end)
+        if _G.ECLIPSE_HUBGlassFXClear then pcall(_G.ECLIPSE_HUBGlassFXClear) end
         if _tpConn then pcall(function() _tpConn:Disconnect() end) end
         _tpConn = connectSignal(RunS.RenderStepped:Connect(function()
             if not scriptRunning then return end
@@ -19937,23 +19962,23 @@ function showTermsModal(onAccept)
     acceptLabel.ZIndex = 9
     acceptLabel.Parent = row
 
-    local continue = Instance.new("TextButton")
-    continue.Name = "Continue"
-    continue.AnchorPoint = Vector2.new(1, 1)
-    continue.Position = UDim2.new(1, -28, 1, -26)
-    continue.Size = UDim2.fromOffset(144, 38)
-    continue.BackgroundColor3 = ACCENT
-    continue.BackgroundTransparency = 1
-    continue.BorderSizePixel = 0
-    continue.AutoButtonColor = false
-    continue.Font = Enum.Font.GothamBold
-    continue.TextSize = 13
-    continue.TextColor3 = Color3.fromRGB(255, 255, 255)
-    continue.TextTransparency = 1
-    continue.Text = "CONTINUE"
-    continue.ZIndex = 8
-    continue.Parent = card
-    Instance.new("UICorner", continue).CornerRadius = UDim.new(0, 6)
+    local continueBtn = Instance.new("TextButton")
+    continueBtn.Name = "Continue"
+    continueBtn.AnchorPoint = Vector2.new(1, 1)
+    continueBtn.Position = UDim2.new(1, -28, 1, -26)
+    continueBtn.Size = UDim2.fromOffset(144, 38)
+    continueBtn.BackgroundColor3 = ACCENT
+    continueBtn.BackgroundTransparency = 1
+    continueBtn.BorderSizePixel = 0
+    continueBtn.AutoButtonColor = false
+    continueBtn.Font = Enum.Font.GothamBold
+    continueBtn.TextSize = 13
+    continueBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    continueBtn.TextTransparency = 1
+    continueBtn.Text = "CONTINUE"
+    continueBtn.ZIndex = 8
+    continueBtn.Parent = card
+    Instance.new("UICorner", continueBtn).CornerRadius = UDim.new(0, 6)
 
     local T = TweenService
     local function tween(obj, ti, props) pcall(function() T:Create(obj, ti, props):Play() end) end
@@ -19962,7 +19987,7 @@ function showTermsModal(onAccept)
     tween(card, IN, { BackgroundTransparency = 0.03, Position = UDim2.fromScale(0.5, 0.5) })
     tween(stroke, IN, { Transparency = 0.18 })
     tween(accent, IN, { BackgroundTransparency = 0 })
-    for _, obj in ipairs({ logo, eyebrow, title, body, noteText, acceptLabel, continue }) do
+    for _, obj in ipairs({ logo, eyebrow, title, body, noteText, acceptLabel, continueBtn }) do
         tween(obj, TweenInfo.new(0.32, Enum.EasingStyle.Sine), { TextTransparency = obj:IsA("ImageLabel") and nil or 0 })
     end
     tween(logo, TweenInfo.new(0.32, Enum.EasingStyle.Sine), { ImageTransparency = 0 })
@@ -19971,7 +19996,7 @@ function showTermsModal(onAccept)
     tween(ns, IN, { Transparency = 0.35 })
     tween(box, IN, { BackgroundTransparency = 0 })
     tween(bs, IN, { Transparency = 0.25 })
-    tween(continue, IN, { BackgroundTransparency = 0.55, TextTransparency = 0.35 })
+    tween(continueBtn, IN, { BackgroundTransparency = 0.55, TextTransparency = 0.35 })
 
     local busy = false
     local function setAccepted(v)
@@ -19979,19 +20004,19 @@ function showTermsModal(onAccept)
         if accepted then
             box.BackgroundColor3 = GOOD
             bs.Color = GOOD
-            continue.BackgroundTransparency = 0
-            continue.TextTransparency = 0
+            continueBtn.BackgroundTransparency = 0
+            continueBtn.TextTransparency = 0
             mark.TextTransparency = 0
         else
             box.BackgroundColor3 = Color3.fromRGB(31, 27, 44)
             bs.Color = STROKE
-            continue.BackgroundTransparency = 0.55
-            continue.TextTransparency = 0.35
+            continueBtn.BackgroundTransparency = 0.55
+            continueBtn.TextTransparency = 0.35
             mark.TextTransparency = 1
         end
     end
     connectSignal(row.MouseButton1Click:Connect(function() setAccepted(not accepted) end))
-    connectSignal(continue.MouseButton1Click:Connect(function()
+    connectSignal(continueBtn.MouseButton1Click:Connect(function()
         if busy or not accepted then return end
         busy = true
         local OUT = TweenInfo.new(0.28, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
