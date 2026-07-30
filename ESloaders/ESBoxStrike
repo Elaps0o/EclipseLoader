@@ -725,7 +725,8 @@ end
 
 
 function _ECLIPSE_HUB_GetEquipped()
-    _ECLIPSE_HUB_AllowIC()
+    -- never auto-allow: the InventoryController is only touched after a feature
+    -- that actually needs it is enabled (calling AllowIC explicitly)
     local IC = _ECLIPSE_HUB_GetIC(); if not IC then return nil end
 
     local w
@@ -802,6 +803,7 @@ end)
 
 
 function _ECLIPSE_HUB_ShootCached()
+    _ECLIPSE_HUB_AllowIC()
     local weapon = _ECLIPSE_HUB_CachedWeapon
     if not weapon then
         local ok, w = pcall(_ECLIPSE_HUB_GetEquipped)
@@ -7367,25 +7369,10 @@ function updateWorldESP()
                         end
                     end
 
-                    local life = GRENADE_LIFETIME[info.kind]
-                    if life and e.Timer then
-                        local seen = WorldGrenadeFirstSeen[child]
-                        if not seen then
-                            seen = tick(); WorldGrenadeFirstSeen[child] = seen
-                        end
-                        local remain = life - (tick() - seen)
-                        if remain < 0 then remain = 0 end
-                        e.Timer.Text = string.format("%.1fs", remain)
-                        e.Timer.Color = Color3.fromRGB(255,255,255)
-                        e.Timer.Transparency = fade
-                        
-                        local tsize = math.clamp(math.floor(900 / math.max(1, dist * 0.35)), 22, 56)
-                        e.Timer.Size = tsize
-                        e.Timer.Position = Vector2.new(sp.X, sp.Y - tsize * 0.5)
-                        e.Timer.Visible = true
-                    elseif e.Timer then
-                        e.Timer.Visible = false
-                    end
+                    -- big floating grenade countdown removed: the zone ring
+                    -- already carries the single fixed timer
+                    if e.Timer then e.Timer.Visible = false end
+
 
                 else
                     hideWorldEntry(e)
@@ -14193,18 +14180,27 @@ do
             hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
             hum.BreakJointsOnDeath = false
             hum.Health = hum.MaxHealth
-            local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
-            local anim = Instance.new("Animation")
-            anim.AnimationId = (hum.RigType == Enum.HumanoidRigType.R15)
-                and "rbxassetid://507766666" or "rbxassetid://180435571"
+        end
+        PV.track = nil
+        local function freezePose()
+            if not clone or not clone.Parent then return end
             pcall(function()
-                local track = animator:LoadAnimation(anim)
-                track.Looped = true
-                track.Priority = Enum.AnimationPriority.Idle
-                track:Play()
-                PV.track = track
+                for _, d in ipairs(clone:GetDescendants()) do
+                    if d:IsA("Animator") then
+                        for _, t in ipairs(d:GetPlayingAnimationTracks()) do pcall(function() t:Stop(0) end) end
+                        d:Destroy()
+                    elseif d:IsA("Animation") or d:IsA("AnimationController") then
+                        d:Destroy()
+                    end
+                end
+                for _, d in ipairs(clone:GetDescendants()) do
+                    if d:IsA("Motor6D") then d.Transform = CFrame.new() end
+                end
             end)
         end
+        freezePose()
+        task.delay(0.15, freezePose)
+        task.delay(0.5, freezePose)
         rig = clone
         PV.hl = nil
     end
@@ -14387,13 +14383,24 @@ do
         end
 
         if Config.ESP.WeaponName then
-            local wname = PV.fakeWeapon or "AK-47"
             local BOX_W = math.max(8, math.floor(R2 - L2))
             local ICON_H = math.clamp(math.floor(BOX_W * 0.32), 10, 16)
             if PV.wepIconAsset == nil then
-                local okI, asset = pcall(function() return _espIconAssetForWeapon(wname) end)
-                PV.wepIconAsset = (okI and type(asset) == "string" and asset ~= "") and asset or false
+                local pool = { "AK-47", "M4A1", "AWP", "Glock", "Deagle", "MP5", "Famas", "Scout", "USP", "Vector" }
+                local found = false
+                for _ = 1, #pool do
+                    local pick = pool[math.random(1, #pool)]
+                    local okI, asset = pcall(function() return _espIconAssetForWeapon(pick) end)
+                    if okI and type(asset) == "string" and asset ~= "" then
+                        PV.wepIconAsset = asset
+                        PV.fakeWeapon = pick
+                        found = true
+                        break
+                    end
+                end
+                if not found then PV.wepIconAsset = false end
             end
+            PV.wep.Visible = false
             if PV.wepIconAsset then
                 PV.wepIcon.Image = PV.wepIconAsset
                 PV.wepIcon.ImageColor3 = Color3.new(1,1,1)
@@ -14401,11 +14408,6 @@ do
                 PV.wepIcon.Size = UDim2.fromOffset(BOX_W, ICON_H)
                 PV.wepIcon.Position = UDim2.fromOffset(math.floor(cx), math.floor(B2 + 4))
                 PV.wepIcon.Visible = true
-            else
-                PV.wep.Text = string.upper(wname)
-                PV.wep.TextColor3 = (Config.ESP.WeaponNameColor or col)
-                PV.wep.Position = UDim2.fromOffset(math.floor(cx), math.floor(B2 + 10))
-                PV.wep.Visible = true
             end
         end
 
@@ -14638,13 +14640,13 @@ Config.Grenade.ESP = false
 Config.Grenade.Trajectory3D = true
 
 Config.Grenade.ZoneESP    = Config.Grenade.ZoneESP    or false
-Config.Grenade.ZoneColor  = Config.Grenade.ZoneColor  or Color3.fromRGB(255, 60, 0)
+Config.Grenade.ZoneColor  = Config.Grenade.ZoneColor  or Color3.fromRGB(255, 255, 255)
 do
     
     local _GZ = { Zones = {}, Hooked = false }
     
     local function _gzColor()
-        return Config.Grenade.ZoneColor or Color3.fromRGB(255, 60, 0)
+        return Config.Grenade.ZoneColor or Color3.fromRGB(255, 255, 255)
     end
 
     local function _boundsFor(folder)
@@ -18901,6 +18903,7 @@ do
     local function _bindScope()
         if SC.bound then return end
         SC.bound = true
+        if type(_ECLIPSE_HUB_AllowIC) == "function" then pcall(_ECLIPSE_HUB_AllowIC) end
         pcall(function()
             RunService:BindToRenderStep("ECLIPSE_HUBScopeSys", Enum.RenderPriority.Camera.Value + 5, _scopeStep)
         end)
@@ -25316,6 +25319,7 @@ task.defer(function() pcall(function()
 
     local function tick_autoshoot()
         if not (Toggles.HVH_AutoKill and Toggles.HVH_AutoKill.Value) then return end
+        if type(_ECLIPSE_HUB_AllowIC) == "function" then pcall(_ECLIPSE_HUB_AllowIC) end
         local now = tick()
         if now < nextShotAllowed then return end
         if akIsReloading then return end
@@ -25624,31 +25628,22 @@ end)()
     })
 end)()
 
+
 -- ============================================================
--- LONG JUMP + PIXEL SURF
+-- LONG JUMP + WALL SURF (preset, no sliders)
 -- ============================================================
 ;(function()
     Config.Movement = Config.Movement or {}
-    Config.Movement.LongJump          = false
-    Config.Movement.LongJumpPower     = 55
-    Config.Movement.LongJumpUp        = 12
-    Config.Movement.LongJumpMode      = "On Jump"
-    Config.Movement.LongJumpCooldown  = 0.35
-
-    Config.Movement.PixelSurf         = false
-    Config.Movement.PixelSurfSpeed    = 90
-    Config.Movement.PixelSurfAccel    = 260
-    Config.Movement.PixelSurfAngle    = 32
-    Config.Movement.PixelSurfHeight   = 3.2
-    Config.Movement.PixelSurfSize     = 7
-    Config.Movement.PixelSurfVisible  = false
-    Config.Movement.PixelSurfColor    = Color3.fromRGB(120, 190, 255)
-    Config.Movement.PixelSurfAirOnly  = true
-    Config.Movement.PixelSurfNoFall   = true
+    Config.Movement.LongJump  = false
+    Config.Movement.PixelSurf = false
 
     local UIS       = game:GetService("UserInputService")
     local RunSvc    = game:GetService("RunService")
     local Workspace = game:GetService("Workspace")
+
+    -- preset tuning (embedded, not exposed in the UI)
+    local LJ_POWER, LJ_UP, LJ_CD = 78, 22, 0.35
+    local WS_SPEED, WS_STICK, WS_RANGE, WS_FALL = 46, 14, 4.5, -4
 
     local function _lpChar()
         local ch = LocalPlayer and LocalPlayer.Character
@@ -25659,36 +25654,19 @@ end)()
         return ch, hrp, hum
     end
 
-    local function _keyDown(optName)
-        local opt = Library and Library.Options and Library.Options[optName]
-        if not opt then return false end
-        local kc = opt.Value
-        if typeof(kc) == "EnumItem" and kc ~= Enum.KeyCode.Unknown then
-            local ok, down = pcall(function() return UIS:IsKeyDown(kc) end)
-            return ok and down or false
-        end
-        if type(kc) == "string" then
-            local ok, en = pcall(function() return Enum.KeyCode[kc] end)
-            if ok and en then
-                local ok2, down = pcall(function() return UIS:IsKeyDown(en) end)
-                return ok2 and down or false
-            end
-        end
-        return false
+    local function _isGrounded(hum)
+        local st = hum:GetState()
+        return st ~= Enum.HumanoidStateType.Freefall
+           and st ~= Enum.HumanoidStateType.Jumping
+           and st ~= Enum.HumanoidStateType.Flying
     end
 
-    -- movement direction: WASD / mobile thumbstick, falling back to camera look
     local function _moveDir(hrp)
-        local ch, _, hum = _lpChar()
+        local _, _, hum = _lpChar()
         local dir = Vector3.zero
         if hum then
             local md = hum.MoveDirection
             if md.Magnitude > 0.05 then dir = Vector3.new(md.X, 0, md.Z) end
-        end
-        if dir.Magnitude < 0.05 then
-            local v = hrp.AssemblyLinearVelocity
-            local flat = Vector3.new(v.X, 0, v.Z)
-            if flat.Magnitude > 3 then dir = flat end
         end
         if dir.Magnitude < 0.05 then
             local cam = Workspace.CurrentCamera
@@ -25700,256 +25678,152 @@ end)()
     end
 
     ------------------------------------------------------------
-    -- LONG JUMP
+    -- LONG JUMP (fires automatically the moment you leave ground)
     ------------------------------------------------------------
-    local LJ = { last = 0, wasGrounded = true, armed = false }
+    local LJ = { last = 0, wasGrounded = true }
 
-    local function _isGrounded(hum)
-        local st = hum:GetState()
-        return st ~= Enum.HumanoidStateType.Freefall
-           and st ~= Enum.HumanoidStateType.Jumping
-           and st ~= Enum.HumanoidStateType.Flying
-    end
-
-    local function _doLongJump(hrp, hum)
+    local function _doLongJump(hrp)
         local now = tick()
-        if now - LJ.last < (Config.Movement.LongJumpCooldown or 0.35) then return end
+        if now - LJ.last < LJ_CD then return end
         LJ.last = now
-        local dir   = _moveDir(hrp)
-        local power = tonumber(Config.Movement.LongJumpPower) or 55
-        local up    = tonumber(Config.Movement.LongJumpUp) or 12
-        local v     = hrp.AssemblyLinearVelocity
-        local flat  = Vector3.new(v.X, 0, v.Z)
-        local keep  = flat:Dot(dir)
-        if keep < 0 then keep = 0 end
-        local newFlat = dir * (keep * 0.35 + power)
+        local dir  = _moveDir(hrp)
+        local v    = hrp.AssemblyLinearVelocity
+        local flat = Vector3.new(v.X, 0, v.Z)
+        local keep = flat:Dot(dir); if keep < 0 then keep = 0 end
+        local newFlat = dir * (keep * 0.35 + LJ_POWER)
         pcall(function()
-            hrp.AssemblyLinearVelocity = Vector3.new(newFlat.X, math.max(v.Y, up), newFlat.Z)
+            hrp.AssemblyLinearVelocity = Vector3.new(newFlat.X, math.max(v.Y, LJ_UP), newFlat.Z)
         end)
     end
 
     ------------------------------------------------------------
-    -- PIXEL SURF (CS style ramp surfing on a generated pixel)
+    -- WALL SURF: cling to any nearby wall and slide along it
     ------------------------------------------------------------
-    local PS = { part = nil, conn = nil, active = false, speed = 0 }
+    local WS = { params = nil, attached = false }
 
-    local function _psDestroy()
-        if PS.conn then pcall(function() PS.conn:Disconnect() end) PS.conn = nil end
-        if PS.part then pcall(function() PS.part:Destroy() end) PS.part = nil end
-        PS.active = false
-        PS.speed  = 0
-        if _G.ECLIPSE_HUB_SURF_PART then _G.ECLIPSE_HUB_SURF_PART = nil end
-    end
-
-    local function _psBuild()
-        if PS.part and PS.part.Parent then return PS.part end
-        local sz = math.clamp(tonumber(Config.Movement.PixelSurfSize) or 7, 2, 24)
-        local p = Instance.new("Part")
-        p.Name         = "ECLIPSE_PixelSurf"
-        p.Anchored     = true
-        p.CanCollide   = true
-        p.CanQuery     = false
-        p.CanTouch     = false
-        p.CastShadow   = false
-        p.TopSurface   = Enum.SurfaceType.Smooth
-        p.BottomSurface= Enum.SurfaceType.Smooth
-        p.Material     = Enum.Material.Neon
-        p.Color        = Config.Movement.PixelSurfColor
-        p.Size         = Vector3.new(sz, 0.4, sz)
-        p.Transparency = Config.Movement.PixelSurfVisible and 0.55 or 1
-        p.Parent       = Workspace
-        PS.part = p
-        _G.ECLIPSE_HUB_SURF_PART = p
+    local function _wsParams(ch)
+        local p = WS.params
+        if not p then p = RaycastParams.new(); WS.params = p end
+        p.FilterType = Enum.RaycastFilterType.Exclude
+        p.IgnoreWater = true
+        local ignore = { ch }
+        if _G.ECLIPSE_HUB_SKIN_MODEL then table.insert(ignore, _G.ECLIPSE_HUB_SKIN_MODEL) end
+        if _G.ECLIPSE_HUB_SELF_DUMMY then table.insert(ignore, _G.ECLIPSE_HUB_SELF_DUMMY) end
+        p.FilterDescendantsInstances = ignore
         return p
     end
 
-    local function _psStep(dt)
+    -- looks around the player for the closest vertical surface
+    local function _findWall(ch, hrp)
+        local params = _wsParams(ch)
+        local origin = hrp.Position
+        local best, bestDist
+        local dirs = {
+            hrp.CFrame.LookVector, -hrp.CFrame.LookVector,
+            hrp.CFrame.RightVector, -hrp.CFrame.RightVector,
+        }
+        local cam = Workspace.CurrentCamera
+        if cam then
+            local lv = cam.CFrame.LookVector
+            table.insert(dirs, 1, Vector3.new(lv.X, 0, lv.Z))
+        end
+        for _, d in ipairs(dirs) do
+            if d.Magnitude > 1e-3 then
+                local r = Workspace:Raycast(origin, d.Unit * WS_RANGE, params)
+                if r and r.Instance and math.abs(r.Normal.Y) < 0.5 then
+                    local dist = (r.Position - origin).Magnitude
+                    if not bestDist or dist < bestDist then
+                        best, bestDist = r, dist
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    local function _wsStep()
         local ch, hrp, hum = _lpChar()
-        if not hrp then _psDestroy() return end
-        if Config.Movement.PixelSurfAirOnly and _isGrounded(hum) and PS.speed <= 0 then
-            if PS.part then PS.part.CFrame = CFrame.new(0, -5000, 0) end
+        if not hrp then WS.attached = false return end
+
+        local hit = _findWall(ch, hrp)
+        if not hit then
+            WS.attached = false
+            return
+        end
+        WS.attached = true
+
+        local normal = hit.Normal
+        local dir    = _moveDir(hrp)
+
+        -- project the wanted direction onto the wall plane so you glide along it
+        local along = dir - normal * dir:Dot(normal)
+        local vertical = 0
+        if UIS:IsKeyDown(Enum.KeyCode.Space)
+           or (hum and hum.Jump)
+           or (_G.ECLIPSE_HUB_MOBILE_JUMP == true) then
+            vertical = WS_SPEED * 0.75
+        elseif UIS:IsKeyDown(Enum.KeyCode.LeftControl) then
+            vertical = -WS_SPEED * 0.6
+        end
+
+        if along.Magnitude < 1e-3 and vertical == 0 then
+            pcall(function()
+                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0) - normal * WS_STICK * 0.15
+            end)
             return
         end
 
-        local part  = _psBuild()
-        local sz    = math.clamp(tonumber(Config.Movement.PixelSurfSize) or 7, 2, 24)
-        if part.Size.X ~= sz then part.Size = Vector3.new(sz, 0.4, sz) end
-        part.Transparency = Config.Movement.PixelSurfVisible and 0.55 or 1
-        part.Color        = Config.Movement.PixelSurfColor
-
-        local dir    = _moveDir(hrp)
-        local ang    = math.rad(math.clamp(tonumber(Config.Movement.PixelSurfAngle) or 32, 3, 75))
-        local hgt    = math.clamp(tonumber(Config.Movement.PixelSurfHeight) or 3.2, 1, 12)
-        local maxSpd = math.clamp(tonumber(Config.Movement.PixelSurfSpeed) or 90, 10, 500)
-        local accel  = math.clamp(tonumber(Config.Movement.PixelSurfAccel) or 260, 20, 2000)
-
-        -- ramp sits just under the feet, tilted downhill along the move direction
-        local base = hrp.Position - Vector3.new(0, hgt, 0) + dir * (sz * 0.18)
-        local look = CFrame.lookAt(base, base + dir)
-        part.CFrame = look * CFrame.Angles(ang, 0, 0)
-
-        -- surf acceleration: gravity component along the ramp, capped by max speed
-        PS.speed = PS.speed + accel * dt * math.sin(ang)
-        if PS.speed > maxSpd then
-            PS.speed = PS.speed + (maxSpd - PS.speed) * math.clamp(dt * 6, 0, 1)
+        local flat = (along.Magnitude > 1e-3) and (along.Unit * WS_SPEED) or Vector3.zero
+        local stick = -normal * WS_STICK * 0.25
+        local vy = vertical
+        if vy == 0 then
+            vy = math.max(hrp.AssemblyLinearVelocity.Y, WS_FALL)
         end
-
-        local v  = hrp.AssemblyLinearVelocity
-        local vy = v.Y
-        if Config.Movement.PixelSurfNoFall then
-            vy = math.clamp(vy, -14, math.max(vy, 0))
-        end
-        local flat = dir * PS.speed
         pcall(function()
-            hrp.AssemblyLinearVelocity = Vector3.new(flat.X, vy, flat.Z)
+            hrp.AssemblyLinearVelocity = Vector3.new(flat.X + stick.X, vy, flat.Z + stick.Z)
         end)
     end
 
     ------------------------------------------------------------
     -- MAIN LOOP
     ------------------------------------------------------------
-    task.spawn(function()
-        while scriptRunning do
-            local okStep = pcall(function()
-                local globalOn = (Config.GlobalEnable ~= false)
-                local ch, hrp, hum = _lpChar()
+    RunSvc.Heartbeat:Connect(function()
+        if not scriptRunning then return end
+        if Config.GlobalEnable == false then return end
+        pcall(function()
+            local ch, hrp, hum = _lpChar()
 
-                -- LONG JUMP
-                if globalOn and Config.Movement.LongJump and hrp and hum then
-                    local mode = tostring(Config.Movement.LongJumpMode or "On Jump")
-                    local grounded = _isGrounded(hum)
-                    if mode == "On Jump" then
-                        if LJ.wasGrounded and not grounded then _doLongJump(hrp, hum) end
-                    elseif mode == "Hold Key" then
-                        if _keyDown("LongJump_Key") then
-                            if grounded then
-                                pcall(function() hum.Jump = true end)
-                            end
-                            _doLongJump(hrp, hum)
-                        end
-                    else -- Auto (jump + boost by itself)
-                        if grounded then
-                            pcall(function() hum.Jump = true end)
-                        else
-                            if LJ.wasGrounded then _doLongJump(hrp, hum) end
-                        end
-                    end
-                    LJ.wasGrounded = grounded
-                elseif hum then
-                    LJ.wasGrounded = _isGrounded(hum)
-                end
+            if Config.Movement.LongJump and hrp and hum then
+                local grounded = _isGrounded(hum)
+                if LJ.wasGrounded and not grounded then _doLongJump(hrp) end
+                LJ.wasGrounded = grounded
+            elseif hum then
+                LJ.wasGrounded = _isGrounded(hum)
+            end
 
-                -- PIXEL SURF
-                local surfOn = globalOn and Config.Movement.PixelSurf
-                if surfOn then
-                    if not PS.conn then
-                        PS.conn = RunSvc.Heartbeat:Connect(function(dt)
-                            if not (Config.Movement.PixelSurf and scriptRunning) then return end
-                            pcall(_psStep, math.min(dt, 0.05))
-                        end)
-                    end
-                elseif PS.conn or PS.part then
-                    _psDestroy()
-                end
-            end)
-            if not okStep then task.wait(0.2) end
-            task.wait(0.03)
-        end
-        _psDestroy()
-    end)
-
-    -- keep the surf pixel out of bunny hop / raycast ground checks
-    if type(_G.ECLIPSE_HUB_IgnoreInstance) == "function" then
-        pcall(function() _G.ECLIPSE_HUB_IgnoreInstance(function() return PS.part end) end)
-    end
-
-    ------------------------------------------------------------
-    -- UI
-    ------------------------------------------------------------
-    local LJGB = Tabs.Movement:AddRightGroupbox("LONG JUMP", "move-up-right")
-    LJGB:AddToggle("LongJump_Toggle", {
-        Text = "LONG JUMP", Default = false,
-        Tooltip = "Boosts your horizontal velocity when you leave the ground.",
-        Callback = function(v) Config.Movement.LongJump = v and true or false end,
-    }):AddKeyPicker("LongJump_Key", { Default = "X", SyncToggleState = false, Mode = "Toggle", Text = "Long Jump" })
-    SafeAddDropdown(LJGB, "LongJump_Mode", {
-        Text = "MODE",
-        Values = { "On Jump", "Hold Key", "Auto" },
-        Default = "On Jump", Multi = false,
-        Callback = function(v) Config.Movement.LongJumpMode = tostring(v) end,
-    })
-    LJGB:AddSlider("LongJump_Power", {
-        Text = "JUMP POWER", Default = 55, Min = 10, Max = 220, Rounding = 0,
-        Callback = function(v) Config.Movement.LongJumpPower = tonumber(v) or 55 end,
-    })
-    LJGB:AddSlider("LongJump_Up", {
-        Text = "UPWARD FORCE", Default = 12, Min = 0, Max = 90, Rounding = 0,
-        Callback = function(v) Config.Movement.LongJumpUp = tonumber(v) or 12 end,
-    })
-    LJGB:AddSlider("LongJump_CD", {
-        Text = "COOLDOWN (S)", Default = 0.35, Min = 0.05, Max = 2, Rounding = 2,
-        Callback = function(v) Config.Movement.LongJumpCooldown = tonumber(v) or 0.35 end,
-    })
-
-    local PSGB = Tabs.Movement:AddRightGroupbox("PIXEL SURF", "waves")
-    PSGB:AddToggle("PixelSurf_Toggle", {
-        Text = "PIXEL SURF", Default = false,
-        Tooltip = "Spawns an invisible ramp pixel under you and surfs it, CS style.",
-        Callback = function(v) Config.Movement.PixelSurf = v and true or false end,
-    }):AddKeyPicker("PixelSurf_Key", { Default = "B", SyncToggleState = true, Mode = "Toggle", Text = "Pixel Surf" })
-    PSGB:AddSlider("PixelSurf_Speed", {
-        Text = "SURF SPEED", Default = 90, Min = 20, Max = 400, Rounding = 0,
-        Callback = function(v) Config.Movement.PixelSurfSpeed = tonumber(v) or 90 end,
-    })
-    PSGB:AddSlider("PixelSurf_Accel", {
-        Text = "ACCELERATION", Default = 260, Min = 40, Max = 1200, Rounding = 0,
-        Callback = function(v) Config.Movement.PixelSurfAccel = tonumber(v) or 260 end,
-    })
-    PSGB:AddSlider("PixelSurf_Angle", {
-        Text = "RAMP ANGLE", Default = 32, Min = 5, Max = 70, Rounding = 0,
-        Callback = function(v) Config.Movement.PixelSurfAngle = tonumber(v) or 32 end,
-    })
-    PSGB:AddSlider("PixelSurf_Height", {
-        Text = "RAMP DISTANCE", Default = 3.2, Min = 1, Max = 10, Rounding = 1,
-        Callback = function(v) Config.Movement.PixelSurfHeight = tonumber(v) or 3.2 end,
-    })
-    PSGB:AddSlider("PixelSurf_Size", {
-        Text = "PIXEL SIZE", Default = 7, Min = 2, Max = 20, Rounding = 0,
-        Callback = function(v) Config.Movement.PixelSurfSize = tonumber(v) or 7 end,
-    })
-    PSGB:AddToggle("PixelSurf_AirOnly", {
-        Text = "AIR ONLY", Default = true,
-        Tooltip = "Only surf while airborne, so normal walking stays untouched.",
-        Callback = function(v) Config.Movement.PixelSurfAirOnly = v and true or false end,
-    })
-    PSGB:AddToggle("PixelSurf_NoFall", {
-        Text = "ANTI FALL", Default = true,
-        Callback = function(v) Config.Movement.PixelSurfNoFall = v and true or false end,
-    })
-    PSGB:AddToggle("PixelSurf_Visible", {
-        Text = "SHOW RAMP", Default = false,
-        Callback = function(v) Config.Movement.PixelSurfVisible = v and true or false end,
-    }):AddColorPicker("PixelSurf_Color", {
-        Default = Config.Movement.PixelSurfColor, Title = "Ramp color",
-        Callback = function(c) Config.Movement.PixelSurfColor = c end,
-    })
-
-    -- keybind handling for the modes that are not synced by the library
-    task.spawn(function()
-        local deb = {}
-        UIS.InputBegan:Connect(function(input, gp)
-            if not scriptRunning or gp then return end
-            if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-            local optLJ  = Library.Options and Library.Options["LongJump_Key"]
-            local togLJ  = Library.Toggles and Library.Toggles["LongJump_Toggle"]
-            if optLJ and togLJ and optLJ.Value == input.KeyCode then
-                local now = tick()
-                if not deb.lj or now - deb.lj > 0.15 then
-                    deb.lj = now
-                    if tostring(Config.Movement.LongJumpMode or "") == "Hold Key" then return end
-                    pcall(function() togLJ:SetValue(not togLJ.Value) end)
-                end
+            if Config.Movement.PixelSurf then
+                _wsStep()
+            elseif WS.attached then
+                WS.attached = false
             end
         end)
     end)
+
+    ------------------------------------------------------------
+    -- UI (inside the existing MOVEMENT group, no extra groupboxes)
+    ------------------------------------------------------------
+    local GB = MoveGB
+    if GB then
+        GB:AddToggle("LongJump_Toggle", {
+            Text = "LONG JUMP", Default = false,
+            Tooltip = "Launches you forward every time you leave the ground.",
+            Callback = function(v) Config.Movement.LongJump = v and true or false end,
+        }):AddKeyPicker("LongJump_Key", { Default = "X", SyncToggleState = true, Mode = "Toggle", Text = "Long Jump" })
+
+        GB:AddToggle("PixelSurf_Toggle", {
+            Text = "WALL SURF", Default = false,
+            Tooltip = "Cling to any wall and surf along it to move around.",
+            Callback = function(v) Config.Movement.PixelSurf = v and true or false end,
+        }):AddKeyPicker("PixelSurf_Key", { Default = "B", SyncToggleState = true, Mode = "Toggle", Text = "Wall Surf" })
+    end
 end)()
