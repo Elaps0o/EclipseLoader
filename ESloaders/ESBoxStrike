@@ -437,6 +437,9 @@ function _ECLIPSE_HUB_GetEquipped()
     local IC = _ECLIPSE_HUB_GetIC(); if not IC then return nil end
     local w
     local get = rawget(IC, "getCurrentEquipped") or rawget(IC, "GetCurrentEquipped")
+    if type(get) ~= "function" then
+        pcall(function() get = IC.getCurrentEquipped or IC.GetCurrentEquipped end)
+    end
     if type(get) == "function" then
         local ok, r = pcall(get, IC)
         if ok and type(r) == "table" then w = r end
@@ -449,6 +452,11 @@ function _ECLIPSE_HUB_GetEquipped()
         w = rawget(IC, "EquippedWeapon") or rawget(IC, "Equipped")
             or rawget(IC, "ActiveWeapon") or rawget(IC, "CurrentWeapon")
     end
+    if type(w) ~= "table" then
+        pcall(function()
+            w = IC.EquippedWeapon or IC.Equipped or IC.ActiveWeapon or IC.CurrentWeapon
+        end)
+    end
     if type(w) ~= "table" then return nil end
     return w
 end
@@ -459,17 +467,31 @@ function _ECLIPSE_HUB_IsGun(w)
     return ok and (tonumber(r) ~= nil)
 end
 
-function _ECLIPSE_HUB_ShootEquipped()
+local function _wField(w, key)
+    local ok, v = pcall(rawget, w, key)
+    if ok and v ~= nil then return v end
+    local ok2, v2 = pcall(function() return w[key] end)
+    if ok2 then return v2 end
+    return nil
+end
+_ECLIPSE_HUB_WField = _wField
+
+-- true only for real guns (a knife has no Rounds field)
+function _ECLIPSE_HUB_EquippedGunReady()
     local w = _ECLIPSE_HUB_GetEquipped()
+    if not w then return nil end
+    if not _wField(w, "IsEquipped") then return nil end
+    local rounds = tonumber(_wField(w, "Rounds"))
+    if not rounds or rounds <= 0 then return nil end
+    return w, rounds
+end
+
+function _ECLIPSE_HUB_ShootEquipped()
+    local w = _ECLIPSE_HUB_EquippedGunReady()
     if not w then return false end
-    local okEq, isEq = pcall(rawget, w, "IsEquipped")
-    if not (okEq and isEq) then return false end
-    local okR, rounds = pcall(rawget, w, "Rounds")
-    if not (okR and tonumber(rounds) and rounds > 0) then return false end
-    local shoot = rawget(w, "shoot") or rawget(w, "Shoot")
+    local shoot = _wField(w, "shoot") or _wField(w, "Shoot")
     if type(shoot) ~= "function" then return false end
-    local ok = pcall(shoot, w)
-    return ok
+    return (pcall(shoot, w))
 end
 task.spawn(function()
     
@@ -2896,7 +2918,7 @@ local Config = {
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true, PenetrationEnabled=false, PenetrationOkColor=Color3.fromRGB(0,255,0), PenetrationNoColor=Color3.fromRGB(255,60,60), Wallbang=false },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={}, PerCategory={}, Mode="Global", SelectedWeapon="AK-47", SelectedCategory="Rifles" },
     Skins    = { SkinChangerEnabled=false, SelectedKnife="Butterfly Knife", SelectedSkins={}, ViewModelEnabled=false, ViewModelFOV=70, HUDIconOverrideConfirmed=false, HUDIconConfirmedKey=nil },
-    Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, Jumpbug=false, Edgebug=false, FreezeOnBuy=false, AutoStop=false, QuickStopOptions={} },
+    Movement = { BunnyHop=false, AutoStrafe=false, StrafeSpeed=1.5, StrafeMode="Directional", StrafeHold=false, Jumpbug=false, Edgebug=false, FreezeOnBuy=false, AutoStop=false, QuickStopOptions={} },
     World    = { Weather="None", WeatherSpeed=0 },
     Misc     = { AntiFlash=false, AntiSmoke=false, SpectatorList=false, C4Timer=true, RemoveScope=false, NoScopeOverlay=false, CustomScopeFov=false, ScopeFovValue=40, NoScopeSway=false, AutoDefuse=false, NoCameraRecoil=false, ForceScope=false, Explorer1=true, AutoSkill=false, AutoSkillSpeed=140, AutoSkillSmooth=0, AutoSkillDistance=600, AutoSkillPart="Head", AutoSkillTeamCheck=true, AutoSkillRespectBuy=true, AutoSkillRefill=true, AutoSkillChangeWeapon=true, AutoBuy=false, AutoBuyItems={}, AutoBuyMap={}, AutoBuyDelay=0.15, AutoBuyOnlyAlive=true, ThirdPerson=false, ThirdPersonOffsetX=2.5, ThirdPersonOffsetY=1.0, CustomPlayerModel="Off", WeaponHighlight=false, WeaponHighlightIntensity=1.0, WeaponHighlightColor=Color3.fromRGB(0,170,255), MuteGameSounds=false, Test1=false },
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
@@ -3144,14 +3166,40 @@ function _ecfgEncode(v, seen)
         if seen[v] then return nil end
         seen[v] = true
         local out = {}
-        for k, val in pairs(v) do
-            local ek = (type(k) == "string" or type(k) == "number") and k or tostring(k)
-            local ev = _ecfgEncode(val, seen)
-            if ev ~= nil then out[ek] = ev end
+        local isArray = true
+        local count = 0
+        for k in pairs(v) do
+            count = count + 1
+            if type(k) ~= "number" or k % 1 ~= 0 or k < 1 then isArray = false end
+        end
+        if isArray and count > 0 then
+            for i = 1, count do if v[i] == nil then isArray = false break end end
+        end
+        if isArray and count > 0 then
+            for i = 1, count do
+                local ev = _ecfgEncode(v[i], seen)
+                out[i] = (ev == nil) and false or ev
+            end
+        else
+            for k, val in pairs(v) do
+                local ek
+                if type(k) == "number" then
+                    ek = "__n:" .. tostring(k)
+                elseif type(k) == "string" then
+                    ek = k
+                else
+                    ek = tostring(k)
+                end
+                local ev = _ecfgEncode(val, seen)
+                if ev ~= nil then out[ek] = ev end
+            end
         end
         seen[v] = nil
         return out
-    elseif type(v) == "string" or type(v) == "number" or type(v) == "boolean" then
+    elseif type(v) == "string" or type(v) == "boolean" then
+        return v
+    elseif type(v) == "number" then
+        if v ~= v or v == math.huge or v == -math.huge then return 0 end
         return v
     end
     return nil
@@ -3167,9 +3215,17 @@ function _ecfgDecode(v)
         return tostring(v.name or "")
     end
     local out = {}
-    for k, val in pairs(v) do out[k] = _ecfgDecode(val) end
+    for k, val in pairs(v) do
+        local dk = k
+        if type(k) == "string" then
+            local num = k:match("^__n:(-?%d+)$")
+            if num then dk = tonumber(num) end
+        end
+        out[dk] = _ecfgDecode(val)
+    end
     return out
 end
+
 
 function _ecfgMerge(dst, src)
     if type(dst) ~= "table" or type(src) ~= "table" then return end
@@ -3467,27 +3523,129 @@ function _ecfgApplyLoadedControls()
         end)
     end
     pcall(function() if _updateNoRecoil then _updateNoRecoil() end end)
+    pcall(function() if _ecfgApplyColorsAndKeys then _ecfgApplyColorsAndKeys(data) end end)
+    task.delay(0.35, function()
+        pcall(function() if _ecfgApplyColorsAndKeys then _ecfgApplyColorsAndKeys(data) end end)
+    end)
     pcall(function() if EX and type(EX.rebuildKB) == "function" then EX.rebuildKB() end end)
     pcall(_reapplyAllPanelPositions)
 
+end
+
+
+function _ecfgColorSnapshot()
+    local out = {}
+    pcall(function()
+        for id, opt in pairs(Library.Options or {}) do
+            if _ecfgOptType(opt) == "ColorPicker" then
+                local c = rawget(opt, "Value") or opt.Value
+                if typeof(c) == "Color3" then
+                    out[tostring(id)] = { r = math.floor(c.R * 255 + 0.5), g = math.floor(c.G * 255 + 0.5), b = math.floor(c.B * 255 + 0.5) }
+                end
+            end
+        end
+    end)
+    return out
+end
+
+function _ecfgKeySnapshot()
+    local out = {}
+    pcall(function()
+        for id, opt in pairs(Library.Options or {}) do
+            if _ecfgIsKeyPicker(opt) then
+                local key = rawget(opt, "Value") or opt.Value or opt.Default
+                if typeof(key) == "EnumItem" then key = key.Name end
+                out[tostring(id)] = {
+                    Key = tostring(key or "Unknown"),
+                    Mode = tostring(opt.Mode or "Toggle"),
+                    State = (opt.Toggled == true),
+                }
+            end
+        end
+    end)
+    return out
+end
+
+function _ecfgApplyColorsAndKeys(data)
+    if type(data) ~= "table" then return end
+    pcall(function()
+        for id, c in pairs(data.Colors or {}) do
+            local opt = Library.Options and Library.Options[id]
+            if opt and type(c) == "table" then
+                local col = Color3.fromRGB(tonumber(c.r) or 255, tonumber(c.g) or 255, tonumber(c.b) or 255)
+                if type(opt.SetValueRGB) == "function" then
+                    pcall(function() opt:SetValueRGB(col) end)
+                elseif type(opt.SetValue) == "function" then
+                    pcall(function() opt:SetValue(col) end)
+                else
+                    opt.Value = col
+                end
+            end
+        end
+    end)
+    pcall(function()
+        for id, k in pairs(data.Keys or {}) do
+            local opt = Library.Options and Library.Options[id]
+            if opt and type(k) == "table" then
+                if type(k.Mode) == "string" then opt.Mode = k.Mode end
+                if type(k.Key) == "string" and k.Key ~= "" and type(opt.SetValue) == "function" then
+                    pcall(function() opt:SetValue(k.Key, opt.Mode) end)
+                end
+                if type(k.State) == "boolean" then
+                    if type(opt.SetState) == "function" then
+                        pcall(function() opt:SetState(k.State) end)
+                    else
+                        opt.Toggled = k.State
+                    end
+                end
+            end
+        end
+    end)
 end
 
 function _ecfgSnapshotJson()
     local encodedConfig = _ecfgEncode(Config)
     local encodedControls = _ecfgEncode(_ecfgControlSnapshot())
     _ecfgSanitizeEncodedPayload(encodedConfig, encodedControls)
+    local colors = _ecfgColorSnapshot()
+    local keys = _ecfgKeySnapshot()
     local payload = {
         Version = EclipseHub.Version,
         SavedAt = os.time(),
         Config = encodedConfig,
         Controls = encodedControls,
+        Colors = colors,
+        Keys = keys,
     }
     local ok, json = pcall(function() return HttpService:JSONEncode(payload) end)
-    if not ok or type(json) ~= "string" then return nil end
+    if not ok or type(json) ~= "string" then
+        
+        local ok2, json2 = pcall(function()
+            return HttpService:JSONEncode({
+                Version = EclipseHub.Version,
+                SavedAt = os.time(),
+                Controls = encodedControls,
+                Colors = colors,
+                Keys = keys,
+            })
+        end)
+        if ok2 and type(json2) == "string" then return json2 end
+        local ok3, json3 = pcall(function()
+            return HttpService:JSONEncode({
+                Version = EclipseHub.Version,
+                SavedAt = os.time(),
+                Colors = colors,
+                Keys = keys,
+            })
+        end)
+        if ok3 and type(json3) == "string" then return json3 end
+        return nil
+    end
     
     if #json > 4 * 1024 * 1024 then return nil end
     return json
 end
+
 
 function _ecfgWriteNow(force)
     
@@ -3915,7 +4073,13 @@ end
 
 local _PEN_LAST = 0
 function updatePenetrationCrosshair()
-    local on = Config.GlobalEnable and Config.Crosshair.PenetrationEnabled
+    local alive = false
+    pcall(function()
+        local ch  = LocalPlayer and LocalPlayer.Character
+        local hu  = ch and ch:FindFirstChildOfClass("Humanoid")
+        alive = (ch ~= nil) and (not ch:GetAttribute("Dead")) and (hu ~= nil) and hu.Health > 0
+    end)
+    local on = Config.GlobalEnable and Config.Crosshair.PenetrationEnabled and alive
     if not on or not Camera then _pen3dHide(); return end
     local t = tick()
     if t - _PEN_LAST < 0.05 then return end
@@ -6751,14 +6915,16 @@ function hideWorldEntry(e)
     if e.Timer then e.Timer.Visible = false end
     if e.Fill then e.Fill.Visible = false end
     if e.Dot  then e.Dot.Visible  = false end
+    if e.WeaponIcon then pcall(function() e.WeaponIcon.Visible = false end) end
 end
 
 function classifyDebrisItem(item)
     if not item or not item.Parent then return nil end
-    if Config.ESP.WorldWeapons and item:IsA("Model")
-        and item:GetAttribute("Weapon") and item:GetAttribute("CanPickup") == true then
-        local wname = tostring(item:GetAttribute("Weapon") or item.Name)
-        return { kind = "weapon", label = "▸ "..wname:upper(), color = Config.ESP.WeaponColor }
+    if Config.ESP.WorldWeapons and item:IsA("Model") and item:GetAttribute("CanPickup") == true then
+        local wname = item:GetAttribute("Weapon") or item:GetAttribute("Grenade")
+            or item:GetAttribute("Item") or item:GetAttribute("Equipment") or item.Name
+        wname = tostring(wname)
+        return { kind = "weapon", weapon = wname, label = wname:upper(), color = Config.ESP.WeaponColor }
     end
     if Config.ESP.WorldBomb and item:IsA("Model")
         and item.Name == "Character" and item:GetAttribute("BombPlanted") then
@@ -6837,6 +7003,7 @@ function updateWorldESP()
                         e.Box.Visible = false
                         e.Dot.Visible = false
                         e.Tag.Visible = false
+                        if e.WeaponIcon then pcall(function() e.WeaponIcon.Visible = false end) end
                     else
                         e.Box.Size = Vector2.new(s, s)
                         e.Box.Position = Vector2.new(bx, by)
@@ -6852,6 +7019,28 @@ function updateWorldESP()
                         e.Tag.Transparency = fade
                         e.Tag.Position = Vector2.new(sp.X, by - 18)
                         e.Tag.Visible = true
+
+                        local iconAsset = nil
+                        if info.kind == "weapon" and info.weapon and type(_espIconAssetForWeapon) == "function" then
+                            local okI, a = pcall(_espIconAssetForWeapon, info.weapon)
+                            if okI then iconAsset = a end
+                        end
+                        if iconAsset and type(_ensureESPWeaponIcon) == "function" then
+                            local img = _ensureESPWeaponIcon(e)
+                            if img then
+                                local isz = math.clamp(s * 1.3, 18, 42)
+                                pcall(function()
+                                    if img.Image ~= iconAsset then img.Image = iconAsset end
+                                    img.Size = UDim2.fromOffset(isz, isz)
+                                    img.Position = UDim2.fromOffset(sp.X - isz / 2, (by - 18) - 9 - isz)
+                                    img.ImageColor3 = info.color
+                                    img.ImageTransparency = 1 - fade
+                                    img.Visible = true
+                                end)
+                            end
+                        elseif e.WeaponIcon then
+                            pcall(function() e.WeaponIcon.Visible = false end)
+                        end
                     end
 
                     local life = GRENADE_LIFETIME[info.kind]
@@ -6887,6 +7076,7 @@ function updateWorldESP()
             hideWorldEntry(e)
             if not alive then
                 pcall(function() e.Tag:Remove() end); pcall(function() e.Box:Remove() end); pcall(function() if e.Fill then e.Fill:Remove() end end); pcall(function() if e.Dot then e.Dot:Remove() end end); pcall(function() if e.Timer then e.Timer:Remove() end end)
+                pcall(function() if e.WeaponIcon then e.WeaponIcon:Destroy() end end)
                 WorldEspPool[inst] = nil
                 WorldGrenadeFirstSeen[inst] = nil
             end
@@ -8540,6 +8730,15 @@ pcall(function()
     end)
 end)
 
+_MV.strafeKeyDown = false
+function _MV.strafeKeyHeld()
+    if _MV.strafeKeyDown then return true end
+    if _MV.mobileJumpDown then return true end
+    local kc = (Config.Movement and Config.Movement.StrafeKeyCode) or Enum.KeyCode.LeftControl
+    local ok, down = pcall(function() return UserInput:IsKeyDown(kc) end)
+    return (ok and down) and true or false
+end
+
 function _MV.spaceHeld()
     if _MV.mobileJumpDown then return true end
     local ok, down = pcall(function() return UserInput:IsKeyDown(Enum.KeyCode.Space) end)
@@ -8565,9 +8764,9 @@ function _MV.freeze(hum, root, active)
         if _MV.freezeHum ~= hum then
             _MV.freezeHum = hum
             _MV.freezeOrig = {
-                WalkSpeed = hum.WalkSpeed,
-                JumpPower = hum.JumpPower,
-                JumpHeight = hum.JumpHeight,
+                WalkSpeed  = (tonumber(hum.WalkSpeed)  or 16) > 0 and hum.WalkSpeed  or 16,
+                JumpPower  = (tonumber(hum.JumpPower)  or 50) > 0 and hum.JumpPower  or 50,
+                JumpHeight = (tonumber(hum.JumpHeight) or 7.2) > 0 and hum.JumpHeight or 7.2,
                 AutoRotate = hum.AutoRotate,
             }
         end
@@ -8581,9 +8780,9 @@ function _MV.freeze(hum, root, active)
     if _MV.freezeHum and _MV.freezeOrig then
         local h, o = _MV.freezeHum, _MV.freezeOrig
         if h and h.Parent then
-            pcall(function() h.WalkSpeed = o.WalkSpeed or 16 end)
-            pcall(function() h.JumpPower = o.JumpPower or 50 end)
-            pcall(function() h.JumpHeight = o.JumpHeight or 7.2 end)
+            pcall(function() h.WalkSpeed  = ((tonumber(o.WalkSpeed)  or 0) > 0) and o.WalkSpeed  or 16 end)
+            pcall(function() h.JumpPower  = ((tonumber(o.JumpPower)  or 0) > 0) and o.JumpPower  or 50 end)
+            pcall(function() h.JumpHeight = ((tonumber(o.JumpHeight) or 0) > 0) and o.JumpHeight or 7.2 end)
             pcall(function() h.AutoRotate = (o.AutoRotate ~= false) end)
         end
     end
@@ -8659,10 +8858,19 @@ function updateMovement()
     local inAir     = not grounded
 
     if Config.Movement.BunnyHop and spaceHeld then
-        if grounded and tick() - _MV.lastBhop > 0.05 then
-            
-            pcall(function() hum.Jump = true end)
+        local landed = (hstate == Enum.HumanoidStateType.Landed)
+                    or (hstate == Enum.HumanoidStateType.Running)
+                    or (hstate == Enum.HumanoidStateType.RunningNoPhysics)
+        if (grounded or landed) and tick() - _MV.lastBhop > 0.02 then
+
+            pcall(function()
+                if (tonumber(hum.JumpPower) or 0) <= 0 and (tonumber(hum.JumpHeight) or 0) <= 0 then
+                    hum.UseJumpPower = true
+                    hum.JumpPower = 50
+                end
+            end)
             pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+            pcall(function() hum.Jump = true end)
             _MV.lastBhop = tick()
             pcall(function()
                 local cv = root.AssemblyLinearVelocity
@@ -8696,11 +8904,25 @@ function updateMovement()
         end
         _ASF.wasAir = inAir
 
-        if Config.Movement.AutoStrafe and spaceHeld and inAir then
+        local strafeMode = tostring(Config.Movement.StrafeMode or "Directional")
+        local strafeGate
+        if strafeMode == "Keybind" then
+            strafeGate = _MV.strafeKeyHeld and _MV.strafeKeyHeld() or false
+        elseif strafeMode == "Always" then
+            strafeGate = true
+        else
+            strafeGate = spaceHeld
+        end
+
+        if Config.Movement.AutoStrafe and strafeGate and inAir then
                 local move = hum.MoveDirection
+                if strafeMode == "Camera" then move = Vector3.new() end
                 local look = Camera and Camera.CFrame.LookVector or Vector3.new(0,0,-1)
                 local camFlat = Vector3.new(look.X, 0, look.Z)
                 local inputFlat = (move and move.Magnitude > 0.05) and Vector3.new(move.X, 0, move.Z) or nil
+                if not inputFlat and (strafeMode == "Camera" or strafeMode == "Always") and camFlat.Magnitude > 0.05 then
+                    inputFlat = camFlat
+                end
                 local flat = camFlat
                 if camFlat.Magnitude < 0.05 then
                     local cv = root.AssemblyLinearVelocity
@@ -8963,22 +9185,30 @@ function UpdateWeather(t)
         halo.SpreadAngle=Vector2.new(180,180)
     end
     
-    do
-        local sp = tonumber(Config and Config.World and Config.World.WeatherSpeed) or 0
-        sp = math.clamp(sp, 0, 5)
-        local mult = 1 + sp
-        if WeatherPart then
-            for _, em in ipairs(WeatherPart:GetChildren()) do
-                if em:IsA("ParticleEmitter") then
-                    pcall(function()
-                        em.Rate = em.Rate * mult
-                        local lo, hi = em.Speed.Min, em.Speed.Max
-                        em.Speed = NumberRange.new(lo * mult, hi * mult)
-                        local llo, lhi = em.Lifetime.Min, em.Lifetime.Max
-                        em.Lifetime = NumberRange.new(math.max(llo / mult, 0.1), math.max(lhi / mult, 0.15))
-                    end)
+    ApplyWeatherSpeed()
+end
+
+function ApplyWeatherSpeed()
+    local sp = tonumber(Config and Config.World and Config.World.WeatherSpeed) or 0
+    sp = math.clamp(sp, 0, 5)
+    local mult = 1 + sp
+    if not (WeatherPart and WeatherPart.Parent) then return end
+    for _, em in ipairs(WeatherPart:GetChildren()) do
+        if em:IsA("ParticleEmitter") then
+            pcall(function()
+                if em:GetAttribute("ECL_BaseRate") == nil then
+                    em:SetAttribute("ECL_BaseRate", em.Rate)
+                    em:SetAttribute("ECL_BaseSpdMin", em.Speed.Min)
+                    em:SetAttribute("ECL_BaseSpdMax", em.Speed.Max)
+                    em:SetAttribute("ECL_BaseLifeMin", em.Lifetime.Min)
+                    em:SetAttribute("ECL_BaseLifeMax", em.Lifetime.Max)
                 end
-            end
+                em.Rate     = em:GetAttribute("ECL_BaseRate") * mult
+                em.Speed    = NumberRange.new(em:GetAttribute("ECL_BaseSpdMin") * mult, em:GetAttribute("ECL_BaseSpdMax") * mult)
+                em.Lifetime = NumberRange.new(
+                    math.max(em:GetAttribute("ECL_BaseLifeMin") / mult, 0.1),
+                    math.max(em:GetAttribute("ECL_BaseLifeMax") / mult, 0.15))
+            end)
         end
     end
 end
@@ -12422,6 +12652,8 @@ function CleanupScript()
     pcall(function() if _G.__ECLIPSE_HUBFOVConn2 then _G.__ECLIPSE_HUBFOVConn2:Disconnect(); _G.__ECLIPSE_HUBFOVConn2 = nil end end)
     pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ECLIPSE_HUBCustomFOV") end)
     pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ECLIPSE_HUBRemoveScope") end)
+    pcall(function() if _G.ECLIPSE_HUB_UnbindScopeSys then _G.ECLIPSE_HUB_UnbindScopeSys() end end)
+    pcall(function() if _G.ECLIPSE_HUB_AutoPeekReset then _G.ECLIPSE_HUB_AutoPeekReset() end end)
     pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ECLIPSE_HUBScopeOverlay") end)
 
     if Config and Config.Misc then Config.Misc.CustomFOV = 0 end
@@ -13084,6 +13316,7 @@ AimGB:AddToggle("WallBang_Toggle", { Text="WALLBANG", Default=false,
             end
         end
     end })
+    :AddKeyPicker("WallBang_Key", { Default = "B", SyncToggleState = true, Mode = "Toggle", Text = "Wallbang" })
 
 Config.Aimbot.WallBang = Config.Aimbot.WallBang or false
 do
@@ -13341,7 +13574,14 @@ do
                 local tracersOn  = Toggles and Toggles.HVH_Tracers and Toggles.HVH_Tracers.Value
                 local markersOn  = Toggles and Toggles.HVH_Hitmarker and Toggles.HVH_Hitmarker.Value
                 local impactOn   = Config and Config.Visuals and Config.Visuals.BulletImpact
-                if not (tracersOn or markersOn or impactOn) then return end
+                local soundsOn   = Toggles and ((Toggles.HVH_ShootSound and Toggles.HVH_ShootSound.Value)
+                                             or (Toggles.HVH_HitSound   and Toggles.HVH_HitSound.Value)
+                                             or (Toggles.HVH_KillSound  and Toggles.HVH_KillSound.Value))
+                if not (tracersOn or markersOn or impactOn or soundsOn) then return end
+
+                if soundsOn and type(_G.ECLIPSE_HUB_ShotSound) == "function" then
+                    pcall(_G.ECLIPSE_HUB_ShotSound, "shoot")
+                end
 
                 local ch = LP.Character
                 local params = RaycastParams.new()
@@ -13364,12 +13604,17 @@ do
                 if impactOn and type(_G.ECLIPSE_HUBImpactFire) == "function" then
                     pcall(_G.ECLIPSE_HUBImpactFire, hitInst, hitPos)
                 end
-                if markersOn and hitInst and type(_G.ECLIPSE_HUBHVH_ShowHitmarker) == "function" then
+                if hitInst then
                     local mdl = hitInst:FindFirstAncestorOfClass("Model")
                     local hum = mdl and mdl:FindFirstChildOfClass("Humanoid")
                     if hum and hum.Health > 0 and mdl ~= ch then
                         local isHead = (hitInst.Name == "Head")
-                        pcall(_G.ECLIPSE_HUBHVH_ShowHitmarker, hitPos, isHead and 100 or 25, isHead)
+                        if markersOn and type(_G.ECLIPSE_HUBHVH_ShowHitmarker) == "function" then
+                            pcall(_G.ECLIPSE_HUBHVH_ShowHitmarker, hitPos, isHead and 100 or 25, isHead)
+                        end
+                        if soundsOn and type(_G.ECLIPSE_HUB_ShotSound) == "function" then
+                            pcall(_G.ECLIPSE_HUB_ShotSound, "hit", hum)
+                        end
                     end
                 end
             end
@@ -13562,17 +13807,31 @@ do
         overlay.ZIndex = 4
         overlay.Parent = viewport
 
-        PV.box  = { newLine(overlay), newLine(overlay), newLine(overlay), newLine(overlay),
-                    newLine(overlay), newLine(overlay), newLine(overlay), newLine(overlay) }
-        PV.hpBg = newLine(overlay, Color3.fromRGB(15,15,18))
-        PV.hpFg = newLine(overlay)
+        PV.boxFrame = Instance.new("Frame")
+        PV.boxFrame.Name = "ESPBox"
+        PV.boxFrame.BorderSizePixel = 0
+        PV.boxFrame.BackgroundColor3 = Color3.fromRGB(255, 80, 180)
+        PV.boxFrame.BackgroundTransparency = 0.55
+        PV.boxFrame.Visible = false
+        PV.boxFrame.ZIndex = 5
+        PV.boxFrame.Parent = overlay
+        PV.boxGrad = Instance.new("UIGradient", PV.boxFrame)
+        PV.boxGrad.Rotation = 90
+        PV.boxGrad.Transparency = NumberSequence.new(0.30, 0.10)
+        PV.boxStroke = Instance.new("UIStroke", PV.boxFrame)
+        PV.boxStroke.Thickness = 1.2
+        PV.boxStroke.Transparency = 0.10
+        PV.boxStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+        PV.hpBg = newLine(overlay, Color3.fromRGB(6,6,9))
+        PV.hpSegs = {}
+        for i = 1, 40 do PV.hpSegs[i] = newLine(overlay) end
         PV.name = newText(overlay, 13)
-        PV.dista= newText(overlay, 11)
         PV.wep  = newText(overlay, 11)
         PV.wepIcon = Instance.new("ImageLabel")
         PV.wepIcon.BackgroundTransparency = 1
         PV.wepIcon.BorderSizePixel = 0
-        PV.wepIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+        PV.wepIcon.AnchorPoint = Vector2.new(0.5, 0)
         PV.wepIcon.ScaleType = Enum.ScaleType.Fit
         PV.wepIcon.Size = UDim2.fromOffset(34, 20)
         PV.wepIcon.Visible = false
@@ -13586,8 +13845,9 @@ do
         PV.head.ZIndex = 6
         PV.head.Parent = overlay
         local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = PV.head
+        local hs = Instance.new("UIStroke", PV.head); hs.Thickness = 1; hs.Color = Color3.new(0,0,0); hs.Transparency = 0.25
         PV.skel = {}
-        for i = 1, 18 do PV.skel[i] = newLine(overlay) end
+        for i = 1, 24 do PV.skel[i] = newLine(overlay) end
     end
 
     local function project(world)
@@ -13705,10 +13965,11 @@ do
 
     local function hideAll()
         if not overlay then return end
-        for _, f in ipairs(PV.box) do f.Visible = false end
+        if PV.boxFrame then PV.boxFrame.Visible = false end
         for _, f in ipairs(PV.skel) do f.Visible = false end
-        PV.hpBg.Visible = false; PV.hpFg.Visible = false
-        PV.name.Visible = false; PV.dista.Visible = false
+        PV.hpBg.Visible = false
+        for _, f in ipairs(PV.hpSegs) do f.Visible = false end
+        PV.name.Visible = false
         PV.wep.Visible = false;  PV.head.Visible = false
         if PV.wepIcon then PV.wepIcon.Visible = false end
     end
@@ -13723,74 +13984,100 @@ do
         updateChams()
         if not Config.ESP.Enabled then return end
 
-        local parts, minX, minY, maxX, maxY = {}, math.huge, math.huge, -math.huge, -math.huge
+        local parts = {}
         for _, d in ipairs(rig:GetChildren()) do
-            if d:IsA("BasePart") then
-                local sz = d.Size * 0.5
-                for _, s in ipairs({
-                    Vector3.new( sz.X, sz.Y, sz.Z), Vector3.new(-sz.X, sz.Y, sz.Z),
-                    Vector3.new( sz.X,-sz.Y, sz.Z), Vector3.new(-sz.X,-sz.Y, sz.Z),
-                    Vector3.new( sz.X, sz.Y,-sz.Z), Vector3.new(-sz.X, sz.Y,-sz.Z),
-                    Vector3.new( sz.X,-sz.Y,-sz.Z), Vector3.new(-sz.X,-sz.Y,-sz.Z) }) do
-                    local p = project(d.CFrame * CFrame.new(s).Position)
-                    if p then
-                        if p.X < minX then minX = p.X end
-                        if p.Y < minY then minY = p.Y end
-                        if p.X > maxX then maxX = p.X end
-                        if p.Y > maxY then maxY = p.Y end
-                    end
-                end
-                parts[d.Name] = d
-            end
+            if d:IsA("BasePart") then parts[d.Name] = d end
         end
-        if minX == math.huge then return end
+        local headP = parts["Head"]
+        local rootP = parts["HumanoidRootPart"] or parts["UpperTorso"] or parts["Torso"]
+        if not (headP and rootP) then return end
 
-        local col = Config.ESP.BoxColor or Color3.fromRGB(255,255,255)
-        local w, h = maxX - minX, maxY - minY
-        if Config.ESP.CornerBox then
-            local seg = math.clamp(math.min(w, h) * 0.28, 4, 26)
-            local corners = {
-                {Vector2.new(minX,minY), Vector2.new(minX+seg,minY), Vector2.new(minX,minY), Vector2.new(minX,minY+seg)},
-                {Vector2.new(maxX,minY), Vector2.new(maxX-seg,minY), Vector2.new(maxX,minY), Vector2.new(maxX,minY+seg)},
-                {Vector2.new(minX,maxY), Vector2.new(minX+seg,maxY), Vector2.new(minX,maxY), Vector2.new(minX,maxY-seg)},
-                {Vector2.new(maxX,maxY), Vector2.new(maxX-seg,maxY), Vector2.new(maxX,maxY), Vector2.new(maxX,maxY-seg)},
-            }
+        local hP = project(headP.Position + Vector3.new(0, 0.5, 0))
+        local fP = project(rootP.Position - Vector3.new(0, 3, 0))
+        if not (hP and fP) then return end
 
+        local height = math.abs(hP.Y - fP.Y)
+        local width  = height * 0.6
+        if height < 2 then return end
+        local cx = hP.X
+        local cy = (hP.Y + fP.Y) * 0.5
+        local L2, R2 = cx - width/2, cx + width/2
+        local T2, B2 = cy - height/2, cy + height/2
 
-            
-            local k = 1
-            for _, c in ipairs(corners) do
-                setLine(PV.box[k], c[1], c[2], 1, col); k = k + 1
-                setLine(PV.box[k], c[3], c[4], 1, col); k = k + 1
+        local col
+        if Config.ESP.VisibleCheck then
+            col = Config.ESP.VisibleBoxColor or Config.ESP.BoxColor
+        else
+            col = Config.ESP.BoxColor
+        end
+        if typeof(col) ~= "Color3" then col = Color3.fromRGB(230, 45, 55) end
+
+        if Config.ESP.CornerBox and PV.boxFrame then
+            local style = tostring(Config.ESP.CornerBoxStyle or "Corner")
+            local darker = Color3.new(
+                math.clamp(col.R * 0.45, 0, 1),
+                math.clamp(col.G * 0.30, 0, 1),
+                math.clamp(col.B * 0.65, 0, 1))
+            PV.boxGrad.Color = ColorSequence.new(col, darker)
+            PV.boxFrame.Position = UDim2.fromOffset(math.floor(L2), math.floor(T2))
+            PV.boxFrame.Size = UDim2.fromOffset(math.floor(math.max(2, R2 - L2)), math.floor(math.max(2, B2 - T2)))
+            if style == "Outline" then
+                PV.boxFrame.BackgroundTransparency = 1
+                PV.boxStroke.Thickness = 1.4; PV.boxStroke.Transparency = 0.05
+            elseif style == "Full" then
+                PV.boxFrame.BackgroundColor3 = col
+                PV.boxFrame.BackgroundTransparency = 0.35
+                PV.boxStroke.Thickness = 1.0; PV.boxStroke.Transparency = 0.15
+            else
+                PV.boxFrame.BackgroundColor3 = col
+                PV.boxFrame.BackgroundTransparency = 0.55
+                PV.boxStroke.Thickness = 1.2; PV.boxStroke.Transparency = 0.10
             end
+            PV.boxStroke.Color = col
+            PV.boxFrame.Visible = true
         end
 
         if Config.ESP.HealthBar and hum then
-            local frac = math.clamp((hum.Health or 0) / math.max(hum.MaxHealth or 100, 1), 0, 1)
-            local x = minX - 6
-            setLine(PV.hpBg, Vector2.new(x, minY), Vector2.new(x, maxY), 3, Color3.fromRGB(12,12,14))
-            local hc
-            local okc, res = pcall(function() return GetHealthColor(frac) end)
-            if okc and typeof(res) == "Color3" then hc = res end
-            hc = hc or Config.ESP.HealthColor or Color3.fromRGB(90,220,120)
-            setLine(PV.hpFg, Vector2.new(x, maxY), Vector2.new(x, maxY - h * frac), 2, hc)
+            local pct = math.clamp((hum.Health or 0) / math.max(hum.MaxHealth or 100, 1), 0, 1)
+            local bx = L2 - 10
+            setLine(PV.hpBg, Vector2.new(bx, T2), Vector2.new(bx, B2), 2, Color3.fromRGB(6,6,9))
+            local maxSegs = #PV.hpSegs
+            local segments = math.clamp(math.floor(height / 3), 10, maxSegs)
+            for i = 1, maxSegs do
+                local seg = PV.hpSegs[i]
+                if i <= segments then
+                    local aTop = (i - 1) / segments
+                    local bBot = i / segments
+                    local center = (aTop + bBot) * 0.5
+                    if (1 - center) <= pct then
+                        local hc
+                        local okc, res = pcall(function() return _espHpGradAt(center) end)
+                        if okc and typeof(res) == "Color3" then hc = res end
+                        hc = hc or Config.ESP.HealthColor or Color3.fromRGB(90,220,120)
+                        setLine(seg, Vector2.new(bx, T2 + height * aTop), Vector2.new(bx, T2 + height * bBot + 1), 2, hc)
+                    else
+                        seg.Visible = false
+                    end
+                else
+                    seg.Visible = false
+                end
+            end
         end
 
-        if Config.ESP.Name then
-            PV.name.Text = string.upper(PV.rigName or "PREVIEW")
-            PV.name.TextColor3 = (Config.ESP.NameColor or col)
-            PV.name.Position = UDim2.fromOffset((minX+maxX)/2, minY - 10)
+        if Config.ESP.Name or Config.ESP.Distance then
+            local nameStr = Config.ESP.Name and string.upper(PV.rigName or "PREVIEW") or ""
+            local distStr = Config.ESP.Distance and ("[" .. tostring(PV.fakeDist or 12) .. "m]") or ""
+            local combined = (nameStr ~= "" and distStr ~= "") and (nameStr .. " " .. distStr) or (nameStr .. distStr)
+            PV.name.Text = combined
+            PV.name.TextColor3 = Config.ESP.NameColor or Color3.fromRGB(240, 240, 250)
+            PV.name.Position = UDim2.fromOffset(math.floor(cx), math.floor(T2 - 10))
             PV.name.Visible = true
         end
-        if Config.ESP.Distance then
-            PV.dista.Text = "[" .. tostring(PV.fakeDist or 12) .. "m]"
-            PV.dista.TextColor3 = (Config.ESP.DistanceColor or col)
-            PV.dista.Position = UDim2.fromOffset((minX+maxX)/2, maxY + 9)
-            PV.dista.Visible = true
-        end
+
         if Config.ESP.WeaponName then
             local wname = PV.fakeWeapon or "AK-47"
-            local yOff = maxY + (Config.ESP.Distance and 21 or 9)
+            local BOX_W = math.max(8, math.floor(R2 - L2))
+            local ICON_H = math.clamp(math.floor(BOX_W * 0.32), 10, 16)
             if PV.wepIconAsset == nil then
                 local okI, asset = pcall(function() return _espIconAssetForWeapon(wname) end)
                 PV.wepIconAsset = (okI and type(asset) == "string" and asset ~= "") and asset or false
@@ -13799,41 +14086,46 @@ do
                 PV.wepIcon.Image = PV.wepIconAsset
                 PV.wepIcon.ImageColor3 = Color3.new(1,1,1)
                 PV.wepIcon.ImageTransparency = 0
-                PV.wepIcon.Position = UDim2.fromOffset((minX+maxX)/2, yOff + 4)
+                PV.wepIcon.Size = UDim2.fromOffset(BOX_W, ICON_H)
+                PV.wepIcon.Position = UDim2.fromOffset(math.floor(cx), math.floor(B2 + 4))
                 PV.wepIcon.Visible = true
             else
                 PV.wep.Text = string.upper(wname)
                 PV.wep.TextColor3 = (Config.ESP.WeaponNameColor or col)
-                PV.wep.Position = UDim2.fromOffset((minX+maxX)/2, yOff)
+                PV.wep.Position = UDim2.fromOffset(math.floor(cx), math.floor(B2 + 10))
                 PV.wep.Visible = true
             end
         end
 
-
-        local head = parts["Head"]
-        if Config.ESP.HeadDot and head then
-            local p = project(head.Position)
+        if Config.ESP.HeadDot and headP then
+            local p = project(headP.Position)
             if p then
-                local r = math.max(3, w * 0.09)
-                PV.head.BackgroundColor3 = col
-                PV.head.Size = UDim2.fromOffset(r*2, r*2)
+                local r = math.clamp(height * 0.04, 2, 5)
+                PV.head.BackgroundColor3 = Config.ESP.HeadDotColor or col
+                PV.head.Size = UDim2.fromOffset(math.floor(r*2), math.floor(r*2))
                 PV.head.Position = UDim2.fromOffset(p.X, p.Y)
                 PV.head.Visible = true
             end
         end
 
         if Config.ESP.Skeleton then
-            local set = parts["UpperTorso"] and SKEL_R15 or SKEL_R6
             local sc = Config.ESP.SkeletonColor or Color3.fromRGB(255,255,255)
-            for i, pair in ipairs(set) do
+            local bones = SkeletonBones
+            if type(bones) ~= "table" or #bones == 0 then
+                bones = parts["UpperTorso"] and SKEL_R15 or SKEL_R6
+            end
+            local i = 0
+            for _, pair in ipairs(bones) do
                 local a, b = parts[pair[1]], parts[pair[2]]
-                local f = PV.skel[i]
-                if f and a and b then
-                    setLine(f, project(a.Position), project(b.Position), 1, sc)
+                if a and b then
+                    i = i + 1
+                    local f = PV.skel[i]
+                    if f then setLine(f, project(a.Position), project(b.Position), 1.5, sc) end
                 end
             end
         end
     end
+
 
     local function buildGui()
         if gui then return end
@@ -13846,8 +14138,8 @@ do
         pcall(function() gui.Parent = (gethui and gethui()) or LP:WaitForChild("PlayerGui") end)
 
         root = Instance.new("Frame")
-        root.Size = UDim2.fromOffset(430, 500)
-        root.Position = UDim2.new(0.5, 460, 0.5, -250)
+        root.Size = UDim2.fromOffset(470, 560)
+        root.Position = UDim2.new(0.5, 460, 0.5, -280)
         root.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
         root.BackgroundTransparency = 0.10
         root.BorderSizePixel = 0
@@ -13895,24 +14187,9 @@ do
 
         buildOverlay()
 
-        UIS.InputChanged:Connect(function(i)
-            if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-                local d = i.Position - lastPos
-                lastPos = i.Position
-                yaw = yaw - d.X * 0.01
-                pitch = math.clamp(pitch - d.Y * 0.008, math.rad(-70), math.rad(70))
-            end
-        end)
-        UIS.InputEnded:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-                dragging = false
-            end
-        end)
-        viewport.InputBegan:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-                dragging = true; lastPos = i.Position
-            end
-        end)
+        -- panel is docked to the menu: no window drag, no orbit drag.
+        -- zoom is mouse-scroll only, rotation is a slow automatic orbit.
+        dragging = false
         viewport.InputChanged:Connect(function(i)
             if i.UserInputType == Enum.UserInputType.MouseWheel then
                 dist = math.clamp(dist - i.Position.Z * 1.2, 4, 28)
@@ -13923,6 +14200,35 @@ do
                 dist = math.clamp(dist - i.Position.Z * 1.2, 4, 28)
             end
         end)
+
+        -- dock the panel to the right side of the main window (same behaviour
+        -- as the skin preview) so it always travels with the menu
+        do
+            local lx, ly = -1, -1
+            local dockConn
+            dockConn = RunSvc.Heartbeat:Connect(function(dt)
+                if not (root and root.Parent) then
+                    if dockConn then dockConn:Disconnect() end
+                    return
+                end
+                if root.Visible then
+                    yaw = (yaw + dt * 0.45) % (math.pi * 2)
+                end
+                local main
+                pcall(function()
+                    main = (Library and Library.Main)
+                        or (Library and Library.ScreenGui and Library.ScreenGui:FindFirstChild("Main", true))
+                end)
+                if main and main.AbsolutePosition then
+                    local pp, ss = main.AbsolutePosition, main.AbsoluteSize
+                    local nx, ny = pp.X + ss.X + 6, pp.Y
+                    if nx ~= lx or ny ~= ly then
+                        lx, ly = nx, ny
+                        root.Position = UDim2.fromOffset(nx, ny)
+                    end
+                end
+            end)
+        end
     end
 
 
@@ -14058,57 +14364,87 @@ do
         local isFire = folder.Name:find("VoxelFire") ~= nil
         local life   = isFire and 7 or 18
 
-        local ring = Instance.new("Part")
-        ring.Name = "BS_ZoneRing"
-        ring.Shape = Enum.PartType.Cylinder
-        ring.Anchored = true; ring.CanCollide = false; ring.CanQuery = false
-        ring.CanTouch = false; ring.Massless = true; ring.CastShadow = false
-        ring.Material = Enum.Material.Neon
-        ring.Color = _gzColor()
-        ring.Transparency = 0.55
-        ring.Size = Vector3.new(0.2, radius * 2, radius * 2)
-        ring.CFrame = CFrame.new(center) * CFrame.Angles(0, 0, math.rad(90))
-        ring.Parent = folder
+        -- de-dupe: one single counter per physical zone (VoxelFire + VoxelSmoke
+        -- of the same grenade spawn as two folders in the same spot)
+        for other, z in pairs(_GZ.Zones) do
+            if other.Parent and z.center and (z.center - center).Magnitude <= 12 then
+                z.linked = z.linked or {}
+                z.linked[folder] = true
+                z.life  = math.max(z.life, life)
+                _GZ.Zones[folder] = { proxy = other }
+                return
+            end
+        end
 
-        local topDisc = Instance.new("Part")
-        topDisc.Name = "BS_ZoneDisc"
-        topDisc.Shape = Enum.PartType.Cylinder
-        topDisc.Anchored = true; topDisc.CanCollide = false; topDisc.CanQuery = false
-        topDisc.CanTouch = false; topDisc.Massless = true; topDisc.CastShadow = false
-        topDisc.Material = Enum.Material.ForceField
-        topDisc.Color = _gzColor()
-        topDisc.Transparency = 0.85
-        topDisc.Size = Vector3.new(0.05, radius * 2, radius * 2)
-        topDisc.CFrame = CFrame.new(center + Vector3.new(0, 0.05, 0)) * CFrame.Angles(0, 0, math.rad(90))
-        topDisc.Parent = folder
+        local col = _gzColor()
 
         local anchor = Instance.new("Part")
         anchor.Name = "BS_ZoneAnchor"
         anchor.Anchored = true; anchor.CanCollide = false; anchor.CanQuery = false
-        anchor.CanTouch = false; anchor.Transparency = 1; anchor.Size = Vector3.new(0.1, 0.1, 0.1)
-        anchor.CFrame = CFrame.new(center + Vector3.new(0, 2, 0))
-        anchor.Parent = folder
+        anchor.CanTouch = false; anchor.Transparency = 1; anchor.CastShadow = false
+        anchor.Size = Vector3.new(0.1, 0.1, 0.1)
+        anchor.CFrame = CFrame.lookAt(center + Vector3.new(0, 0.06, 0), center + Vector3.new(0, 1.06, 0))
+        anchor.Parent = Workspace
+
+        local ring = Instance.new("CylinderHandleAdornment")
+        ring.Name = "BS_ZoneRing"
+        ring.Adornee = anchor
+        ring.AlwaysOnTop = false
+        ring.ZIndex = 0
+        ring.Color3 = col
+        ring.Transparency = 0.05
+        ring.Height = 0.03
+        ring.Radius = radius
+        ring.InnerRadius = math.max(0.1, radius - 0.10)
+        ring.CFrame = CFrame.new()
+        ring.Parent = anchor
+
+        local glow = Instance.new("CylinderHandleAdornment")
+        glow.Name = "BS_ZoneGlow"
+        glow.Adornee = anchor
+        glow.AlwaysOnTop = false
+        glow.ZIndex = 0
+        glow.Color3 = col
+        glow.Transparency = 0.65
+        glow.Height = 0.02
+        glow.Radius = radius + 0.18
+        glow.InnerRadius = math.max(0.1, radius - 0.02)
+        glow.CFrame = CFrame.new()
+        glow.Parent = anchor
+
+        local txtAnchor = Instance.new("Part")
+        txtAnchor.Name = "BS_ZoneTxtAnchor"
+        txtAnchor.Anchored = true; txtAnchor.CanCollide = false; txtAnchor.CanQuery = false
+        txtAnchor.CanTouch = false; txtAnchor.Transparency = 1; txtAnchor.CastShadow = false
+        txtAnchor.Size = Vector3.new(0.1, 0.1, 0.1)
+        txtAnchor.CFrame = CFrame.new(center + Vector3.new(0, 0.9, 0))
+        txtAnchor.Parent = Workspace
 
         local gui = Instance.new("BillboardGui")
         gui.Name = "BS_ZoneTimer"
-        gui.Adornee = anchor
-        gui.Size = UDim2.fromOffset(120, 46)
+        gui.Adornee = txtAnchor
+        gui.Size = UDim2.fromOffset(56, 16)
         gui.AlwaysOnTop = true
         gui.LightInfluence = 0
-        gui.Parent = anchor
+        gui.MaxDistance = 350
+        gui.Parent = txtAnchor
 
         local txt = Instance.new("TextLabel")
         txt.BackgroundTransparency = 1
         txt.Size = UDim2.fromScale(1, 1)
-        txt.Font = Enum.Font.GothamBold
-        txt.TextSize = 22
-        txt.TextColor3 = Color3.fromRGB(255,255,255)
-        txt.TextStrokeTransparency = 0.3
-        txt.TextStrokeColor3 = _gzColor()
+        txt.Font = Enum.Font.GothamMedium
+        txt.TextSize = 13
+        txt.TextScaled = false
+        txt.TextColor3 = col
+        txt.TextStrokeTransparency = 1
         txt.Text = string.format("%.1fs", life)
         txt.Parent = gui
 
-        _GZ.Zones[folder] = { ring = ring, disc = topDisc, anchor = anchor, gui = gui, txt = txt, start = tick(), life = life }
+        _GZ.Zones[folder] = {
+            anchor = anchor, txtAnchor = txtAnchor, ring = ring, glow = glow,
+            gui = gui, txt = txt, center = center, radius = radius,
+            start = tick(), life = life, linked = {},
+        }
     end
 
     local function _gzAttachVoxel(child)
@@ -14122,10 +14458,9 @@ do
     end
 
     local function _gzClear()
-        for folder, z in pairs(_GZ.Zones) do
-            pcall(function() if z.ring then z.ring:Destroy() end end)
-            pcall(function() if z.disc then z.disc:Destroy() end end)
-            pcall(function() if z.anchor then z.anchor:Destroy() end end)
+        for _, z in pairs(_GZ.Zones) do
+            pcall(function() if z.anchor    then z.anchor:Destroy()    end end)
+            pcall(function() if z.txtAnchor then z.txtAnchor:Destroy() end end)
         end
         table.clear(_GZ.Zones)
     end
@@ -14156,23 +14491,32 @@ do
             RunS.RenderStepped:Wait()
             if Config.Grenade and Config.Grenade.ZoneESP then
                 for folder, z in pairs(_GZ.Zones) do
-                    if not folder.Parent then
-                        pcall(function() if z.ring then z.ring:Destroy() end end)
-                        pcall(function() if z.disc then z.disc:Destroy() end end)
-                        pcall(function() if z.anchor then z.anchor:Destroy() end end)
+                    if z.proxy then
+                        if not folder.Parent then _GZ.Zones[folder] = nil end
+                    elseif not folder.Parent then
+                        pcall(function() if z.anchor    then z.anchor:Destroy()    end end)
+                        pcall(function() if z.txtAnchor then z.txtAnchor:Destroy() end end)
                         _GZ.Zones[folder] = nil
                     else
                         local elapsed = tick() - z.start
                         local remain  = math.max(0, z.life - elapsed)
                         z.txt.Text = string.format("%.1fs", remain)
-                        
+
                         local fadeIn  = math.clamp(elapsed / 0.35, 0, 1)
                         local fadeOut = math.clamp(remain  / 1.20, 0, 1)
                         local a = math.min(fadeIn, fadeOut)
-                        if z.ring then z.ring.Transparency = 0.55 + (1 - a) * 0.45 end
-                        if z.disc then z.disc.Transparency = 0.85 + (1 - a) * 0.15 end
+                        local pulse = 1 + math.sin(elapsed * 3.2) * 0.012
+                        if z.ring then
+                            z.ring.Transparency  = 0.05 + (1 - a) * 0.95
+                            z.ring.Radius        = z.radius * pulse
+                            z.ring.InnerRadius   = math.max(0.1, z.radius * pulse - 0.10)
+                        end
+                        if z.glow then
+                            z.glow.Transparency = 0.65 + (1 - a) * 0.35
+                            z.glow.Radius       = z.radius * pulse + 0.18
+                            z.glow.InnerRadius  = math.max(0.1, z.radius * pulse - 0.02)
+                        end
                         z.txt.TextTransparency = 1 - a
-                        z.txt.TextStrokeTransparency = 0.3 + (1 - a) * 0.7
                     end
                 end
             end
@@ -14188,9 +14532,9 @@ do
             Callback = function(c)
                 Config.Grenade.ZoneColor = c
                 for _, z in pairs(_GZ.Zones) do
-                    pcall(function() if z.ring then z.ring.Color = c end end)
-                    pcall(function() if z.disc then z.disc.Color = c end end)
-                    pcall(function() if z.txt  then z.txt.TextStrokeColor3 = c end end)
+                    pcall(function() if z.ring then z.ring.Color3 = c end end)
+                    pcall(function() if z.glow then z.glow.Color3 = c end end)
+                    pcall(function() if z.txt  then z.txt.TextColor3 = c end end)
                 end
             end })
 end
@@ -16012,6 +16356,12 @@ BhopToggle = MoveGB:AddToggle("Bhop_Toggle", {
     :AddKeyPicker("Bhop_Key",    { Default="V", SyncToggleState=true, Mode="Toggle", Text="Bunny Hop" })
 MoveGB:AddToggle("Strafe_Toggle",{ Text="AUTO STRAFER", Default=false, Callback=function(v) Config.Movement.AutoStrafe=v end })
     :AddKeyPicker("Strafe_Key",  { Default="C", SyncToggleState=true, Mode="Toggle", Text="Auto Strafer" })
+SafeAddDropdown(MoveGB, "Strafe_Mode", {
+    Text = "STRAFER MODE",
+    Values = { "Directional", "Camera", "Keybind", "Always" },
+    Default = "Directional", Multi = false,
+    Callback = function(v) Config.Movement.StrafeMode = tostring(v) end,
+})
 
 local AutoStopToggle = MoveGB:AddToggle("AutoStop_Toggle", {
     Text = "AUTO STOP", Default = false,
@@ -16032,6 +16382,161 @@ MoveGB:AddDropdown("AutoStop_Options", {
         Config.Movement.QuickStopOptions = list
     end,
 })
+
+Config.Movement.FakeDuck    = Config.Movement.FakeDuck    or false
+Config.Movement.InstantDuck = Config.Movement.InstantDuck or false
+
+local DuckGB = Tabs.Movement:AddRightGroupbox("DUCK")
+
+DuckGB:AddToggle("FakeDuck_Toggle", {
+    Text = "FAKE DUCK", Default = false,
+    Callback = function(v) Config.Movement.FakeDuck = v and true or false end,
+}):AddKeyPicker("FakeDuck_Key", { Default = "X", SyncToggleState = true, Mode = "Toggle", Text = "Fake Duck" })
+
+DuckGB:AddToggle("InstantDuck_Toggle", {
+    Text = "INSTANT DUCK", Default = false,
+    Callback = function(v) Config.Movement.InstantDuck = v and true or false end,
+}):AddKeyPicker("InstantDuck_Key", { Default = "Z", SyncToggleState = true, Mode = "Hold", Text = "Instant Duck" })
+
+do
+    -- hook UpdateCrouchState so the server always believes we are crouched
+    -- while Fake Duck is on, without the local camera actually ducking
+    local hooked = false
+    local function installDuckHook()
+        if hooked then return end
+        local ok = pcall(function()
+            local Net = require(ReplicatedStorage.Database.Security.Remotes)
+            local pkt = Net and Net.Character and Net.Character.UpdateCrouchState
+            if not (pkt and type(pkt.Send) == "function") then return end
+            local old = pkt.Send
+            local function hk(...)
+                if Config.Movement.FakeDuck then
+                    local args = { ... }
+                    args[1] = true
+                    return old(unpack(args))
+                end
+                if Config.Movement.InstantDuck then
+                    local args = { ... }
+                    args[1] = (args[1] == true) and true or false
+                    return old(unpack(args))
+                end
+                return old(...)
+            end
+            pkt.Send = (newcclosure and newcclosure(hk)) or hk
+            _G.__ECLIPSE_DUCK_SEND = old
+            hooked = true
+        end)
+        if not ok then hooked = false end
+    end
+
+    task.spawn(function()
+        local last = false
+        while scriptRunning do
+            local want = Config.Movement.FakeDuck or Config.Movement.InstantDuck
+            if want then installDuckHook() end
+
+            local ch  = LocalPlayer and LocalPlayer.Character
+            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+            if hum then
+                if Config.Movement.FakeDuck then
+                    -- keep the local view standing while the server sees a crouch
+                    if hum.CameraOffset.Y < -0.25 then
+                        pcall(function() hum.CameraOffset = Vector3.new(0, 0, 0) end)
+                    end
+                    -- constant crouch spam so the hitbox keeps flickering
+                    pcall(function()
+                        local send = _G.__ECLIPSE_DUCK_SEND
+                        if send then send(true) end
+                    end)
+                elseif Config.Movement.InstantDuck then
+                    pcall(function()
+                        local send = _G.__ECLIPSE_DUCK_SEND
+                        if send then send(true) end
+                        hum.CameraOffset = Vector3.new(0, -1.6, 0)
+                    end)
+                elseif last then
+                    pcall(function()
+                        local send = _G.__ECLIPSE_DUCK_SEND
+                        if send then send(false) end
+                        hum.CameraOffset = Vector3.new(0, 0, 0)
+                    end)
+                end
+            end
+            last = want
+            task.wait(want and 0.05 or 0.25)
+        end
+    end)
+end
+
+Config.Combat = Config.Combat or {}
+Config.Combat.KnifeBot      = Config.Combat.KnifeBot      or false
+Config.Combat.KnifeBotRange = Config.Combat.KnifeBotRange or 12
+
+local KnifeGB = Tabs.Movement:AddRightGroupbox("KNIFE BOT")
+KnifeGB:AddToggle("KnifeBot_Toggle", {
+    Text = "KNIFE BOT", Default = false,
+    Callback = function(v) Config.Combat.KnifeBot = v and true or false end,
+}):AddKeyPicker("KnifeBot_Key", { Default = "K", SyncToggleState = true, Mode = "Toggle", Text = "Knife Bot" })
+KnifeGB:AddSlider("KnifeBot_Range", {
+    Text = "RANGE", Default = 12, Min = 4, Max = 24, Rounding = 1, Suffix = " studs",
+    Callback = function(v) Config.Combat.KnifeBotRange = tonumber(v) or 12 end,
+})
+KnifeGB:AddToggle("KnifeBot_Back", { Text = "PREFER BACKSTAB", Default = true })
+
+task.spawn(function()
+    while scriptRunning do
+        task.wait(0.08)
+        if Config.Combat.KnifeBot and Config.GlobalEnable and IsAlive() then
+            pcall(function()
+                local ch   = LocalPlayer.Character
+                local root = ch and ch:FindFirstChild("HumanoidRootPart")
+                if not root then return end
+
+                local w = _ECLIPSE_HUB_GetEquipped()
+                if not w then return end
+                -- a knife has no Rounds field -> that is our knife check
+                if tonumber(_ECLIPSE_HUB_WField(w, "Rounds")) ~= nil then return end
+                if not _ECLIPSE_HUB_WField(w, "IsEquipped") then return end
+
+                local range = tonumber(Config.Combat.KnifeBotRange) or 12
+                local best, bestD
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl ~= LocalPlayer then
+                        if _IS_DEATHMATCH or not (Config.TeamCheck and IsAlly(pl)) then
+                            local c2 = pl.Character
+                            local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
+                            local r2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+                            if h2 and h2.Health > 0 and r2 then
+                                local d = (r2.Position - root.Position).Magnitude
+                                if d <= range and (not bestD or d < bestD) then best, bestD = r2, d end
+                            end
+                        end
+                    end
+                end
+                if not best then return end
+
+                local backstab = true
+                pcall(function()
+                    backstab = Toggles.KnifeBot_Back and Toggles.KnifeBot_Back.Value
+                end)
+                local toTarget = (best.Position - root.Position)
+                local isBack = backstab and (best.CFrame.LookVector:Dot(toTarget.Unit) > 0.35)
+
+                local slash = _ECLIPSE_HUB_WField(w, "slash")   or _ECLIPSE_HUB_WField(w, "Slash")
+                local stab  = _ECLIPSE_HUB_WField(w, "stab")    or _ECLIPSE_HUB_WField(w, "Stab")
+                local shoot = _ECLIPSE_HUB_WField(w, "shoot")   or _ECLIPSE_HUB_WField(w, "Shoot")
+
+                if isBack and type(stab) == "function" then
+                    pcall(stab, w)
+                elseif type(slash) == "function" then
+                    pcall(slash, w)
+                elseif type(shoot) == "function" then
+                    pcall(shoot, w)
+                end
+            end)
+        end
+    end
+end)
 
 task.spawn(function()
     local UIS = game:GetService("UserInputService")
@@ -16118,7 +16623,7 @@ WorldGB:AddSlider("Weather_Speed", {
     Min=0, Max=5, Rounding=0,
     Callback=function(v)
         Config.World.WeatherSpeed = tonumber(v) or 0
-        if UpdateWeather then pcall(UpdateWeather, Config.World.Weather or "None") end
+        if ApplyWeatherSpeed then pcall(ApplyWeatherSpeed) end
     end,
 })
 
@@ -16311,13 +16816,19 @@ do
     Config.Misc.Test1 = Config.Misc.Test1 or false
     local RRGB = MiscGB
     RRGB:AddToggle("NoReload", { Text = "NO RELOAD", Default = false,
-        Tooltip = "Recarga instantanea local (hook em WeaponModule.reload).",
+        Tooltip = "Local instant reload (hook on WeaponModule.reload).",
+
         Callback = function(v)
             Config.Misc.NoReload = v and true or false
             if v and type(_G.ECLIPSE_HUBInstallNoReloadHook) == "function" then
                 pcall(_G.ECLIPSE_HUBInstallNoReloadHook)
             end
         end })
+    Config.Misc.NoReloadDelay = Config.Misc.NoReloadDelay or 0
+    RRGB:AddSlider("NoReload_Delay", {
+        Text = "RELOAD DELAY", Default = 0, Min = 0, Max = 3, Rounding = 2, Suffix = "s",
+        Callback = function(v) Config.Misc.NoReloadDelay = tonumber(v) or 0 end,
+    })
 
     Config.Misc.Test1 = false
 
@@ -16844,10 +17355,13 @@ do
             _mirrorWeaponCacheAt = now
         end
         if not weapon then
-            if _mirrorClone and _mirrorLastSeen and now - _mirrorLastSeen < 0.25 then
+            -- keep the mirrored weapon welded to the hand even when the
+            -- viewmodel momentarily disappears (idle / standing still)
+            if _mirrorClone and _mirrorClone.Parent then
                 _positionMirror(hand)
                 return
             end
+            if _mirrorLastSeen and now - _mirrorLastSeen < 2.0 then return end
             return _clearMirror()
         end
         _mirrorLastSeen = now
@@ -17968,6 +18482,270 @@ Config.Misc.RemoveScope    = false
 Config.Misc.ForceScope     = false
 Config.Misc.NoScopeOverlay = false
 Config.Misc.CustomScopeFov = false
+
+do
+    Config.Misc.ScopeFovValue = tonumber(Config.Misc.ScopeFovValue) or 40
+    Config.Misc.AutoScope     = false
+    Config.Misc.AutoPeek      = false
+    Config.Misc.AutoPeekDist  = 4
+    Config.Misc.AutoPeekSide  = "Right"
+
+    local SC = { restore = {}, bound = false }
+
+    local function _scopeFrame()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not pg then return nil end
+        local ok, f = pcall(function()
+            return pg.Interface.Screens.Gameplay.Middle:FindFirstChild("SniperScope")
+        end)
+        if ok and f then return f end
+        local alt = pg:FindFirstChild("SniperScope", true)
+        return alt
+    end
+
+    local function _equippedProps()
+        local w = _ECLIPSE_HUB_GetEquipped()
+        if not w then return nil, nil end
+        local props = _ECLIPSE_HUB_WField(w, "Properties")
+        return w, props
+    end
+
+    local function _isSniper()
+        local _, props = _equippedProps()
+        if type(props) ~= "table" then return false end
+        local ok, ao = pcall(function() return props.AimingOptions end)
+        return ok and ao == "SniperScope"
+    end
+
+    local function _isScoped()
+        local w = _ECLIPSE_HUB_GetEquipped()
+        if not w then return false end
+        if not _ECLIPSE_HUB_WField(w, "IsAiming") then return false end
+        return _isSniper()
+    end
+    _G.ECLIPSE_HUB_IsScoped = _isScoped
+
+    local function _applyRemoveScope()
+        local f = _scopeFrame()
+        if not f then return end
+        for _, d in ipairs(f:GetDescendants()) do
+            if d:IsA("ImageLabel") or d:IsA("ImageButton") then
+                if SC.restore[d] == nil then SC.restore[d] = d.ImageTransparency end
+                if d.ImageTransparency ~= 1 then d.ImageTransparency = 1 end
+            elseif d:IsA("Frame") then
+                if SC.restore[d] == nil then SC.restore[d] = d.BackgroundTransparency end
+                if d.BackgroundTransparency ~= 1 then d.BackgroundTransparency = 1 end
+            end
+        end
+    end
+
+    local function _restoreScopeVisual()
+        for inst, v in pairs(SC.restore) do
+            pcall(function()
+                if not inst.Parent then return end
+                if inst:IsA("ImageLabel") or inst:IsA("ImageButton") then inst.ImageTransparency = v
+                elseif inst:IsA("Frame") then inst.BackgroundTransparency = v end
+            end)
+        end
+        SC.restore = {}
+    end
+
+    local _scopeFovActive = false
+    local function _scopeStep()
+        if not scriptRunning then return end
+
+        if Config.Misc.RemoveScope then
+            pcall(_applyRemoveScope)
+        elseif next(SC.restore) then
+            pcall(_restoreScopeVisual)
+        end
+
+        if Config.Misc.CustomScopeFov and Camera then
+            if _isScoped() then
+                local fov = math.clamp(tonumber(Config.Misc.ScopeFovValue) or 40, 5, 120)
+                if math.abs(Camera.FieldOfView - fov) > 0.01 then Camera.FieldOfView = fov end
+                _scopeFovActive = true
+            else
+                _scopeFovActive = false
+            end
+        else
+            _scopeFovActive = false
+        end
+    end
+
+    local function _bindScope()
+        if SC.bound then return end
+        SC.bound = true
+        pcall(function()
+            RunService:BindToRenderStep("ECLIPSE_HUBScopeSys", Enum.RenderPriority.Camera.Value + 5, _scopeStep)
+        end)
+    end
+    local function _unbindScope()
+        if not SC.bound then return end
+        SC.bound = false
+        pcall(function() RunService:UnbindFromRenderStep("ECLIPSE_HUBScopeSys") end)
+        pcall(_restoreScopeVisual)
+    end
+    local function _syncScopeBind()
+        if Config.Misc.RemoveScope or Config.Misc.CustomScopeFov then _bindScope() else _unbindScope() end
+    end
+    _G.ECLIPSE_HUB_UnbindScopeSys = _unbindScope
+
+    local function _setAim(state)
+        local w = _ECLIPSE_HUB_GetEquipped()
+        if not w then return false end
+        for _, k in ipairs({ "aim", "Aim", "setAiming", "SetAiming", "toggleAim", "ToggleAim" }) do
+            local fn = _ECLIPSE_HUB_WField(w, k)
+            if type(fn) == "function" then
+                local ok = pcall(fn, w, state)
+                if ok then return true end
+            end
+        end
+        return (pcall(function() w.IsAiming = state and true or false end))
+    end
+
+    local _asHeldByUs = false
+    local function _fireHeld()
+        if _ECLIPSE_HUBFireBtnHeld then return true end
+        local ok, down = pcall(function()
+            return UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        end)
+        return ok and down or false
+    end
+
+    task.spawn(function()
+        while true do
+            task.wait(0.05)
+            if scriptRunning and Config.Misc.AutoScope then
+                local alive = LocalPlayer.Character
+                    and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                    and LocalPlayer.Character:FindFirstChildOfClass("Humanoid").Health > 0
+                if alive and _isSniper() then
+                    if _fireHeld() then
+                        if not _isScoped() then
+                            _setAim(true)
+                            _asHeldByUs = true
+                        end
+                    elseif _asHeldByUs then
+                        _asHeldByUs = false
+                        _setAim(false)
+                    end
+                elseif _asHeldByUs then
+                    _asHeldByUs = false
+                end
+            elseif _asHeldByUs then
+                _asHeldByUs = false
+                pcall(_setAim, false)
+            end
+        end
+    end)
+
+    local AP = { anchor = nil, out = false }
+    local function _root()
+        local ch = LocalPlayer.Character
+        return ch and ch:FindFirstChild("HumanoidRootPart") or nil
+    end
+    local function _apReset()
+        AP.anchor = nil
+        AP.out = false
+    end
+    _G.ECLIPSE_HUB_AutoPeekReset = _apReset
+
+    task.spawn(function()
+        while true do
+            task.wait(0.03)
+            repeat
+                if not (scriptRunning and Config.Misc.AutoPeek) then
+                    if AP.anchor then
+                        local r = _root()
+                        if r and AP.out then pcall(function() r.CFrame = AP.anchor end) end
+                        _apReset()
+                    end
+                    break
+                end
+                local r = _root()
+                if not r then _apReset(); break end
+                local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                if not (hum and hum.Health > 0) then _apReset(); break end
+
+                if not AP.anchor then AP.anchor = r.CFrame end
+
+                local dist = math.clamp(tonumber(Config.Misc.AutoPeekDist) or 4, 1, 12)
+                local side = (Config.Misc.AutoPeekSide == "Left") and -1 or 1
+                local cam  = Camera and Camera.CFrame
+                local right = cam and Vector3.new(cam.RightVector.X, 0, cam.RightVector.Z) or Vector3.new(1, 0, 0)
+                if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) end
+                right = right.Unit
+
+                if _fireHeld() then
+                    if not AP.out then
+                        AP.anchor = AP.anchor or r.CFrame
+                        AP.out = true
+                    end
+                    local goal = AP.anchor + right * (dist * side)
+                    local cur  = r.CFrame.Position
+                    local step = goal - cur
+                    if step.Magnitude > 0.05 then
+                        local move = step.Magnitude > 1.2 and (step.Unit * 1.2) or step
+                        pcall(function() r.CFrame = r.CFrame + move end)
+                    end
+                elseif AP.out then
+                    local goal = AP.anchor.Position
+                    local step = goal - r.CFrame.Position
+                    if step.Magnitude > 0.15 then
+                        local move = step.Magnitude > 1.6 and (step.Unit * 1.6) or step
+                        pcall(function() r.CFrame = r.CFrame + move end)
+                    else
+                        pcall(function() r.CFrame = AP.anchor end)
+                        AP.out = false
+                    end
+                else
+                    AP.anchor = r.CFrame
+                end
+            until true
+        end
+    end)
+
+    pcall(function()
+        connectSignal(LocalPlayer.CharacterAdded:Connect(function() _apReset() end))
+    end)
+
+    local ScopeGB = Tabs.Misc:AddRightGroupbox("SCOPE", "crosshair")
+    ScopeGB:AddToggle("RemoveScope_Toggle", { Text = "REMOVE SCOPE", Default = false,
+        Tooltip = "Hides the sniper scope overlay while keeping the zoom.",
+        Callback = function(v)
+            Config.Misc.RemoveScope = v and true or false
+            _syncScopeBind()
+            if not v then pcall(_restoreScopeVisual) end
+        end })
+    ScopeGB:AddToggle("CustomScopeFov_Toggle", { Text = "CUSTOM SCOPE FOV", Default = false,
+        Tooltip = "Overrides the camera FOV while scoped.",
+        Callback = function(v)
+            Config.Misc.CustomScopeFov = v and true or false
+            _syncScopeBind()
+        end })
+    ScopeGB:AddSlider("CustomScopeFov_Value", { Text = "SCOPE FOV", Default = Config.Misc.ScopeFovValue,
+        Min = 5, Max = 120, Rounding = 0, Suffix = "°",
+        Callback = function(v) Config.Misc.ScopeFovValue = tonumber(v) or 40 end })
+    ScopeGB:AddToggle("AutoScope_Toggle", { Text = "AUTO SCOPE", Default = false,
+        Tooltip = "Automatically scopes in when shooting with a sniper (PC + Mobile).",
+        Callback = function(v) Config.Misc.AutoScope = v and true or false end })
+
+    local PeekGB = Tabs.Movement:AddRightGroupbox("AUTO PEEK", "move")
+    PeekGB:AddToggle("AutoPeek_Toggle", { Text = "AUTO PEEK", Default = false,
+        Tooltip = "Saves your spot, peeks out while shooting and returns when you stop.",
+        Callback = function(v)
+            Config.Misc.AutoPeek = v and true or false
+            if not v then _apReset() end
+        end })
+        :AddKeyPicker("AutoPeek_Key", { Default = "V", SyncToggleState = true, Mode = "Toggle", Text = "Auto Peek" })
+    PeekGB:AddSlider("AutoPeek_Dist", { Text = "PEEK DISTANCE", Default = Config.Misc.AutoPeekDist,
+        Min = 1, Max = 12, Rounding = 1, Suffix = "m",
+        Callback = function(v) Config.Misc.AutoPeekDist = tonumber(v) or 4 end })
+    PeekGB:AddDropdown("AutoPeek_Side", { Text = "PEEK SIDE", Values = { "Right", "Left" },
+        Default = "Right",
+        Callback = function(v) Config.Misc.AutoPeekSide = v end })
+end
 
 Config.Misc.InfAmmo = false
 do
@@ -19525,12 +20303,24 @@ do
             if not isfolder(CFG_FOLDER) then makefolder(CFG_FOLDER); return end
             for _, path in ipairs(listfiles(CFG_FOLDER)) do
                 local n = tostring(path):match("([^/\\]+)$")
-                if n and n:sub(-5) == ".json" then table.insert(out, n) end
+                if n and n:sub(-5) == ".json" then table.insert(out, n:sub(1, #n - 5)) end
             end
         end)
         table.sort(out)
         return out
     end
+
+    local function _cfgPath(name)
+        name = tostring(name or "")
+        if name:sub(-5) == ".json" then name = name:sub(1, #name - 5) end
+        return CFG_FOLDER .. "/" .. name .. ".json"
+    end
+    local function _cfgClean(name)
+        name = tostring(name or "")
+        if name:sub(-5) == ".json" then name = name:sub(1, #name - 5) end
+        return name
+    end
+
 
     local cfgDD
     cfgDD = SafeAddDropdown(CfgGB, "Cfg_List", {
@@ -19550,13 +20340,19 @@ do
         pcall(function() nlCfg = NLLib:GetConfig() or "" end)
         local ecJson = ""
         pcall(function() ecJson = _ecfgSnapshotJson() or "" end)
-        local payload = { NL = nlCfg, EclipseHub = ecJson }
+        local colors, keys = {}, {}
+        pcall(function() colors = _ecfgColorSnapshot() or {} end)
+        pcall(function() keys = _ecfgKeySnapshot() or {} end)
+        local payload = { NL = nlCfg, EclipseHub = ecJson, Colors = colors, Keys = keys }
         local ok, enc = pcall(function() return HttpService:JSONEncode(payload) end)
-        return ok and enc or nlCfg
+        if ok and type(enc) == "string" then return enc end
+        local ok2, enc2 = pcall(function() return HttpService:JSONEncode({ NL = nlCfg, Colors = colors, Keys = keys }) end)
+        if ok2 and type(enc2) == "string" then return enc2 end
+        return nlCfg
     end
     local function _combinedLoad(raw)
         local ok, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
-        if ok and type(decoded) == "table" and (decoded.NL or decoded.EclipseHub) then
+        if ok and type(decoded) == "table" and (decoded.NL or decoded.EclipseHub or decoded.Colors or decoded.Keys) then
             if decoded.EclipseHub and decoded.EclipseHub ~= "" then
                 pcall(function()
                     local ec = HttpService:JSONDecode(decoded.EclipseHub)
@@ -19566,38 +20362,42 @@ do
             elseif decoded.NL and decoded.NL ~= "" then
                 pcall(function() NLLib:LoadConfig(decoded.NL) end)
             end
+            
+            pcall(function() _ecfgApplyColorsAndKeys(decoded) end)
+            task.delay(0.4, function() pcall(function() _ecfgApplyColorsAndKeys(decoded) end) end)
         else
             pcall(function() NLLib:LoadConfig(raw) end)
         end
     end
 
+
     CfgGB:AddButton({ Text = "Create", Func = function()
-        local name = currentInput
+        local name = _cfgClean(currentInput)
         if not name or name == "" then
             Library:Notify({Title="Configs", Description="Enter a name first.", Time=3}); return
         end
-        if name:sub(-5) ~= ".json" then name = name .. ".json" end
         pcall(function()
             if not isfolder(CFG_FOLDER) then makefolder(CFG_FOLDER) end
-            writefile(CFG_FOLDER .. "/" .. name, _combinedSave())
+            writefile(_cfgPath(name), _combinedSave())
         end)
         _refresh()
         Library:Notify({Title="Configs", Description="Created <b>"..name.."</b>", Time=3})
     end })
     CfgGB:AddButton({ Text = "Save", Func = function()
         if not selectedName then Library:Notify({Title="Configs", Description="Select a config.", Time=3}); return end
-        pcall(function() writefile(CFG_FOLDER .. "/" .. selectedName, _combinedSave()) end)
-        Library:Notify({Title="Configs", Description="Saved <b>"..selectedName.."</b> (colors + keybinds)", Time=3})
+        local name = _cfgClean(selectedName)
+        pcall(function() writefile(_cfgPath(name), _combinedSave()) end)
+        Library:Notify({Title="Configs", Description="Saved <b>"..name.."</b> (colors + keybinds)", Time=3})
     end })
     CfgGB:AddButton({ Text = "Load", Func = function()
         if not selectedName then Library:Notify({Title="Configs", Description="Select a config.", Time=3}); return end
-        local name = selectedName
+        local name = _cfgClean(selectedName)
         Library:Notify({Title="Configs", Description="Loading <b>"..name.."</b>...", Time=2})
         
         task.spawn(function()
             ECLIPSE_HUBYield()
             local data
-            local okR = pcall(function() data = readfile(CFG_FOLDER .. "/" .. name) end)
+            local okR = pcall(function() data = readfile(_cfgPath(name)) end)
             if not okR or not data then
                 Library:Notify({Title="Configs", Description="Read failed", Time=3}); return
             end
@@ -19608,7 +20408,7 @@ do
             ECLIPSE_HUBYield()
 
             local okAll = true
-            if type(decoded) == "table" and (decoded.NL or decoded.EclipseHub) then
+            if type(decoded) == "table" and (decoded.NL or decoded.EclipseHub or decoded.Colors or decoded.Keys) then
                 if decoded.EclipseHub and decoded.EclipseHub ~= "" then
                     local ok = pcall(function()
                         local ec = HttpService:JSONDecode(decoded.EclipseHub)
@@ -19622,10 +20422,15 @@ do
                     okAll = okAll and ok
                     ECLIPSE_HUBYield()
                 end
+                
+                pcall(function() _ecfgApplyColorsAndKeys(decoded) end)
+                ECLIPSE_HUBYield()
+                task.delay(0.4, function() pcall(function() _ecfgApplyColorsAndKeys(decoded) end) end)
             else
                 local ok = pcall(function() NLLib:LoadConfig(data) end)
                 okAll = okAll and ok
             end
+
 
             Library:Notify({
                 Title="Configs",
@@ -19636,7 +20441,7 @@ do
     end })
     CfgGB:AddButton({ Text = "Delete", Func = function()
         if not selectedName then return end
-        pcall(function() delfile(CFG_FOLDER .. "/" .. selectedName) end)
+        pcall(function() delfile(_cfgPath(selectedName)) end)
         selectedName = nil; _refresh()
     end })
     CfgGB:AddButton({ Text = "Refresh", Func = _refresh })
@@ -22370,17 +23175,10 @@ end)
     end
 
     local function _isMeleeWeapon(w)
-        
-        local eq
-        if type(_ECLIPSE_HUB_GetEquipped) == "function" then
-            eq = _ECLIPSE_HUB_GetEquipped()
-        end
-        local target = eq or w
-        if type(target) ~= "table" then return true end
-        local ok, r = pcall(rawget, target, "Rounds")
+        if type(w) ~= "table" then return true end
+        local ok, r = pcall(rawget, w, "Rounds")
         if not ok then return true end
-        if tonumber(r) == nil then return true end
-        return false
+        return tonumber(r) == nil
     end
 
     _G.ECLIPSE_HUBAS_TryRefill    = _tryRefill
@@ -23008,12 +23806,22 @@ _G.ECLIPSE_HUBBulletTracerFire = function() end
                     if props.Rounds == self.Rounds then return end
                     local needed = props.Rounds - (self.Rounds or 0)
                     local toAdd  = math.min(needed, self.Capacity or 0)
-                    self.Rounds   = (self.Rounds   or 0) + toAdd
-                    self.Capacity = (self.Capacity or 0) - toAdd
-                    self.IsReloading  = false
-                    self.IsInspecting = false
-                    self.IsShooting   = false
-                    self.CurrentReloadIdentity = nil
+                    local delay  = tonumber(Config.Misc.NoReloadDelay) or 0
+                    local function apply()
+                        if type(self) ~= "table" or self.IsDestroyed then return end
+                        self.Rounds   = (self.Rounds   or 0) + toAdd
+                        self.Capacity = (self.Capacity or 0) - toAdd
+                        self.IsReloading  = false
+                        self.IsInspecting = false
+                        self.IsShooting   = false
+                        self.CurrentReloadIdentity = nil
+                    end
+                    if delay > 0 then
+                        self.IsReloading = true
+                        task.delay(delay, function() pcall(apply) end)
+                    else
+                        apply()
+                    end
                     return
                 end
                 return OriginalReload(self, ...)
@@ -23107,30 +23915,13 @@ end)()
     end
 
     local function _isHeldMelee()
-        local ch = LP and LP.Character
-        local tool = ch and ch:FindFirstChildOfClass("Tool")
-        if not tool then return false end
-        local rawName = tostring(tool.Name or "")
-        
-        local KN = rawget(_G, "KNIVES") or KNIVES
-        if type(KN) == "table" and KN[rawName] == true then return true end
-        local kn2 = rawget(_G, "knives") or knives
-        if type(kn2) == "table" and kn2[rawName] ~= nil then return true end
-        
+        local findEq  = _G.ECLIPSE_HUBAS_FindEquipped
         local isMelee = _G.ECLIPSE_HUBAS_IsMelee
-        if type(isMelee) == "function" then
-            local ok, res = pcall(isMelee, tool)
-            if ok and res == true then return true end
-        end
-        
-        local n = rawName:lower()
-        if n:find("knife", 1, true) or n:find("bayonet", 1, true) or n:find("melee", 1, true)
-            or n:find("kukri", 1, true) or n:find("karambit", 1, true) or n:find("butterfly", 1, true)
-            or n:find("gut", 1, true) or n:find("flip", 1, true) or n:find("stiletto", 1, true)
-            or n:find("skeleton", 1, true) or n:find("huntsman", 1, true) or n:find("falchion", 1, true) then
-            return true
-        end
-        return false
+        if type(findEq) ~= "function" or type(isMelee) ~= "function" then return false end
+        local ok, w = pcall(findEq)
+        if not ok or not w then return false end
+        local ok2, res = pcall(isMelee, w)
+        return (ok2 and res == true)
     end
 
     local function _canShowTracer()
@@ -23580,9 +24371,16 @@ task.defer(function() pcall(function()
             p.CFrame = cam and CFrame.new(pos, cam.CFrame.Position) or CFrame.new(pos)
             p.Parent = Workspace.Terrain
 
-            local life = math.clamp(tonumber(dur) or 0.4, 0.15, 1.2)
-            TweenService:Create(p, TweenInfo.new(life, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-                { Transparency = 1, Size = Vector3.new(0.46, 0.46, 0.02) }):Play()
+            local life = math.clamp(tonumber(dur) or 0.4, 0.15, 6)
+            local fadeIn = math.min(0.10, life * 0.18)
+            p.Transparency = 1
+            TweenService:Create(p, TweenInfo.new(fadeIn, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                { Transparency = 0.05, Size = Vector3.new(0.26, 0.26, 0.02) }):Play()
+            task.delay(fadeIn, function()
+                if not p.Parent then return end
+                TweenService:Create(p, TweenInfo.new(math.max(life - fadeIn, 0.05), Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                    { Transparency = 1, Size = Vector3.new(0.46, 0.46, 0.02) }):Play()
+            end)
             Debris:AddItem(p, life + 0.15)
         end)
         return ok
@@ -23624,20 +24422,30 @@ task.defer(function() pcall(function()
 
         local wbOn = (Config and Config.Aimbot and Config.Aimbot.WallBang) == true
         if not wbOn then
-            _tracerImpactBox(to, col, math.min(dur, 0.45))
+            _tracerImpactBox(to, col, dur)
         end
 
 
         local proxy = Instance.new("NumberValue"); proxy.Value = 0; proxy.Parent = Workspace.Terrain
+        local FADE_IN = 0.16
         local conn; conn = proxy.Changed:Connect(function(v)
             if not beam.Parent then if conn then conn:Disconnect() end; return end
-            local ct = st + (1 - st) * v
+            local a
+            if v < FADE_IN then
+                local t = v / FADE_IN
+                a = 1 - (t * t * (3 - 2 * t))
+            else
+                local t = (v - FADE_IN) / (1 - FADE_IN)
+                a = t * t * (3 - 2 * t)
+            end
+            local ct = math.clamp(st + (1 - st) * a, 0, 1)
             beam.Transparency = NumberSequence.new(ct)
             if core and core.Parent then
-                core.Transparency = NumberSequence.new(math.clamp(ct, 0, 1))
+                local coreBase = math.max(st * 0.35, 0)
+                core.Transparency = NumberSequence.new(math.clamp(coreBase + (1 - coreBase) * a, 0, 1))
             end
             if glow and glow.Parent then
-                local gt = math.clamp(glowT + (1 - glowT) * v, 0, 1)
+                local gt = math.clamp(glowT + (1 - glowT) * a, 0, 1)
                 glow.Transparency = NumberSequence.new(gt)
             end
         end)
@@ -24013,6 +24821,32 @@ task.defer(function() pcall(function()
         task.delay(4, function() pcall(function() if s then s:Destroy() end end) end)
     end
     _G.ECLIPSE_HUBHVH_PlaySound = playSound
+
+    -- unified shot-sound entry point (used by the RaycastModule.cast hook so
+    -- every real bullet plays sounds, exactly like tracers / hitmarkers)
+    _G.ECLIPSE_HUB_ShotSound = function(kind, hum)
+        if kind == "shoot" then
+            if Toggles.HVH_ShootSound and Toggles.HVH_ShootSound.Value then
+                playSound(Options.HVH_ShootSnd.Value, Options.HVH_ShootVol.Value, Options.HVH_ShootPitch.Value)
+            end
+            return
+        end
+        if kind ~= "hit" then return end
+        local before = (hum and hum.Health) or nil
+        if Toggles.HVH_HitSound and Toggles.HVH_HitSound.Value then
+            playSound(Options.HVH_HitSnd.Value, Options.HVH_HitVol.Value, Options.HVH_HitPitch.Value)
+        end
+        if not (hum and before and before > 0) then return end
+        task.delay(0.16, function()
+            pcall(function()
+                if hum and hum.Parent and hum.Health <= 0 then
+                    if Toggles.HVH_KillSound and Toggles.HVH_KillSound.Value then
+                        playSound(Options.HVH_KillSnd.Value, Options.HVH_KillVol.Value, Options.HVH_KillPitch.Value)
+                    end
+                end
+            end)
+        end)
+    end
 
     local WeaponDB = {
         ["Glock-18"]={FR=0.15,R=20,Pen=1.5,Wbm=0.5,D={Head=68,Torso=17,Arms=13,Legs=11}},
