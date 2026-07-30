@@ -3,8 +3,8 @@ local EclipseHub = {
     Discord       = "https://discord.gg/5Drj4Hkdgu",
     Website       = "",
     Webhook       = "https://discord.com/api/webhooks/1522330397986258986/DIVbvuiwjiUzstZRT8--YC8egUCEl6f73QR9zxdAG29HNVFGOkgQA6kaKmZfQ7rdx1Cn",
-    PresenceHTTP  = "https://project--701cf016-18b0-4a76-a10a-e6db7944389d.lovable.app/api/public/rt/presence",
-    PresencePub   = "https://project--701cf016-18b0-4a76-a10a-e6db7944389d.lovable.app/api/public/rt/publish",
+    PresenceHTTP  = "https://eclipsehub-rt.lovable.app/api/public/rt/presence",
+    PresencePub   = "https://eclipsehub-rt.lovable.app/api/public/rt/publish",
     PresenceKey   = "hfjyawicdcjgqispxlakdljremzgeove",
     GameLock      = { 114234929420007, 135434213652028 },
     PresenceColor = Color3.fromRGB(160, 90, 255),
@@ -1273,7 +1273,7 @@ function Library:_BuildWatermark()
         logo.LayoutOrder = 1
         logo.ScaleType = Enum.ScaleType.Fit
 
-        local LOGO_URL = "https://raw.githubusercontent.com/eclipsehub-rbx/assets/main/logo.png"
+        local LOGO_URL = "https://github.com/Elaps0o/EclipseLoader/blob/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png?raw=true"
         pcall(function()
             if type(getcustomasset) == "function" and type(isfile) == "function" and type(writefile) == "function" then
                 if not isfile("EclipseHub_wm_logo.png") then
@@ -2279,7 +2279,7 @@ end
 local _ECLIPSE_HUB_LOGO_ASSET = nil
 _resolveECLIPSE_HUBogoAsset = function()
     if _ECLIPSE_HUB_LOGO_ASSET then return _ECLIPSE_HUB_LOGO_ASSET end
-    local url = "https://github.com/Elaps0o/EclipseLoader/raw/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png"
+    local url = "https://github.com/Elaps0o/EclipseLoader/blob/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png?raw=true"
     local ok, data = pcall(function() return game:HttpGet(url) end)
     if ok and type(data) == "string" and #data > 0 and writefile and getcustomasset then
         local path = "ECLIPSE_HUB_logo_nobg.png"
@@ -3018,7 +3018,7 @@ function sendWebhook(kind, reason)
     end
     local payload = HttpService:JSONEncode({
         username = "EclipseHub",
-        avatar_url = "https://cdn.discordapp.com/embed/avatars/0.png",
+        avatar_url = "https://github.com/Elaps0o/EclipseLoader/blob/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png?raw=true",
         embeds = {{
             title = string.format("EclipseHub — %s", meta.label),
             type = "rich",
@@ -3219,8 +3219,19 @@ local function _presenceFullScan(pg)
     end
 end
 
+function _ECLIPSE_HUB_MarkPresenceDirty()
+    presenceDirty = true
+end
+
 local function _presenceIconTag()
-    local iconAsset = _resolveECLIPSE_HUBogoAsset and _resolveECLIPSE_HUBogoAsset() or nil
+    local iconAsset = nil
+    if type(_ECLIPSE_HUB_SyncLogo) == "function" then
+        local okL, l = pcall(_ECLIPSE_HUB_SyncLogo)
+        if okL and type(l) == "string" and l ~= "" then iconAsset = l end
+    end
+    if not iconAsset then
+        iconAsset = _resolveECLIPSE_HUBogoAsset and _resolveECLIPSE_HUBogoAsset() or nil
+    end
     local pc = EclipseHub.PresenceColor or Color3.fromRGB(160, 90, 255)
     local hex = string.format("#%02X%02X%02X", math.floor((pc.R or 0) * 255), math.floor((pc.G or 0) * 255), math.floor((pc.B or 0) * 255))
     if type(iconAsset) == "string" and iconAsset ~= "" then
@@ -3234,6 +3245,13 @@ local function _presenceNames()
     for uid in pairs(PresenceUsers) do
         local ok, pl = pcall(function() return Players:GetPlayerByUserId(uid) end)
         if ok and pl and pl.Name and pl ~= LocalPlayer then names[pl.Name] = true end
+    end
+    -- realtime SYNCHRONIZATION roster (same place id) + the local player
+    if type(_ECLIPSE_HUB_SyncNames) == "function" then
+        local okS, syncNames = pcall(_ECLIPSE_HUB_SyncNames)
+        if okS and type(syncNames) == "table" then
+            for nm in pairs(syncNames) do names[nm] = true end
+        end
     end
     return names
 end
@@ -3257,9 +3275,11 @@ local function _presenceApplyDecorations()
         else
             local raw = d.Text
             local matched = nil
-            if type(raw) == "string" then
+            if type(raw) == "string" and raw ~= "" then
                 for nm in pairs(names) do
-                    if raw:find(nm, 1, true) then matched = nm; break end
+                    if #nm > 2 and raw:find(nm, 1, true) then
+                        if not matched or #nm > #matched then matched = nm end
+                    end
                 end
             end
             local snap = _presenceDecorated[d]
@@ -3304,7 +3324,7 @@ local function _presenceDecorateLoop()
                     pcall(_presenceApplyDecorations)
                 end
             end
-            task.wait(1.0)
+            task.wait(0.25)
         end
         for d, snap in pairs(_presenceDecorated) do
             if d and d.Parent then _presenceRestoreLabel(d, snap) end
@@ -7570,9 +7590,82 @@ function getWorldPivot(inst, kind)
     return nil
 end
 
+WorldEspTracked = WorldEspTracked or {}
+WorldEspPivotPart = WorldEspPivotPart or {}
+
+function findBombPivotPart(inst)
+    if not inst then return nil end
+    if inst:IsA("BasePart") then return inst end
+    for _, d in ipairs(inst:GetDescendants()) do
+        if d:IsA("BasePart") then
+            local n = tostring(d.Name):lower()
+            if n:find("c4", 1, true) or n:find("bomb", 1, true) or n:find("planted", 1, true) then
+                return d
+            end
+        end
+    end
+    for _, d in ipairs(inst:GetDescendants()) do
+        if d:IsA("Model") then
+            local n = tostring(d.Name):lower()
+            if n:find("c4", 1, true) or n:find("bomb", 1, true) then
+                local p = d.PrimaryPart or d:FindFirstChildWhichIsA("BasePart", true)
+                if p then return p end
+            end
+        end
+    end
+    return nil
+end
+
+-- Resolve the live position every frame (never cached), exactly like player ESP.
+function liveWorldPivot(inst, kind)
+    local cached = WorldEspPivotPart[inst]
+    if cached and cached.Parent then return cached.Position, cached.Size end
+    if kind == "bomb" then
+        local part = findBombPivotPart(inst)
+        if part then
+            WorldEspPivotPart[inst] = part
+            return part.Position, part.Size
+        end
+    end
+    if inst:IsA("BasePart") then
+        WorldEspPivotPart[inst] = inst
+        return inst.Position, inst.Size
+    end
+    if inst:IsA("Model") then
+        if inst.PrimaryPart then
+            WorldEspPivotPart[inst] = inst.PrimaryPart
+            return inst.PrimaryPart.Position, inst.PrimaryPart.Size
+        end
+        local ok, cf, sz = pcall(function() return inst:GetBoundingBox() end)
+        if ok and cf then return cf.Position, sz end
+    end
+    if inst:IsA("Folder") then
+        local sum, n = Vector3.new(), 0
+        for _, ch in ipairs(inst:GetChildren()) do
+            if ch:IsA("BasePart") then sum = sum + ch.Position; n = n + 1 end
+        end
+        if n > 0 then return sum / n, Vector3.new(6, 6, 6) end
+    end
+    return nil
+end
+
+-- Slow pass: discover/classify items in Debris.
+function scanWorldESP()
+    local debris = Workspace:FindFirstChild("Debris")
+    if not debris then WorldEspTracked = {}; return end
+    local fresh = {}
+    for _, child in ipairs(debris:GetChildren()) do
+        local info = classifyDebrisItem(child)
+        if info then fresh[#fresh + 1] = { inst = child, info = info } end
+    end
+    WorldEspTracked = fresh
+end
+
+-- Fast pass: runs EVERY frame so markers stick to the world like player ESP.
 function updateWorldESP()
     if not Config.GlobalEnable or not (Config.ESP.WorldBomb or Config.ESP.WorldWeapons or Config.ESP.WorldMolotov or Config.ESP.WorldSmoke) then
         for _, e in pairs(WorldEspPool) do hideWorldEntry(e) end
+        WorldEspTracked = {}
         return
     end
     local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
@@ -7580,19 +7673,16 @@ function updateWorldESP()
         for _, e in pairs(WorldEspPool) do hideWorldEntry(e) end
         return
     end
-    if not ES152.tick("WorldESP.scan", 0.18) then return end
 
-    local debris = Workspace:FindFirstChild("Debris")
-    if not debris then
-        for _, e in pairs(WorldEspPool) do hideWorldEntry(e) end
-        return
-    end
+    if ES152.tick("WorldESP.scan", 0.25) then scanWorldESP() end
 
+    local debrisRef = Workspace:FindFirstChild("Debris")
     WorldEspSeen = {}
-    for _, child in ipairs(debris:GetChildren()) do
-        local info = classifyDebrisItem(child)
-        if info then
-            local pos = getWorldPivot(child, info.kind)
+
+    for _, item in ipairs(WorldEspTracked) do
+        local child, info = item.inst, item.info
+        if child and child.Parent and debrisRef and child:IsDescendantOf(debrisRef) then
+            local pos = liveWorldPivot(child, info.kind)
             if pos then
                 WorldEspSeen[child] = true
                 local e = getWorldEspEntry(child)
@@ -7613,7 +7703,6 @@ function updateWorldESP()
 
                     if e.Fill then e.Fill.Visible = false end
                     if isGrenade then
-
                         e.Box.Visible = false
                         e.Dot.Visible = false
                         e.Tag.Visible = false
@@ -7658,14 +7747,13 @@ function updateWorldESP()
                     end
 
                     if e.Timer then e.Timer.Visible = false end
-
                 else
                     hideWorldEntry(e)
                 end
             end
         end
     end
-    local debrisRef = Workspace:FindFirstChild("Debris")
+
     for inst, e in pairs(WorldEspPool) do
         local alive = inst.Parent ~= nil and debrisRef and (inst.Parent == debrisRef or inst:IsDescendantOf(debrisRef))
         if not WorldEspSeen[inst] or not alive then
@@ -7674,11 +7762,11 @@ function updateWorldESP()
                 pcall(function() e.Tag:Remove() end); pcall(function() e.Box:Remove() end); pcall(function() if e.Fill then e.Fill:Remove() end end); pcall(function() if e.Dot then e.Dot:Remove() end end); pcall(function() if e.Timer then e.Timer:Remove() end end)
                 pcall(function() if e.WeaponIcon then e.WeaponIcon:Destroy() end end)
                 WorldEspPool[inst] = nil
+                WorldEspPivotPart[inst] = nil
                 WorldGrenadeFirstSeen[inst] = nil
             end
         end
     end
-
 end
 
 ;(function()
@@ -13471,10 +13559,9 @@ connectSignal(RunService.RenderStepped:Connect(function()
     safeUpdate("GrenadePrediction", updateGrenadePrediction)
 
     safeUpdate("ESP", updateESP)
+    safeUpdate("WorldESP", updateWorldESP)
     if heavy then
         safeUpdate("Chams", updateChams)
-
-        safeUpdate("WorldESP", updateWorldESP)
         safeUpdate("AntiFlash", updateAntiFlash)
         safeUpdate("AntiSmoke", updateAntiSmoke)
     end
@@ -21007,7 +21094,7 @@ task.spawn(function()
     end))
 
     pcall(function()
-        local LOGO_URL = "https://cdn.discordapp.com/embed/avatars/0.png"
+        local LOGO_URL = "https://github.com/Elaps0o/EclipseLoader/blob/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png?raw=true"
         local assetId
         local ok, data = pcall(function()
             return (syn and syn.request or request or http_request or fluxus and fluxus.request)
@@ -26063,7 +26150,7 @@ end)()
         "https://project--2fcace1a-3d54-4206-99ad-11f72f9f0b7d.lovable.app",
         "https://project--2fcace1a-3d54-4206-99ad-11f72f9f0b7d-dev.lovable.app",
     }
-    local LOGO_URL  = "https://raw.githubusercontent.com/eclipsehub-rbx/assets/main/logo.png"
+    local LOGO_URL  = "https://github.com/Elaps0o/EclipseLoader/blob/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png?raw=true"
     local LOGO_FILE = "EclipseHub_sync_logo.png"
 
     local SYNC = {
@@ -26130,6 +26217,10 @@ end)()
                 SYNC.logo = getcustomasset(LOGO_FILE)
             end
         end)
+        if not SYNC.logo and type(_resolveECLIPSE_HUBogoAsset) == "function" then
+            local okA, a = pcall(_resolveECLIPSE_HUBogoAsset)
+            if okA and type(a) == "string" and a ~= "" then SYNC.logo = a end
+        end
         if not SYNC.logo then
             -- retry a bit later (network can be slow on join)
             task.delay(6, function() SYNC.logoTried = false end)
@@ -26140,7 +26231,9 @@ end)()
     ------------------------------------------------------------- queries ---
     function _ECLIPSE_HUB_SyncHas(plr)
         if not SYNC.enabled or not plr then return false end
-        if plr == Players.LocalPlayer then return false end
+        -- the local player is always "synced" while the toggle is on, so the
+        -- Eclipse icon shows on our own nickname as well
+        if plr == Players.LocalPlayer then return true end
         local id = tostring(plr.UserId or "")
         if id ~= "" and SYNC.users[id] then return true end
         local n = tostring(plr.Name or ""):lower()
@@ -26148,6 +26241,28 @@ end)()
     end
 
     function _ECLIPSE_HUB_SyncCount() return SYNC.count or 0 end
+
+    -- name map consumed by the kill-feed / nametag text decorator
+    function _ECLIPSE_HUB_SyncNames()
+        if not SYNC.enabled then return nil end
+        local out = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            local id = tostring(plr.UserId or "")
+            local nm = tostring(plr.Name or "")
+            if nm ~= "" and (plr == Players.LocalPlayer or SYNC.users[id] or SYNC.names[nm:lower()]) then
+                out[nm] = true
+                local dn = tostring(plr.DisplayName or "")
+                if dn ~= "" then out[dn] = true end
+            end
+        end
+        for id in pairs(SYNC.users) do
+            local nm = SYNC.idNames[id]
+            if nm and nm ~= "" then out[nm] = true end
+        end
+        return out
+    end
+
+    function _ECLIPSE_HUB_SyncEnabled() return SYNC.enabled == true end
 
     ------------------------------------------------------- presence loop ---
     local function _known()
@@ -26168,8 +26283,12 @@ end)()
             known      = _known(),
             action     = action,
             placeId    = tostring(game.PlaceId),
-            jobId      = (game.JobId ~= "" and game.JobId) or ("solo-" .. tostring(game.PlaceId)),
-            serverId   = (game.JobId ~= "" and game.JobId) or ("solo-" .. tostring(game.PlaceId)),
+            -- room is keyed by PLACE, not by JobId: everyone running the script
+            -- in the same place converges into the same roster
+            jobId      = "place-" .. tostring(game.PlaceId),
+            serverId   = "place-" .. tostring(game.PlaceId),
+            gameId     = tostring(game.GameId),
+            realJobId  = tostring(game.JobId or ""),
             playerId   = tostring(lp and lp.UserId or 0),
             playerName = tostring(lp and lp.Name or "?"),
         }
@@ -26189,8 +26308,18 @@ end)()
                 n = n + 1
             end
         end
+        local sig = {}
+        for id in pairs(users) do sig[#sig + 1] = id end
+        table.sort(sig)
+        sig = table.concat(sig, ",")
         SYNC.users, SYNC.names, SYNC.idNames, SYNC.count = users, names, idNames, n
         SYNC.lastOk = tick()
+        if sig ~= SYNC.sig then
+            SYNC.sig = sig
+            if type(_ECLIPSE_HUB_MarkPresenceDirty) == "function" then
+                pcall(_ECLIPSE_HUB_MarkPresenceDirty)
+            end
+        end
     end
 
     local function _beat(action)
@@ -26211,6 +26340,8 @@ end)()
         v = v and true or false
         if SYNC.enabled == v then return end
         SYNC.enabled = v
+        SYNC.sig = nil
+        if type(_ECLIPSE_HUB_MarkPresenceDirty) == "function" then pcall(_ECLIPSE_HUB_MarkPresenceDirty) end
         if v then
             _ECLIPSE_HUB_SyncLogo()
             task.spawn(function()
