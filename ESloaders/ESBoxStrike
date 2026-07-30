@@ -3283,11 +3283,20 @@ local function _presenceApplyDecorations()
                 end
             end
             local snap = _presenceDecorated[d]
+            -- the game rewrote this label (kill feed reuses labels) -> re-decorate
+            if snap and snap.applied and raw ~= snap.applied then
+                snap = nil
+                _presenceDecorated[d] = nil
+            end
             if matched then
                 local base = snap and snap.Text or raw
-                if not snap or snap.tag ~= iconTag or snap.name ~= matched or snap.Text ~= base then
-                    _presenceDecorated[d] = { Text = base, RichText = snap and snap.RichText or d.RichText, tag = iconTag, name = matched }
+                if not snap or snap.tag ~= iconTag or snap.name ~= matched or snap.applied ~= d.Text then
                     local newTxt = base:gsub(matched, iconTag .. matched, 1)
+                    _presenceDecorated[d] = {
+                        Text = base,
+                        RichText = snap and snap.RichText or d.RichText,
+                        tag = iconTag, name = matched, applied = newTxt,
+                    }
                     pcall(function()
                         d.RichText = true
                         d.Text = newTxt
@@ -3319,12 +3328,17 @@ local function _presenceDecorateLoop()
                     _presenceLabelConn = pg.DescendantAdded:Connect(_presenceTrackLabel)
                     connectSignal(_presenceLabelConn)
                 end
-                if presenceDirty then
+                local syncOn = false
+                if type(_ECLIPSE_HUB_SyncEnabled) == "function" then
+                    local okE, e = pcall(_ECLIPSE_HUB_SyncEnabled)
+                    syncOn = okE and e == true
+                end
+                if presenceDirty or syncOn then
                     presenceDirty = false
                     pcall(_presenceApplyDecorations)
                 end
             end
-            task.wait(0.25)
+            task.wait(0.2)
         end
         for d, snap in pairs(_presenceDecorated) do
             if d and d.Parent then _presenceRestoreLabel(d, snap) end
@@ -18058,12 +18072,40 @@ do
         _forceMirrorVisible()
     end
 
+    -- Definitive orientation: the weapon is NEVER placed with the model's own
+    -- (unreliable) axes. We build an aim frame from the camera/character and
+    -- rotate the clone by the auto-computed alignment, which maps the model's
+    -- real long axis to "forward" for every weapon, no per-model tuning.
     local function _positionMirror(hand)
         if not (_mirrorClone and _mirrorClone.Parent and hand) then return end
         local rel = _mirrorRootRel or CFrame.new()
         pcall(function()
-            local __off = _mirrorOffset or _MIRROR_OFFSET_LONG
-            _mirrorClone:PivotTo((hand.CFrame * __off) * rel:Inverse())
+            local align = _mirrorAlign or CFrame.new()
+            local grip  = _mirrorGrip or Vector3.new(0.07, -0.07, -0.22)
+
+            local ch  = LocalPlayer.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            local cam = workspace.CurrentCamera
+
+            local dir
+            if cam then dir = cam.CFrame.LookVector end
+            if (not dir or dir.Magnitude < 1e-3) and hrp then dir = hrp.CFrame.LookVector end
+            if not dir or dir.Magnitude < 1e-3 then dir = hand.CFrame.LookVector end
+            dir = dir.Unit
+
+            local up    = Vector3.new(0, 1, 0)
+            local right = dir:Cross(up)
+            if right.Magnitude < 1e-3 then
+                right = (hrp and hrp.CFrame.RightVector) or hand.CFrame.RightVector
+            end
+            right = right.Unit
+            up = right:Cross(dir).Unit
+
+            -- anchor at the hand, offsets expressed in aim space (x right, y up, -z forward)
+            local base = CFrame.fromMatrix(hand.CFrame.Position, right, up, -dir)
+                * CFrame.new(grip.X, grip.Y, grip.Z)
+
+            _mirrorClone:PivotTo((base * align) * rel:Inverse())
         end)
         local now = tick()
         if not _mirrorNextUnhide or now >= _mirrorNextUnhide then
@@ -18256,44 +18298,20 @@ do
         return cp
     end
 
+    -- The old part-by-part clone dummy could not carry Shirt/Pants/BodyColors
+    -- (they live on the character Model, not on the parts), which is exactly
+    -- why the third person body showed up with missing clothing pieces, and it
+    -- also spawned an extra body in workspace that confused the bunny hop
+    -- ground checks. We now render the REAL character instead: no clone, no
+    -- ghost hitbox, clothing and accessories always correct.
     local function _buildSelfDummy()
         _clearSelfDummy()
-        if _G.ECLIPSE_HUBCPMActive then return end
         local ch = LocalPlayer.Character; if not ch then return end
-        local hum = ch:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then return end
-        local clone = Instance.new("Model")
-        clone.Name = "_EclipseSelfDummy"
-        clone:SetAttribute("ECLIPSE_HUBSelfDummy", true)
-        pcall(function() clone.Archivable = false end)
-
-        local made = 0
-        for _, src in ipairs(ch:GetDescendants()) do
-            if src:IsA("BasePart") and not _isInventoryDesc(src) then
-                local cp = _sterileVisualPartFrom(src)
-                if cp then
-                    cp.Parent = clone
-                    pcall(function()
-                        local wc = Instance.new("WeldConstraint")
-                        wc.Name   = "_EclipseSelfWeld"
-                        wc.Part0  = src
-                        wc.Part1  = cp
-                        wc.Parent = cp
-                    end)
-                    made = made + 1
-                end
-            end
-        end
-        if made <= 0 then pcall(function() clone:Destroy() end); return end
-        clone.Parent = workspace
-        _selfDummy = clone
-        _selfDummyChar = ch
-        _G.__ECLIPSE_SELF_DUMMY = clone
-
         for _, p in ipairs(ch:GetDescendants()) do
-            if p:IsA("BasePart") then
-                _selfHidden[p] = p.LocalTransparencyModifier or 0
-                pcall(function() p.LocalTransparencyModifier = 1 end)
+            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                pcall(function() p.LocalTransparencyModifier = 0 end)
+            elseif p:IsA("Decal") or p:IsA("Texture") then
+                pcall(function() p.LocalTransparencyModifier = 0 end)
             end
         end
     end
@@ -18327,22 +18345,19 @@ do
             cam.CameraSubject = ch:FindFirstChildOfClass("Humanoid") or cam.CameraSubject
             cam.CFrame = CFrame.new(hrp.Position + (cam.CFrame.LookVector * -10) + Vector3.new(0, 3, 0), hrp.Position)
             pcall(_updateMirror)
-            if not _G.ECLIPSE_HUBCPMActive and (not _selfDummy or not _selfDummy.Parent or _selfDummyChar ~= ch) then
-                pcall(_buildSelfDummy)
-            end
             _tpNextHeavy = _tpNextHeavy or 0
             local now = tick()
             if now < _tpNextHeavy then return end
             _tpNextHeavy = now + ES152.adaptiveInterval(0.16, 2)
-            if not _G.ECLIPSE_HUBCPMActive and _selfDummy and _selfDummy.Parent then
+            if not _G.ECLIPSE_HUBCPMActive then
+                -- keep the REAL character fully visible (clothing, accessories,
+                -- textures) while the game keeps trying to hide it
                 for _, p in ipairs(ch:GetDescendants()) do
                     if p:IsA("BasePart") then
-                        pcall(function() p.LocalTransparencyModifier = 1 end)
-                    end
-                end
-            elseif not _G.ECLIPSE_HUBCPMActive then
-                for _, p in ipairs(ch:GetDescendants()) do
-                    if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                        if p.Name ~= "HumanoidRootPart" then
+                            pcall(function() p.LocalTransparencyModifier = 0 end)
+                        end
+                    elseif p:IsA("Decal") or p:IsA("Texture") then
                         pcall(function() p.LocalTransparencyModifier = 0 end)
                     end
                 end
@@ -26336,6 +26351,29 @@ end)()
         return false
     end
 
+    local function _syncSound(id, vol)
+        pcall(function()
+            local s = Instance.new("Sound")
+            s.SoundId = "rbxassetid://" .. tostring(id)
+            s.Volume  = vol or 1
+            s.PlayOnRemove = false
+            s.Parent = game:GetService("SoundService")
+            s:Play()
+            game:GetService("Debris"):AddItem(s, 4)
+        end)
+    end
+
+    local function _syncNotify(title, desc, secs)
+        pcall(function()
+            if type(Library) ~= "table" or not Library.Notify then return end
+            Library:Notify({
+                Title = title or "EclipseHub",
+                Description = desc or "",
+                Time = secs or 4,
+            })
+        end)
+    end
+
     function _ECLIPSE_HUB_SyncSetEnabled(v)
         v = v and true or false
         if SYNC.enabled == v then return end
@@ -26345,11 +26383,25 @@ end)()
         if v then
             _ECLIPSE_HUB_SyncLogo()
             task.spawn(function()
-                _beat("join")
-                if type(Library) == "table" and Library.Notify then
-                    pcall(function()
-                        Library:Notify(SYNC.base and "Synchronization: connected" or "Synchronization: server unreachable", 3)
-                    end)
+                local ok = _beat("join") == true
+                local hasLogo = (_ECLIPSE_HUB_SyncLogo() or "") ~= ""
+                if ok and SYNC.base then
+                    -- only a fully clean connection plays the success sound
+                    if hasLogo then
+                        _syncNotify("SYNCHRONIZATION",
+                            string.format("<b>Connected</b> — %d synced user%s in this place.",
+                                SYNC.count or 0, (SYNC.count == 1) and "" or "s"), 4)
+                        _syncSound(6026984224, 1.1)
+                    else
+                        _syncNotify("SYNCHRONIZATION",
+                            "<b>Connected</b> — icon asset still loading, it will appear shortly.", 4)
+                    end
+                    if type(_ECLIPSE_HUB_MarkPresenceDirty) == "function" then
+                        pcall(_ECLIPSE_HUB_MarkPresenceDirty)
+                    end
+                else
+                    _syncNotify("SYNCHRONIZATION", "<b>Failed</b> — server unreachable, retrying...", 4)
+                    _syncSound(6026984224, 0.35)
                 end
             end)
         else
@@ -26357,6 +26409,7 @@ end)()
             task.spawn(function() _beat("leave") end)
             for _, b in pairs(SYNC.boards) do pcall(function() b:Destroy() end) end
             SYNC.boards = {}
+            _syncNotify("SYNCHRONIZATION", "Disconnected.", 3)
         end
     end
 
