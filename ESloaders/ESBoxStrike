@@ -3372,6 +3372,16 @@ local lblExec    = Session:AddLabel("Executor: " .. getExecutor())
 Session:AddLabel("Version: "  .. EclipseHub.Version)
 Session:AddDivider()
 Session:AddButton({ Text = "Copy Discord Link", Func = function() copyToClipboard(EclipseHub.Discord) end })
+Session:AddToggle("Main_Sync", {
+    Text = "SYNCHRONIZATION", Default = false,
+    Tooltip = "Connect to the EclipseHub realtime server. While enabled, other synced users in your server are marked with the Eclipse logo next to their name, and they can see you as well.",
+    Callback = function(v)
+        getgenv().ECLIPSE_SYNC_ENABLED = v and true or false
+        if type(_ECLIPSE_HUB_SyncSetEnabled) == "function" then
+            _ECLIPSE_HUB_SyncSetEnabled(v and true or false)
+        end
+    end,
+})
 
 local Links = Tabs.Home:AddRightGroupbox("LINKS", "link")
 Links:AddLabel("Discord: discord.gg/5Drj4Hkdgu", true)
@@ -5710,6 +5720,17 @@ function _espEnsureTagGui(data)
     nameLbl.ZIndex = 24
     nameLbl.Text = ""
 
+    local syncImg = Instance.new("ImageLabel", f)
+    syncImg.Name = "SyncIcon"
+    syncImg.BackgroundTransparency = 1
+    syncImg.BorderSizePixel = 0
+    syncImg.AnchorPoint = Vector2.new(1, 1)
+    syncImg.Size = UDim2.fromOffset(12, 12)
+    syncImg.ScaleType = Enum.ScaleType.Fit
+    syncImg.Image = ""
+    syncImg.Visible = false
+    syncImg.ZIndex = 25
+
     local fb = Instance.new("Frame")
     fb.Name = "ESPTagBot"
     fb.AnchorPoint = Vector2.new(0.5, 0)
@@ -5745,6 +5766,7 @@ function _espEnsureTagGui(data)
     data.GuiTagName   = nameLbl
     data.GuiTagIcon   = iconImg
     data.GuiTagDist   = distLbl
+    data.GuiTagSync   = syncImg
     data.GuiTagStroke = nil
     data.GuiTagGrad   = nil
     return f
@@ -6221,6 +6243,7 @@ function hideESP(data)
     if data.GuiBox then data.GuiBox.Visible = false end
     if data.GuiHeadDot then data.GuiHeadDot.Visible = false end
     if data.GuiTag then data.GuiTag.Visible = false end
+    if data.GuiTagSync then data.GuiTagSync.Visible = false end
     if data.GuiTagBot then data.GuiTagBot.Visible = false end
     _espHideDrawBoxTag(data)
     _espHideDrawMoney(data)
@@ -6855,6 +6878,7 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
     if s <= 0.001 then
         hideLegacyBox()
         if data.GuiTag   then data.GuiTag.Visible = false end
+        if data.GuiTagSync then data.GuiTagSync.Visible = false end
         if data.GuiTagBot then data.GuiTagBot.Visible = false end
         if data.DrawName then pcall(function() data.DrawName.Visible = false end) end
         if data.GuiMoney then data.GuiMoney.Visible = false end
@@ -6923,9 +6947,26 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
             data.GuiTagName.Visible = true
             _espSyncDrawNameGeom(data, cx, T, combined, data.GuiTagName.TextColor3)
         end
+        local sImg = data.GuiTagSync
+        if sImg then
+            local logo = (type(_ECLIPSE_HUB_SyncLogo) == "function") and _ECLIPSE_HUB_SyncLogo() or nil
+            local synced = (type(_ECLIPSE_HUB_SyncHas) == "function") and _ECLIPSE_HUB_SyncHas(plr) or false
+            if logo and synced and data.GuiTagName and data.GuiTagName.Visible then
+                local h = math.floor((data.GuiTagName.TextSize or 12))
+                local w = 0
+                pcall(function() w = data.GuiTagName.TextBounds.X end)
+                if sImg.Image ~= logo then sImg.Image = logo end
+                sImg.Size = UDim2.fromOffset(h, h)
+                sImg.Position = UDim2.new(0.5, -math.floor(w * 0.5) - 3, 1, 0)
+                sImg.Visible = true
+            else
+                sImg.Visible = false
+            end
+        end
     elseif f then
         f.Visible = false
         if data.GuiTagName then data.GuiTagName.Visible = false end
+        if data.GuiTagSync then data.GuiTagSync.Visible = false end
         if data.DrawName then pcall(function() data.DrawName.Visible = false end) end
     end
 
@@ -25817,7 +25858,13 @@ end)()
         _mgDestroy()
     end)
 
-    local MGGB = Tabs.Visuals:AddRightGroupbox("MOTION GRAPH", "activity")
+    -- No dedicated groupbox (creating one at this stage fails with a Plugin
+    -- capability error on some executors). Reuse the existing PLAYER VISUALS
+    -- groupbox and append Motion Graph as its last option.
+    local function _gbOk(gb) return gb ~= nil and pcall(function() return gb.AddToggle end) and gb.AddToggle ~= nil end
+    local MGGB = (_gbOk(PVGB) and PVGB) or (_gbOk(WorldEspGB) and WorldEspGB) or (_gbOk(EspGB) and EspGB) or nil
+    if not MGGB then return end
+    pcall(function() MGGB:AddDivider() end)
     MGGB:AddToggle("MotionGraph_Toggle", {
         Text = "MOTION GRAPH", Default = false,
         Tooltip = "Live velocity graph of your horizontal speed.",
@@ -25999,5 +26046,321 @@ end)()
                 WS.attached = false
             end
         end)
+    end)
+end)()
+
+--=========================================================================
+-- ECLIPSE HUB :: REALTIME SYNCHRONIZATION (global server / api)
+--=========================================================================
+;(function()
+    local HttpService = game:GetService("HttpService")
+    local Players     = game:GetService("Players")
+    local RunSvc      = game:GetService("RunService")
+
+    local API_KEY = "hfjyawicdcjgqispxlakdljremzgeove"
+    local API_BASES = {
+        "https://eclipsehub-rt.lovable.app",
+        "https://project--2fcace1a-3d54-4206-99ad-11f72f9f0b7d.lovable.app",
+        "https://project--2fcace1a-3d54-4206-99ad-11f72f9f0b7d-dev.lovable.app",
+    }
+    local LOGO_URL  = "https://raw.githubusercontent.com/eclipsehub-rbx/assets/main/logo.png"
+    local LOGO_FILE = "EclipseHub_sync_logo.png"
+
+    local SYNC = {
+        enabled   = false,
+        base      = nil,
+        users     = {},   -- [userId string] = true
+        names     = {},   -- [name lower] = true
+        idNames   = {},   -- [userId string] = playerName
+        count     = 0,
+        lastOk    = 0,
+        logo      = nil,
+        logoTried = false,
+        boards    = {},
+    }
+    getgenv().ECLIPSE_HUB_SYNC = SYNC
+
+    ---------------------------------------------------------------- http ---
+    local function _httpFn()
+        return (syn and syn.request) or (http and http.request) or http_request or request
+    end
+
+    local function _req(method, url, body)
+        local fn = _httpFn()
+        local headers = {
+            ["Content-Type"]     = "application/json",
+            ["x-eclipsehub-key"] = API_KEY,
+            ["x-api-key"]        = API_KEY,
+        }
+        if fn then
+            local ok, res = pcall(fn, {
+                Url = url, Method = method, Headers = headers,
+                Body = body and HttpService:JSONEncode(body) or nil,
+            })
+            if ok and res and (res.StatusCode == 200 or res.Success) then
+                local okj, decoded = pcall(function() return HttpService:JSONDecode(res.Body) end)
+                if okj then return decoded end
+            end
+            return nil
+        end
+        if method == "GET" then
+            local ok, raw = pcall(function() return game:HttpGet(url) end)
+            if ok and raw then
+                local okj, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+                if okj then return decoded end
+            end
+        end
+        return nil
+    end
+
+    ---------------------------------------------------------------- logo ---
+    function _ECLIPSE_HUB_SyncLogo()
+        if SYNC.logo then return SYNC.logo end
+        if SYNC.logoTried then return nil end
+        SYNC.logoTried = true
+        pcall(function()
+            if type(getcustomasset) ~= "function" or type(writefile) ~= "function" then return end
+            if type(isfile) ~= "function" or not isfile(LOGO_FILE) then
+                local okd, data = pcall(function() return game:HttpGet(LOGO_URL) end)
+                if okd and type(data) == "string" and #data > 256 then
+                    writefile(LOGO_FILE, data)
+                end
+            end
+            if isfile and isfile(LOGO_FILE) then
+                SYNC.logo = getcustomasset(LOGO_FILE)
+            end
+        end)
+        if not SYNC.logo then
+            -- retry a bit later (network can be slow on join)
+            task.delay(6, function() SYNC.logoTried = false end)
+        end
+        return SYNC.logo
+    end
+
+    ------------------------------------------------------------- queries ---
+    function _ECLIPSE_HUB_SyncHas(plr)
+        if not SYNC.enabled or not plr then return false end
+        if plr == Players.LocalPlayer then return false end
+        local id = tostring(plr.UserId or "")
+        if id ~= "" and SYNC.users[id] then return true end
+        local n = tostring(plr.Name or ""):lower()
+        return n ~= "" and SYNC.names[n] == true
+    end
+
+    function _ECLIPSE_HUB_SyncCount() return SYNC.count or 0 end
+
+    ------------------------------------------------------- presence loop ---
+    local function _known()
+        -- gossip: echo back everyone we currently know so the edge node that
+        -- answers this request learns about them too (global convergence).
+        local out, n = {}, 0
+        for id in pairs(SYNC.users) do
+            n = n + 1
+            if n > 60 then break end
+            out[#out + 1] = { playerId = id, playerName = SYNC.idNames[id] or "" }
+        end
+        return out
+    end
+
+    local function _payload(action)
+        local lp = Players.LocalPlayer
+        return {
+            known      = _known(),
+            action     = action,
+            placeId    = tostring(game.PlaceId),
+            jobId      = (game.JobId ~= "" and game.JobId) or ("solo-" .. tostring(game.PlaceId)),
+            serverId   = (game.JobId ~= "" and game.JobId) or ("solo-" .. tostring(game.PlaceId)),
+            playerId   = tostring(lp and lp.UserId or 0),
+            playerName = tostring(lp and lp.Name or "?"),
+        }
+    end
+
+    local function _apply(list)
+        local users, names, idNames, n = {}, {}, {}, 0
+        if type(list) == "table" then
+            for _, p in ipairs(list) do
+                local id = tostring(p.playerId or "")
+                local raw = tostring(p.playerName or "")
+                if id ~= "" then
+                    users[id] = true
+                    if raw ~= "" then idNames[id] = raw end
+                end
+                if raw ~= "" then names[raw:lower()] = true end
+                n = n + 1
+            end
+        end
+        SYNC.users, SYNC.names, SYNC.idNames, SYNC.count = users, names, idNames, n
+        SYNC.lastOk = tick()
+    end
+
+    local function _beat(action)
+        for i = 1, #API_BASES do
+            local base = SYNC.base or API_BASES[i]
+            local res = _req("POST", base .. "/api/public/rt/presence", _payload(action))
+            if res and res.ok then
+                SYNC.base = base
+                _apply(res.players)
+                return true
+            end
+            if SYNC.base then SYNC.base = nil end
+        end
+        return false
+    end
+
+    function _ECLIPSE_HUB_SyncSetEnabled(v)
+        v = v and true or false
+        if SYNC.enabled == v then return end
+        SYNC.enabled = v
+        if v then
+            _ECLIPSE_HUB_SyncLogo()
+            task.spawn(function()
+                _beat("join")
+                if type(Library) == "table" and Library.Notify then
+                    pcall(function()
+                        Library:Notify(SYNC.base and "Synchronization: connected" or "Synchronization: server unreachable", 3)
+                    end)
+                end
+            end)
+        else
+            SYNC.users, SYNC.names, SYNC.idNames, SYNC.count = {}, {}, {}, 0
+            task.spawn(function() _beat("leave") end)
+            for _, b in pairs(SYNC.boards) do pcall(function() b:Destroy() end) end
+            SYNC.boards = {}
+        end
+    end
+
+    -- realtime heartbeat: fast enough that someone who enables sync (or joins
+    -- the server) shows up for everyone else within ~2s, in both directions.
+    task.spawn(function()
+        while scriptRunning do
+            if SYNC.enabled then
+                pcall(_beat, "heartbeat")
+                task.wait(1.5)
+            else
+                task.wait(1)
+            end
+        end
+        pcall(_beat, "leave")
+    end)
+
+    -- someone joined/left the Roblox server -> refresh immediately instead of
+    -- waiting for the next tick
+    local function _kick()
+        if not SYNC.enabled then return end
+        task.spawn(function()
+            task.wait(0.35)
+            pcall(_beat, "heartbeat")
+            task.wait(1)
+            pcall(_beat, "heartbeat")
+        end)
+    end
+    Players.PlayerAdded:Connect(_kick)
+    Players.PlayerRemoving:Connect(function(plr)
+        local id = tostring(plr and plr.UserId or "")
+        if id ~= "" then
+            SYNC.users[id] = nil
+            SYNC.idNames[id] = nil
+        end
+        if plr then
+            SYNC.names[tostring(plr.Name):lower()] = nil
+            local gui = SYNC.boards[plr]
+            if gui then pcall(function() gui:Destroy() end); SYNC.boards[plr] = nil end
+        end
+        _kick()
+    end)
+
+    ------------------------------------------------- billboard fallback ---
+    -- Shown only when the ESP name tag is not rendering for that player,
+    -- so synced users are always marked, ESP on or off.
+    local function _board(plr)
+        local b = SYNC.boards[plr]
+        if b and b.Parent then return b end
+        local ch = plr.Character
+        local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart"))
+        if not head then return nil end
+        local gui = Instance.new("BillboardGui")
+        gui.Name = "ECLIPSE_SyncTag"
+        gui.AlwaysOnTop = true
+        gui.Size = UDim2.fromOffset(200, 20)
+        gui.StudsOffset = Vector3.new(0, 2.6, 0)
+        gui.MaxDistance = 2000
+
+        local holder = Instance.new("Frame", gui)
+        holder.BackgroundTransparency = 1
+        holder.Size = UDim2.fromScale(1, 1)
+        local layout = Instance.new("UIListLayout", holder)
+        layout.FillDirection = Enum.FillDirection.Horizontal
+        layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        layout.VerticalAlignment = Enum.VerticalAlignment.Center
+        layout.Padding = UDim.new(0, 3)
+
+        local icon = Instance.new("ImageLabel", holder)
+        icon.Name = "Icon"
+        icon.BackgroundTransparency = 1
+        icon.Size = UDim2.fromOffset(13, 13)
+        icon.ScaleType = Enum.ScaleType.Fit
+        icon.LayoutOrder = 1
+
+        local lbl = Instance.new("TextLabel", holder)
+        lbl.Name = "Txt"
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.Code
+        lbl.TextSize = 13
+        lbl.TextColor3 = Color3.fromRGB(240, 240, 250)
+        lbl.TextStrokeTransparency = 0.3
+        lbl.Size = UDim2.fromOffset(160, 14)
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.LayoutOrder = 2
+
+        gui.Adornee = head
+        pcall(function() gui.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+        SYNC.boards[plr] = gui
+        return gui
+    end
+
+    local function _espNameVisible(plr)
+        local vis = false
+        pcall(function()
+            local objs = ESPObjects
+            local d = objs and objs[plr]
+            vis = (d and d.GuiTagName and d.GuiTagName.Visible == true) or false
+        end)
+        return vis
+    end
+
+    task.spawn(function()
+        while scriptRunning do
+            if SYNC.enabled then
+                local logo = _ECLIPSE_HUB_SyncLogo()
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    local ok = logo and _ECLIPSE_HUB_SyncHas(plr) and not _espNameVisible(plr)
+                    if ok then
+                        local gui = _board(plr)
+                        if gui then
+                            local ch = plr.Character
+                            local head = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart"))
+                            if head then gui.Adornee = head end
+                            local holder = gui:FindFirstChildOfClass("Frame")
+                            if holder then
+                                local icon = holder:FindFirstChild("Icon")
+                                local lbl  = holder:FindFirstChild("Txt")
+                                if icon and icon.Image ~= logo then icon.Image = logo end
+                                if lbl then lbl.Text = plr.Name end
+                            end
+                            gui.Enabled = head ~= nil
+                        end
+                    else
+                        local gui = SYNC.boards[plr]
+                        if gui then pcall(function() gui:Destroy() end); SYNC.boards[plr] = nil end
+                    end
+                end
+                for plr, gui in pairs(SYNC.boards) do
+                    if not plr.Parent then pcall(function() gui:Destroy() end); SYNC.boards[plr] = nil end
+                end
+            elseif next(SYNC.boards) then
+                for plr, gui in pairs(SYNC.boards) do pcall(function() gui:Destroy() end); SYNC.boards[plr] = nil end
+            end
+            task.wait(0.35)
+        end
     end)
 end)()
