@@ -400,7 +400,16 @@ function _EMT.scan()
         end
     end
     _EMT.buttons = found
+    for name, btn in pairs(found) do
+        if _EMT.bind then pcall(_EMT.bind, name, btn) end
+        pcall(function()
+            for _, d in ipairs(btn:GetDescendants()) do
+                if d:IsA("GuiButton") then pcall(_EMT.bind, name, d) end
+            end
+        end)
+    end
     _EMT.ensureLayer()
+
 end
 
 function _EMT.ensureLayer()
@@ -476,22 +485,96 @@ function _EMT.hit(pos)
     return nil
 end
 
+_EMT.btnState = { Jump = false, Shoot = false, Aim = false }
+_EMT.btnConns = {}
+_EMT.pulse    = { Jump = 0, Shoot = 0, Aim = 0 }
+
 function _EMT.set(name, state)
-    local field = _EMT_MAP[name]
-    if field then _EMT[field] = state end
+    if _EMT.btnState[name] == nil then return end
+    _EMT.btnState[name] = state and true or false
+    if state then _EMT.pulse[name] = tick() end
+    _EMT.recompute()
 end
 
 function _EMT.recompute()
     local down = { Jump = false, Shoot = false, Aim = false }
     for _, name in pairs(_EMT.touches) do down[name] = true end
+    local now = tick()
+    for name in pairs(down) do
+        if _EMT.btnState[name] then down[name] = true end
+        if (now - (_EMT.pulse[name] or 0)) < 0.18 then down[name] = true end
+    end
     _EMT.jumpDown = down.Jump
     _EMT.fireDown = down.Shoot
     _EMT.aimDown  = down.Aim
 end
 
+function _EMT.bind(name, btn)
+    if not btn or _EMT.btnConns[btn] then return end
+    local held = {}
+    local conns = {}
+    local function down(input)
+        if input then
+            local t = input.UserInputType
+            if t ~= Enum.UserInputType.Touch and t ~= Enum.UserInputType.MouseButton1 then return end
+            held[input] = true
+        else
+            held.__mouse = true
+        end
+        _EMT.set(name, true)
+    end
+    local function up(input)
+        if input then held[input] = nil else held.__mouse = nil end
+        if next(held) == nil then _EMT.set(name, false) else _EMT.pulse[name] = tick() end
+    end
+    pcall(function() conns[#conns+1] = btn.InputBegan:Connect(down) end)
+    pcall(function() conns[#conns+1] = btn.InputEnded:Connect(up) end)
+    pcall(function()
+        if btn:IsA("GuiButton") then
+            conns[#conns+1] = btn.MouseButton1Down:Connect(function() down(nil) end)
+            conns[#conns+1] = btn.MouseButton1Up:Connect(function() up(nil) end)
+            conns[#conns+1] = btn.MouseLeave:Connect(function() up(nil) end)
+        end
+    end)
+    pcall(function()
+        conns[#conns+1] = btn.AncestryChanged:Connect(function()
+            if not btn.Parent then
+                held = {}
+                _EMT.btnConns[btn] = nil
+                _EMT.set(name, false)
+            end
+        end)
+    end)
+    _EMT.btnConns[btn] = conns
+end
+
+
 if _ECLIPSE_HUBIsMobile then
     _EMT.enabled = true
     pcall(_EMT.scan)
+
+    task.spawn(function()
+        local RS = game:GetService("RunService")
+        while true do
+            RS.Heartbeat:Wait()
+            pcall(function()
+                local hum
+                local ch = LocalPlayer.Character
+                if ch then hum = ch:FindFirstChildOfClass("Humanoid") end
+                if hum and hum.Jump == true then _EMT.pulse.Jump = tick() end
+                _EMT.recompute()
+            end)
+        end
+    end)
+
+    pcall(function()
+        UserInput.JumpRequest:Connect(function()
+            _EMT.pulse.Jump = tick()
+            _EMT.recompute()
+        end)
+    end)
+
+
 
     task.spawn(function()
         while true do
@@ -548,9 +631,13 @@ if _ECLIPSE_HUBIsMobile then
                     _EMT.layer = nil
                     _EMT.zones = nil
                     _EMT.touches = {}
+                    _EMT.btnConns = {}
+                    _EMT.btnState = { Jump = false, Shoot = false, Aim = false }
+                    _EMT.pulse = { Jump = 0, Shoot = 0, Aim = 0 }
                     _EMT.recompute()
                     _EMT.scan()
                 end)
+
             end)
         end)
     end)
@@ -605,9 +692,27 @@ function _ECLIPSE_HUBMobileFire()
     end)
 end
 
+_ECLIPSE_HUB_LOADTIME = tick()
+_ECLIPSE_HUB_IC_ALLOW = false
+
+function _ECLIPSE_HUB_AllowIC()
+    _ECLIPSE_HUB_IC_ALLOW = true
+end
+
+function _ECLIPSE_HUB_ICReady()
+    if not _ECLIPSE_HUB_IC_ALLOW then return false end
+    if (tick() - (_ECLIPSE_HUB_LOADTIME or 0)) < 6 then return false end
+    local ok = pcall(function() return game:IsLoaded() end)
+    if not ok or not game:IsLoaded() then return false end
+    local ch = LocalPlayer and LocalPlayer.Character
+    if not ch or not ch:FindFirstChildOfClass("Humanoid") then return false end
+    return true
+end
+
 local _ECLIPSE_HUB_IC_Cached
 local function _ECLIPSE_HUB_GetIC()
     if _ECLIPSE_HUB_IC_Cached then return _ECLIPSE_HUB_IC_Cached end
+    if not _ECLIPSE_HUB_ICReady() then return nil end
     local ok, ic = pcall(function()
         local rs   = game:GetService("ReplicatedStorage")
         local ctrl = rs:FindFirstChild("Controllers")
@@ -618,8 +723,11 @@ local function _ECLIPSE_HUB_GetIC()
     return _ECLIPSE_HUB_IC_Cached
 end
 
+
 function _ECLIPSE_HUB_GetEquipped()
+    _ECLIPSE_HUB_AllowIC()
     local IC = _ECLIPSE_HUB_GetIC(); if not IC then return nil end
+
     local w
     local get = rawget(IC, "getCurrentEquipped") or rawget(IC, "GetCurrentEquipped")
     if type(get) ~= "function" then
@@ -683,10 +791,15 @@ _ECLIPSE_HUB_CachedWeapon = nil
 task.spawn(function()
     while true do
         task.wait(1)
-        local ok, w = pcall(_ECLIPSE_HUB_GetEquipped)
-        _ECLIPSE_HUB_CachedWeapon = (ok and type(w) == "table") and w or nil
+        if _ECLIPSE_HUB_IC_ALLOW and _ECLIPSE_HUB_ICReady() then
+            local ok, w = pcall(_ECLIPSE_HUB_GetEquipped)
+            _ECLIPSE_HUB_CachedWeapon = (ok and type(w) == "table") and w or nil
+        else
+            _ECLIPSE_HUB_CachedWeapon = nil
+        end
     end
 end)
+
 
 function _ECLIPSE_HUB_ShootCached()
     local weapon = _ECLIPSE_HUB_CachedWeapon
@@ -9007,6 +9120,9 @@ function updateMovement()
         if cpm then filter[#filter+1] = cpm end
         local mc = _G.__ECLIPSE_MIRROR_CLONE
         if mc then filter[#filter+1] = mc end
+        local sp = _G.ECLIPSE_HUB_SURF_PART
+        if sp then filter[#filter+1] = sp end
+
         _MV.ASF_RAY.FilterDescendantsInstances = filter
         local down = Workspace:Raycast(root.Position, Vector3.new(0,-4.5,0), _MV.ASF_RAY)
         
@@ -12812,7 +12928,6 @@ function CleanupScript()
     pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ECLIPSE_HUBCustomFOV") end)
     pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ECLIPSE_HUBRemoveScope") end)
     pcall(function() if _G.ECLIPSE_HUB_UnbindScopeSys then _G.ECLIPSE_HUB_UnbindScopeSys() end end)
-    pcall(function() if _G.ECLIPSE_HUB_AutoPeekReset then _G.ECLIPSE_HUB_AutoPeekReset() end end)
     pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ECLIPSE_HUBScopeOverlay") end)
 
     if Config and Config.Misc then Config.Misc.CustomFOV = 0 end
@@ -13116,7 +13231,10 @@ connectSignal(RunService.RenderStepped:Connect(function()
                         _ECLIPSE_HUBFootstepTick[p] = st
                         local now = tick()
                         local moved = (hrp.Position - st.lastPos).Magnitude
-                        if now - st.last > 0.42 and moved > 3.5 then
+                        local _fsMax = tonumber(Config.ESP.FootstepDistance) or tonumber(Config.ESP.MaxDistance) or 400
+                        local _fsCam = Workspace.CurrentCamera
+                        local _fsDist = _fsCam and (_fsCam.CFrame.Position - hrp.Position).Magnitude or 0
+                        if now - st.last > 0.42 and moved > 3.5 and _fsDist <= _fsMax then
                             st.last = now; st.lastPos = hrp.Position
                             local col = Config.ESP.FootstepColor or Color3.fromRGB(150,95,255)
                             local rayParams = RaycastParams.new()
@@ -13140,8 +13258,8 @@ connectSignal(RunService.RenderStepped:Connect(function()
                             local ring = Instance.new("CylinderHandleAdornment")
                             ring.Name = "ECLIPSE_HUBFootstepRing"
                             ring.Adornee = anchor
-                            ring.AlwaysOnTop = false
-                            ring.ZIndex = 0
+                            ring.AlwaysOnTop = true
+                            ring.ZIndex = 5
                             ring.Color3 = col
                             ring.Transparency = 0.05
                             ring.Height = 0.03
@@ -13153,8 +13271,8 @@ connectSignal(RunService.RenderStepped:Connect(function()
                             local glow = Instance.new("CylinderHandleAdornment")
                             glow.Name = "ECLIPSE_HUBFootstepGlow"
                             glow.Adornee = anchor
-                            glow.AlwaysOnTop = false
-                            glow.ZIndex = 0
+                            glow.AlwaysOnTop = true
+                            glow.ZIndex = 4
                             glow.Color3 = col
                             glow.Transparency = 0.62
                             glow.Height = 0.02
@@ -16577,90 +16695,6 @@ MoveGB:AddDropdown("AutoStop_Options", {
     end,
 })
 
-Config.Movement.FakeDuck    = Config.Movement.FakeDuck    or false
-Config.Movement.InstantDuck = Config.Movement.InstantDuck or false
-
-local DuckGB = Tabs.Movement:AddRightGroupbox("DUCK")
-
-DuckGB:AddToggle("FakeDuck_Toggle", {
-    Text = "FAKE DUCK", Default = false,
-    Callback = function(v) Config.Movement.FakeDuck = v and true or false end,
-}):AddKeyPicker("FakeDuck_Key", { Default = "X", SyncToggleState = true, Mode = "Toggle", Text = "Fake Duck" })
-
-DuckGB:AddToggle("InstantDuck_Toggle", {
-    Text = "INSTANT DUCK", Default = false,
-    Callback = function(v) Config.Movement.InstantDuck = v and true or false end,
-}):AddKeyPicker("InstantDuck_Key", { Default = "Z", SyncToggleState = true, Mode = "Hold", Text = "Instant Duck" })
-
-do
-    -- hook UpdateCrouchState so the server always believes we are crouched
-    -- while Fake Duck is on, without the local camera actually ducking
-    local hooked = false
-    local function installDuckHook()
-        if hooked then return end
-        local ok = pcall(function()
-            local Net = require(ReplicatedStorage.Database.Security.Remotes)
-            local pkt = Net and Net.Character and Net.Character.UpdateCrouchState
-            if not (pkt and type(pkt.Send) == "function") then return end
-            local old = pkt.Send
-            local function hk(...)
-                if Config.Movement.FakeDuck then
-                    local args = { ... }
-                    args[1] = true
-                    return old(unpack(args))
-                end
-                if Config.Movement.InstantDuck then
-                    local args = { ... }
-                    args[1] = (args[1] == true) and true or false
-                    return old(unpack(args))
-                end
-                return old(...)
-            end
-            pkt.Send = (newcclosure and newcclosure(hk)) or hk
-            _G.__ECLIPSE_DUCK_SEND = old
-            hooked = true
-        end)
-        if not ok then hooked = false end
-    end
-
-    task.spawn(function()
-        local last = false
-        while scriptRunning do
-            local want = Config.Movement.FakeDuck or Config.Movement.InstantDuck
-            if want then installDuckHook() end
-
-            local ch  = LocalPlayer and LocalPlayer.Character
-            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-            if hum then
-                if Config.Movement.FakeDuck then
-                    -- keep the local view standing while the server sees a crouch
-                    if hum.CameraOffset.Y < -0.25 then
-                        pcall(function() hum.CameraOffset = Vector3.new(0, 0, 0) end)
-                    end
-                    -- constant crouch spam so the hitbox keeps flickering
-                    pcall(function()
-                        local send = _G.__ECLIPSE_DUCK_SEND
-                        if send then send(true) end
-                    end)
-                elseif Config.Movement.InstantDuck then
-                    pcall(function()
-                        local send = _G.__ECLIPSE_DUCK_SEND
-                        if send then send(true) end
-                        hum.CameraOffset = Vector3.new(0, -1.6, 0)
-                    end)
-                elseif last then
-                    pcall(function()
-                        local send = _G.__ECLIPSE_DUCK_SEND
-                        if send then send(false) end
-                        hum.CameraOffset = Vector3.new(0, 0, 0)
-                    end)
-                end
-            end
-            last = want
-            task.wait(want and 0.05 or 0.25)
-        end
-    end)
-end
 
 Config.Combat = Config.Combat or {}
 task.spawn(function()
@@ -16959,9 +16993,13 @@ do
 
     Config.Misc.NoSpread = Config.Misc.NoSpread or false
     do
-        local hooked = false
+        local hooked, HookIC, HookOrig = false, nil, nil
         local function tryHook()
             if hooked then return end
+            if _ECLIPSE_HUB_ICReady and not _ECLIPSE_HUB_ICReady() then
+                if _ECLIPSE_HUB_AllowIC then _ECLIPSE_HUB_AllowIC() end
+                return
+            end
             local ok, IC = pcall(require, ReplicatedStorage:WaitForChild("Controllers"):WaitForChild("InventoryController"))
             if not ok or type(IC) ~= "table" or type(IC.ShootWeapon) ~= "function" then return end
             if rawget(IC, "__ECLIPSE_HUB_NoSpreadHooked") then hooked = true; return end
@@ -16979,19 +17017,40 @@ do
                 end
                 return Orig(self, Data)
             end
+            HookIC, HookOrig = IC, Orig
             IC.__ECLIPSE_HUB_NoSpreadHooked = true
             IC.ShootWeapon = (newcclosure and newcclosure(hk)) or hk
             hooked = true
+        end
+        local function unhook()
+            if not hooked or not HookIC then return end
+            pcall(function()
+                HookIC.ShootWeapon = HookOrig
+                HookIC.__ECLIPSE_HUB_NoSpreadHooked = nil
+            end)
+            hooked, HookIC, HookOrig = false, nil, nil
         end
         MiscGB:AddToggle("NoSpread_Enable", {
             Text = "NO SPREAD",
             Default = false,
             Callback = function(v)
                 Config.Misc.NoSpread = v
-                if v then pcall(tryHook) end
+                if v then
+                    task.spawn(function()
+                        for _ = 1, 30 do
+                            if not Config.Misc.NoSpread then return end
+                            pcall(tryHook)
+                            if hooked then return end
+                            task.wait(0.5)
+                        end
+                    end)
+                else
+                    pcall(unhook)
+                end
             end,
         })
     end
+
 
     Config.Misc.NoCamRecoil = Config.Misc.NoCamRecoil or false
     do
@@ -17349,6 +17408,130 @@ do
         return best
     end
 
+    local _mirrorAlign, _mirrorGrip
+
+    local function _mirrorGripFor(weaponName)
+        local n   = tostring(weaponName or "")
+        local low = n:lower()
+        local cat = (WEAPON_CATEGORY and WEAPON_CATEGORY[n]) or nil
+        if (KNIVES and KNIVES[n]) or low:find("knife", 1, true) or low:find("bayonet", 1, true)
+            or low:find("karambit", 1, true) or low:find("daggers", 1, true) or low:find("kukri", 1, true) then
+            return Vector3.new(0.05, -0.05, -0.08)
+        end
+        if cat == "Pistols" or low:find("deagle") or low:find("glock") or low:find("usp")
+            or low:find("p250") or low:find("p2000") or low:find("cz75") or low:find("five")
+            or low:find("tec") or low:find("dual") or low:find("revolver") or low:find("r8") then
+            return Vector3.new(0.06, -0.06, -0.12)
+        end
+        if cat == "SMGs" or low:find("mp5") or low:find("mp7") or low:find("mp9")
+            or low:find("mac") or low:find("ump") or low:find("p90") or low:find("bizon") then
+            return Vector3.new(0.06, -0.07, -0.18)
+        end
+        if cat == "Snipers" or cat == "Heavy" or cat == "LMGs"
+            or low:find("awp") or low:find("scout") or low:find("ssg") or low:find("scar")
+            or low:find("g3sg") or low:find("negev") or low:find("m249") then
+            return Vector3.new(0.07, -0.08, -0.26)
+        end
+        return Vector3.new(0.07, -0.07, -0.22)
+    end
+
+    -- Automatic weapon alignment: figures out which local axis of the model is the
+    -- barrel and which one points up, so every weapon lands in the hand pointing
+    -- forward without needing a hand made rotation table.
+    local function _computeMirrorAlign(model, root)
+        local okAll, result = pcall(function()
+            local rcf   = root.CFrame
+            local parts = {}
+            for _, pp in ipairs(model:GetDescendants()) do
+                if pp:IsA("BasePart") then parts[#parts + 1] = pp end
+            end
+            if #parts == 0 then return nil end
+
+            local mn = Vector3.new(math.huge, math.huge, math.huge)
+            local mx = Vector3.new(-math.huge, -math.huge, -math.huge)
+            local info = {}
+            for _, pp in ipairs(parts) do
+                local c  = rcf:PointToObjectSpace(pp.Position)
+                local sz = pp.Size
+                local ex = rcf:VectorToObjectSpace(pp.CFrame.RightVector * sz.X * 0.5)
+                local ey = rcf:VectorToObjectSpace(pp.CFrame.UpVector    * sz.Y * 0.5)
+                local ez = rcf:VectorToObjectSpace(pp.CFrame.LookVector  * sz.Z * 0.5)
+                local h  = Vector3.new(
+                    math.abs(ex.X) + math.abs(ey.X) + math.abs(ez.X),
+                    math.abs(ex.Y) + math.abs(ey.Y) + math.abs(ez.Y),
+                    math.abs(ex.Z) + math.abs(ey.Z) + math.abs(ez.Z))
+                mn = Vector3.new(math.min(mn.X, c.X - h.X), math.min(mn.Y, c.Y - h.Y), math.min(mn.Z, c.Z - h.Z))
+                mx = Vector3.new(math.max(mx.X, c.X + h.X), math.max(mx.Y, c.Y + h.Y), math.max(mx.Z, c.Z + h.Z))
+                info[#info + 1] = { c = c, h = h }
+            end
+
+            local size   = mx - mn
+            local center = (mx + mn) * 0.5
+            local dim    = { size.X, size.Y, size.Z }
+            local cen    = { center.X, center.Y, center.Z }
+
+            local fAxis = 1
+            for i = 2, 3 do if dim[i] > dim[fAxis] then fAxis = i end end
+            local sAxis = 1
+            for i = 2, 3 do if dim[i] < dim[sAxis] then sAxis = i end end
+            if sAxis == fAxis then sAxis = (fAxis % 3) + 1 end
+            local uAxis = 6 - fAxis - sAxis
+
+            local function comp(v, i)
+                if i == 1 then return v.X elseif i == 2 then return v.Y else return v.Z end
+            end
+
+            -- barrel points to the thinner half of the longest axis
+            local fSign = 1
+            do
+                local pos, posN, neg, negN = 0, 0, 0, 0
+                for _, it in ipairs(info) do
+                    local along = comp(it.c, fAxis) - cen[fAxis]
+                    local thick = comp(it.h, uAxis) + comp(it.h, sAxis)
+                    if along >= 0 then pos, posN = pos + thick, posN + 1
+                    else neg, negN = neg + thick, negN + 1 end
+                end
+                if posN > 0 and negN > 0 then
+                    local pa, na = pos / posN, neg / negN
+                    if pa > na * 1.02 then fSign = -1 elseif na > pa * 1.02 then fSign = 1
+                    elseif math.abs(cen[fAxis]) > dim[fAxis] * 0.05 then
+                        fSign = (cen[fAxis] >= 0) and 1 or -1
+                    end
+                elseif math.abs(cen[fAxis]) > 1e-3 then
+                    fSign = (cen[fAxis] >= 0) and 1 or -1
+                end
+            end
+
+            -- up is the half that carries the long receiver/barrel, not the grip
+            local uSign = 1
+            do
+                local pos, neg = 0, 0
+                for _, it in ipairs(info) do
+                    local along = comp(it.c, uAxis) - cen[uAxis]
+                    local run   = comp(it.h, fAxis)
+                    if along >= 0 then pos = pos + run else neg = neg + run end
+                end
+                if pos > neg * 1.02 then uSign = 1
+                elseif neg > pos * 1.02 then uSign = -1
+                elseif math.abs(cen[uAxis]) > 1e-3 then
+                    uSign = (cen[uAxis] >= 0) and 1 or -1
+                end
+            end
+
+            local axes = { Vector3.new(1, 0, 0), Vector3.new(0, 1, 0), Vector3.new(0, 0, 1) }
+            local f = axes[fAxis] * fSign
+            local u = axes[uAxis] * uSign
+            local r = u:Cross(-f)
+            if r.Magnitude < 1e-3 then return nil end
+            r = r.Unit
+            u = (-f):Cross(r).Unit
+            local L = CFrame.fromMatrix(Vector3.zero, r, u, -f)
+            return L:Inverse()
+        end)
+        if okAll and result then return result end
+        return CFrame.new()
+    end
+
     local function _forceMirrorVisible()
         if not _mirrorClone then return end
         for _, d in ipairs(_mirrorClone:GetDescendants()) do
@@ -17446,6 +17629,8 @@ do
         pcall(function() clone:ScaleTo(_mirrorScaleFor(weapon.Name)) end)
         _mirrorRootRel = clone:GetPivot():ToObjectSpace(root.CFrame)
         _mirrorOffset  = _mirrorOffsetFor(weapon.Name)
+        _mirrorAlign   = _computeMirrorAlign(clone, root)
+        _mirrorGrip    = _mirrorGripFor(weapon.Name)
         _mirrorClone   = clone
         _mirrorSourceName = weapon.Name
         _mirrorSourceRef  = weapon
@@ -17457,8 +17642,27 @@ do
         if not (_mirrorClone and _mirrorClone.Parent and hand) then return end
         local rel = _mirrorRootRel or CFrame.new()
         pcall(function()
-            local __off = _mirrorOffset or _MIRROR_OFFSET_LONG
-            _mirrorClone:PivotTo((hand.CFrame * __off) * rel:Inverse())
+            local ch  = LocalPlayer.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            local cam = workspace.CurrentCamera
+
+            local handPos = hand.Position
+            if hand.Name == "Right Arm" then
+                handPos = (hand.CFrame * CFrame.new(0, -0.62, 0)).Position
+            end
+
+            local look = (hrp and hrp.CFrame.LookVector) or (cam and cam.CFrame.LookVector) or Vector3.new(0, 0, -1)
+            local yaw   = math.atan2(-look.X, -look.Z)
+            local pitch = 0
+            if cam then
+                pitch = math.asin(math.clamp(cam.CFrame.LookVector.Y, -1, 1))
+            end
+
+            local base    = CFrame.new(handPos) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0)
+            local grip    = _mirrorGrip or Vector3.new(0.07, -0.07, -0.22)
+            local align   = _mirrorAlign or CFrame.new()
+            local rootCF  = (base * CFrame.new(grip)) * align
+            _mirrorClone:PivotTo(rootCF * rel:Inverse())
         end)
         local now = tick()
         if not _mirrorNextUnhide or now >= _mirrorNextUnhide then
@@ -18158,8 +18362,8 @@ do
 
     local WH_STYLES = {
         Illum = { mat = Enum.Material.Neon,       refl = 0.00, partTr = 0.00, clearTex = true },
-        Ghost = { mat = Enum.Material.ForceField, refl = 0.00, partTr = 0.35, clearTex = true,
-                  shell = true, shellMat = Enum.Material.ForceField, shellT = 0.55, shellScale = 1.020 },
+        Ghost = { mat = Enum.Material.ForceField, refl = 0.00, partTr = 1.00, clearTex = true,
+                  shell = true, shellMat = Enum.Material.ForceField, shellT = 0.15, shellScale = 1.004 },
     }
 
 
@@ -18231,7 +18435,7 @@ do
         local a  = math.clamp(inten or 1, 0.2, 3.0)
         local partTr = math.clamp(st.partTr * (1 / a), 0.00, 0.90)
         if styleName == "Ghost" then
-            partTr = math.clamp(st.partTr, 0.20, 0.60)
+            partTr = 1.00
         end
 
 
@@ -18610,10 +18814,6 @@ Config.Misc.CustomScopeFov = false
 
 do
     Config.Misc.ScopeFovValue = tonumber(Config.Misc.ScopeFovValue) or 40
-    Config.Misc.AutoScope     = false
-    Config.Misc.AutoPeek      = false
-    Config.Misc.AutoPeekDist  = 4
-    Config.Misc.AutoPeekSide  = "Right"
 
     local SC = { restore = {}, bound = false }
 
@@ -18729,7 +18929,6 @@ do
         return (pcall(function() w.IsAiming = state and true or false end))
     end
 
-    local _asHeldByUs = false
     local function _fireHeld()
         if _ECLIPSE_HUBFireBtnHeld then return true end
         local ok, down = pcall(function()
@@ -18737,129 +18936,10 @@ do
         end)
         return ok and down or false
     end
-
-    local _asLastTry = 0
-    local function _scopeSafeWeapon()
-        local w, props = _equippedProps()
-        if not w or type(props) ~= "table" then return nil end
-        local slot = tostring(props.Slot or "")
-        if slot == "Grenade" or slot == "C4" or slot == "Knife" then return nil end
-        local hasScope = props.HasScope
-        if hasScope == nil then hasScope = (props.AimingOptions == "SniperScope") end
-        if not hasScope then return nil end
-        return w
-    end
-
-    local function _scopeSet(w, state)
-        local fn = _ECLIPSE_HUB_WField(w, "scope") or _ECLIPSE_HUB_WField(w, "Scope")
-        if type(fn) == "function" then
-            local ok = pcall(fn, w, state)
-            if ok then return true end
-        end
-        return _setAim(state)
-    end
-
-    task.spawn(function()
-        while true do
-            task.wait(0.05)
-            if scriptRunning and Config.Misc.AutoScope then
-                local alive = LocalPlayer.Character
-                    and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-                    and LocalPlayer.Character:FindFirstChildOfClass("Humanoid").Health > 0
-                local w = alive and _scopeSafeWeapon() or nil
-                if w then
-                    local scoped = _ECLIPSE_HUB_WField(w, "IsScoped")
-                    if scoped == nil then scoped = _isScoped() end
-                    if _fireHeld() then
-                        if not scoped and (tick() - _asLastTry) > 0.3 then
-                            _asLastTry = tick()
-                            _scopeSet(w, true)
-                            _asHeldByUs = true
-                        end
-                    elseif _asHeldByUs then
-                        _asHeldByUs = false
-                        _scopeSet(w, false)
-                    end
-                elseif _asHeldByUs then
-                    _asHeldByUs = false
-                end
-            elseif _asHeldByUs then
-                _asHeldByUs = false
-                pcall(_setAim, false)
-            end
-        end
-    end)
+    _ECLIPSE_HUB_ScopeFireHeld = _fireHeld
 
 
-    local AP = { anchor = nil, out = false }
-    local function _root()
-        local ch = LocalPlayer.Character
-        return ch and ch:FindFirstChild("HumanoidRootPart") or nil
-    end
-    local function _apReset()
-        AP.anchor = nil
-        AP.out = false
-    end
-    _G.ECLIPSE_HUB_AutoPeekReset = _apReset
 
-    task.spawn(function()
-        while true do
-            task.wait(0.03)
-            repeat
-                if not (scriptRunning and Config.Misc.AutoPeek) then
-                    if AP.anchor then
-                        local r = _root()
-                        if r and AP.out then pcall(function() r.CFrame = AP.anchor end) end
-                        _apReset()
-                    end
-                    break
-                end
-                local r = _root()
-                if not r then _apReset(); break end
-                local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-                if not (hum and hum.Health > 0) then _apReset(); break end
-
-                if not AP.anchor then AP.anchor = r.CFrame end
-
-                local dist = math.clamp(tonumber(Config.Misc.AutoPeekDist) or 4, 1, 12)
-                local side = (Config.Misc.AutoPeekSide == "Left") and -1 or 1
-                local cam  = Camera and Camera.CFrame
-                local right = cam and Vector3.new(cam.RightVector.X, 0, cam.RightVector.Z) or Vector3.new(1, 0, 0)
-                if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) end
-                right = right.Unit
-
-                if _fireHeld() then
-                    if not AP.out then
-                        AP.anchor = AP.anchor or r.CFrame
-                        AP.out = true
-                    end
-                    local goal = AP.anchor + right * (dist * side)
-                    local cur  = r.CFrame.Position
-                    local step = goal - cur
-                    if step.Magnitude > 0.05 then
-                        local move = step.Magnitude > 1.2 and (step.Unit * 1.2) or step
-                        pcall(function() r.CFrame = r.CFrame + move end)
-                    end
-                elseif AP.out then
-                    local goal = AP.anchor.Position
-                    local step = goal - r.CFrame.Position
-                    if step.Magnitude > 0.15 then
-                        local move = step.Magnitude > 1.6 and (step.Unit * 1.6) or step
-                        pcall(function() r.CFrame = r.CFrame + move end)
-                    else
-                        pcall(function() r.CFrame = AP.anchor end)
-                        AP.out = false
-                    end
-                else
-                    AP.anchor = r.CFrame
-                end
-            until true
-        end
-    end)
-
-    pcall(function()
-        connectSignal(LocalPlayer.CharacterAdded:Connect(function() _apReset() end))
-    end)
 
     local ScopeGB = Tabs.Misc:AddRightGroupbox("SCOPE", "crosshair")
     ScopeGB:AddToggle("RemoveScope_Toggle", { Text = "REMOVE SCOPE", Default = false,
@@ -18878,24 +18958,9 @@ do
     ScopeGB:AddSlider("CustomScopeFov_Value", { Text = "SCOPE FOV", Default = Config.Misc.ScopeFovValue,
         Min = 5, Max = 120, Rounding = 0, Suffix = "°",
         Callback = function(v) Config.Misc.ScopeFovValue = tonumber(v) or 40 end })
-    ScopeGB:AddToggle("AutoScope_Toggle", { Text = "AUTO SCOPE", Default = false,
-        Tooltip = "Automatically scopes in when shooting with a sniper (PC + Mobile).",
-        Callback = function(v) Config.Misc.AutoScope = v and true or false end })
 
-    local PeekGB = Tabs.Movement:AddRightGroupbox("AUTO PEEK", "move")
-    PeekGB:AddToggle("AutoPeek_Toggle", { Text = "AUTO PEEK", Default = false,
-        Tooltip = "Saves your spot, peeks out while shooting and returns when you stop.",
-        Callback = function(v)
-            Config.Misc.AutoPeek = v and true or false
-            if not v then _apReset() end
-        end })
-        :AddKeyPicker("AutoPeek_Key", { Default = "J", SyncToggleState = true, Mode = "Toggle", Text = "Auto Peek" })
-    PeekGB:AddSlider("AutoPeek_Dist", { Text = "PEEK DISTANCE", Default = Config.Misc.AutoPeekDist,
-        Min = 1, Max = 12, Rounding = 1, Suffix = "m",
-        Callback = function(v) Config.Misc.AutoPeekDist = tonumber(v) or 4 end })
-    PeekGB:AddDropdown("AutoPeek_Side", { Text = "PEEK SIDE", Values = { "Right", "Left" },
-        Default = "Right",
-        Callback = function(v) Config.Misc.AutoPeekSide = v end })
+
+
 end
 
 Config.Misc.InfAmmo = false
@@ -23218,6 +23283,11 @@ end)
     local _ICWepInv
     local function _getInventoryController()
         if _ICWepInv then return _ICWepInv end
+        if _ECLIPSE_HUB_ICReady and not _ECLIPSE_HUB_ICReady() then
+            if _ECLIPSE_HUB_AllowIC then _ECLIPSE_HUB_AllowIC() end
+            return nil
+        end
+
         local ok, ic = pcall(function()
             local rs   = game:GetService("ReplicatedStorage")
             local ctrl = rs:FindFirstChild("Controllers")
@@ -23877,48 +23947,9 @@ end)()
         return best
     end
 
-    local _hookedT1 = false
-    local function _tryHookT1()
-        if _hookedT1 then return end
-        local ok, IC = pcall(function()
-            return require(ReplicatedStorage:WaitForChild("Controllers")
-                :WaitForChild("InventoryController"))
-        end)
-        if not ok or type(IC) ~= "table" or type(IC.ShootWeapon) ~= "function" then return end
-        local Orig = IC.ShootWeapon
-        local function hk(self, Data)
-            if Config.Misc.Test1 and _t1Held then
-                local findEq  = _G.ECLIPSE_HUBAS_FindEquipped
-                local isMelee = _G.ECLIPSE_HUBAS_IsMelee
-                local sendKill= _G.ECLIPSE_HUBAS_SendKill
-                if type(findEq) == "function" and type(sendKill) == "function" then
-                    local w = findEq()
-                    if w and not (type(isMelee) == "function" and isMelee(w)) then
-                        local best = _t1PickTarget()
-                        if best then pcall(sendKill, best, w) end
-                    end
-                end
-                
-                return
-            end
-            return Orig(self, Data)
-        end
-        IC.ShootWeapon = (newcclosure and newcclosure(hk)) or hk
-        _hookedT1 = true
-    end
-
+    local function _tryHookT1() return false end
     _G.ECLIPSE_HUBTest1TryHook = _tryHookT1
 
-    if Config.Misc.Test1 then
-        task.spawn(function()
-            for _ = 1, 40 do
-                if _hookedT1 then return end
-                pcall(_tryHookT1)
-                if _hookedT1 then return end
-                task.wait(0.5)
-            end
-        end)
-    end
 end)()
 
 _G.ECLIPSE_HUBBulletTracerFire = function() end
@@ -24661,8 +24692,6 @@ task.defer(function() pcall(function()
         end,
     })
     WCGB:AddSlider("HVH_WallTrans", { Text = "WALL TRANSPARENCY", Default = 0.8, Min = 0, Max = 0.95, Rounding = 2 })
-
-    pcall(function() WCGB:AddDivider() end)
     WCGB:AddToggle("HVH_CustomTime", {
         Text = "CUSTOM TIME", Default = false,
         Callback = function(v)
@@ -25415,4 +25444,512 @@ do
     end
 end
 
+end)()
+
+-- ============================================================
+-- MOTION GRAPH (velocity graph)
+-- ============================================================
+;(function()
+    Config.Visuals = Config.Visuals or {}
+    Config.Visuals.MotionGraph      = false
+    Config.Visuals.MotionGraphColor = Color3.fromRGB(255, 255, 255)
+    Config.Visuals.MotionGraphWidth = 320
+    Config.Visuals.MotionGraphHeight= 70
+
+    local MG = {
+        gui = nil, holder = nil, segs = {}, hist = {},
+        max = 96, peak = 24, label = nil, fill = nil,
+    }
+
+    local function _mgDestroy()
+        if MG.gui then pcall(function() MG.gui:Destroy() end) end
+        MG.gui, MG.holder, MG.label, MG.fill = nil, nil, nil, nil
+        MG.segs, MG.hist = {}, {}
+    end
+
+    local function _mgBuild()
+        if MG.gui and MG.gui.Parent then return end
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not pg then return end
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "ECLIPSE_MotionGraph"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 999
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        pcall(function() gui.Parent = pg end)
+
+        local holder = Instance.new("Frame")
+        holder.Name = "Graph"
+        holder.AnchorPoint = Vector2.new(0.5, 1)
+        holder.Position = UDim2.new(0.5, 0, 1, -96)
+        holder.Size = UDim2.fromOffset(Config.Visuals.MotionGraphWidth, Config.Visuals.MotionGraphHeight)
+        holder.BackgroundTransparency = 1
+        holder.BorderSizePixel = 0
+        holder.Parent = gui
+
+        local base = Instance.new("Frame")
+        base.Name = "Baseline"
+        base.AnchorPoint = Vector2.new(0, 1)
+        base.Position = UDim2.new(0, 0, 1, 0)
+        base.Size = UDim2.new(1, 0, 0, 1)
+        base.BackgroundColor3 = Config.Visuals.MotionGraphColor
+        base.BackgroundTransparency = 0.55
+        base.BorderSizePixel = 0
+        base.Parent = holder
+
+        local label = Instance.new("TextLabel")
+        label.Name = "Speed"
+        label.AnchorPoint = Vector2.new(0.5, 1)
+        label.Position = UDim2.new(0.5, 0, 1, 20)
+        label.Size = UDim2.fromOffset(120, 16)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 13
+        label.TextColor3 = Config.Visuals.MotionGraphColor
+        label.TextStrokeTransparency = 0.4
+        label.Text = "0"
+        label.Parent = holder
+
+        MG.gui, MG.holder, MG.label = gui, holder, label
+        MG.segs = {}
+        for i = 1, MG.max do
+            local seg = Instance.new("Frame")
+            seg.Name = "S" .. i
+            seg.AnchorPoint = Vector2.new(0.5, 0.5)
+            seg.BorderSizePixel = 0
+            seg.BackgroundColor3 = Config.Visuals.MotionGraphColor
+            seg.Size = UDim2.fromOffset(0, 1)
+            seg.Visible = false
+            seg.ZIndex = 3
+            seg.Parent = holder
+            MG.segs[i] = seg
+        end
+    end
+
+    local function _mgSpeed()
+        local ch  = LocalPlayer and LocalPlayer.Character
+        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        if not hrp then return 0 end
+        local v = hrp.AssemblyLinearVelocity
+        return math.sqrt(v.X * v.X + v.Z * v.Z)
+    end
+
+    local function _mgRender()
+        local holder = MG.holder
+        if not holder then return end
+        local W = holder.AbsoluteSize.X
+        local H = holder.AbsoluteSize.Y
+        if W <= 0 or H <= 0 then return end
+
+        local col = Config.Visuals.MotionGraphColor
+        local n = #MG.hist
+        local peak = math.max(MG.peak, 16)
+        local stepX = W / math.max(MG.max - 1, 1)
+
+        local function ptFor(i)
+            local x = (i - 1) * stepX
+            local val = MG.hist[i] or 0
+            local y = H - math.clamp(val / peak, 0, 1) * (H - 2)
+            return Vector2.new(x, y)
+        end
+
+        for i = 1, MG.max do
+            local seg = MG.segs[i]
+            if not seg then break end
+            if i < n then
+                local a, b = ptFor(i), ptFor(i + 1)
+                local d = b - a
+                local len = d.Magnitude
+                if len < 0.25 then len = 0.25 end
+                local mid = (a + b) * 0.5
+                seg.Visible = true
+                seg.BackgroundColor3 = col
+                seg.BackgroundTransparency = 0.05
+                seg.Size = UDim2.fromOffset(math.ceil(len) + 1, 1)
+                seg.Position = UDim2.fromOffset(mid.X, mid.Y)
+                seg.Rotation = math.deg(math.atan2(d.Y, d.X))
+            else
+                seg.Visible = false
+            end
+        end
+
+        if MG.label then
+            MG.label.TextColor3 = col
+            MG.label.Text = tostring(math.floor((MG.hist[n] or 0) + 0.5))
+        end
+        local bl = holder:FindFirstChild("Baseline")
+        if bl then bl.BackgroundColor3 = col end
+    end
+
+    task.spawn(function()
+        while scriptRunning do
+            local on = Config.GlobalEnable ~= false and Config.Visuals.MotionGraph
+            if on then
+                _mgBuild()
+                if MG.holder then
+                    MG.holder.Size = UDim2.fromOffset(Config.Visuals.MotionGraphWidth, Config.Visuals.MotionGraphHeight)
+                    local sp = _mgSpeed()
+                    MG.hist[#MG.hist + 1] = sp
+                    while #MG.hist > MG.max do table.remove(MG.hist, 1) end
+                    local hi = 24
+                    for _, v in ipairs(MG.hist) do if v > hi then hi = v end end
+                    MG.peak = MG.peak + (hi * 1.15 - MG.peak) * 0.15
+                    pcall(_mgRender)
+                end
+            elseif MG.gui then
+                _mgDestroy()
+            end
+            task.wait(on and 0.03 or 0.35)
+        end
+        _mgDestroy()
+    end)
+
+    local MGGB = Tabs.Visuals:AddRightGroupbox("MOTION GRAPH", "activity")
+    MGGB:AddToggle("MotionGraph_Toggle", {
+        Text = "MOTION GRAPH", Default = false,
+        Tooltip = "Live velocity graph of your horizontal speed.",
+        Callback = function(v) Config.Visuals.MotionGraph = v and true or false end,
+    }):AddColorPicker("MotionGraph_Color", {
+        Default = Config.Visuals.MotionGraphColor, Title = "Graph color",
+        Callback = function(c) Config.Visuals.MotionGraphColor = c end,
+    })
+    MGGB:AddSlider("MotionGraph_Width", {
+        Text = "GRAPH WIDTH", Default = 320, Min = 140, Max = 620, Rounding = 0,
+        Callback = function(v) Config.Visuals.MotionGraphWidth = tonumber(v) or 320 end,
+    })
+    MGGB:AddSlider("MotionGraph_Height", {
+        Text = "GRAPH HEIGHT", Default = 70, Min = 30, Max = 180, Rounding = 0,
+        Callback = function(v) Config.Visuals.MotionGraphHeight = tonumber(v) or 70 end,
+    })
+end)()
+
+-- ============================================================
+-- LONG JUMP + PIXEL SURF
+-- ============================================================
+;(function()
+    Config.Movement = Config.Movement or {}
+    Config.Movement.LongJump          = false
+    Config.Movement.LongJumpPower     = 55
+    Config.Movement.LongJumpUp        = 12
+    Config.Movement.LongJumpMode      = "On Jump"
+    Config.Movement.LongJumpCooldown  = 0.35
+
+    Config.Movement.PixelSurf         = false
+    Config.Movement.PixelSurfSpeed    = 90
+    Config.Movement.PixelSurfAccel    = 260
+    Config.Movement.PixelSurfAngle    = 32
+    Config.Movement.PixelSurfHeight   = 3.2
+    Config.Movement.PixelSurfSize     = 7
+    Config.Movement.PixelSurfVisible  = false
+    Config.Movement.PixelSurfColor    = Color3.fromRGB(120, 190, 255)
+    Config.Movement.PixelSurfAirOnly  = true
+    Config.Movement.PixelSurfNoFall   = true
+
+    local UIS       = game:GetService("UserInputService")
+    local RunSvc    = game:GetService("RunService")
+    local Workspace = game:GetService("Workspace")
+
+    local function _lpChar()
+        local ch = LocalPlayer and LocalPlayer.Character
+        if not ch then return nil end
+        local hrp = ch:FindFirstChild("HumanoidRootPart")
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then return nil end
+        return ch, hrp, hum
+    end
+
+    local function _keyDown(optName)
+        local opt = Library and Library.Options and Library.Options[optName]
+        if not opt then return false end
+        local kc = opt.Value
+        if typeof(kc) == "EnumItem" and kc ~= Enum.KeyCode.Unknown then
+            local ok, down = pcall(function() return UIS:IsKeyDown(kc) end)
+            return ok and down or false
+        end
+        if type(kc) == "string" then
+            local ok, en = pcall(function() return Enum.KeyCode[kc] end)
+            if ok and en then
+                local ok2, down = pcall(function() return UIS:IsKeyDown(en) end)
+                return ok2 and down or false
+            end
+        end
+        return false
+    end
+
+    -- movement direction: WASD / mobile thumbstick, falling back to camera look
+    local function _moveDir(hrp)
+        local ch, _, hum = _lpChar()
+        local dir = Vector3.zero
+        if hum then
+            local md = hum.MoveDirection
+            if md.Magnitude > 0.05 then dir = Vector3.new(md.X, 0, md.Z) end
+        end
+        if dir.Magnitude < 0.05 then
+            local v = hrp.AssemblyLinearVelocity
+            local flat = Vector3.new(v.X, 0, v.Z)
+            if flat.Magnitude > 3 then dir = flat end
+        end
+        if dir.Magnitude < 0.05 then
+            local cam = Workspace.CurrentCamera
+            local lv = cam and cam.CFrame.LookVector or hrp.CFrame.LookVector
+            dir = Vector3.new(lv.X, 0, lv.Z)
+        end
+        if dir.Magnitude < 1e-3 then return Vector3.new(0, 0, -1) end
+        return dir.Unit
+    end
+
+    ------------------------------------------------------------
+    -- LONG JUMP
+    ------------------------------------------------------------
+    local LJ = { last = 0, wasGrounded = true, armed = false }
+
+    local function _isGrounded(hum)
+        local st = hum:GetState()
+        return st ~= Enum.HumanoidStateType.Freefall
+           and st ~= Enum.HumanoidStateType.Jumping
+           and st ~= Enum.HumanoidStateType.Flying
+    end
+
+    local function _doLongJump(hrp, hum)
+        local now = tick()
+        if now - LJ.last < (Config.Movement.LongJumpCooldown or 0.35) then return end
+        LJ.last = now
+        local dir   = _moveDir(hrp)
+        local power = tonumber(Config.Movement.LongJumpPower) or 55
+        local up    = tonumber(Config.Movement.LongJumpUp) or 12
+        local v     = hrp.AssemblyLinearVelocity
+        local flat  = Vector3.new(v.X, 0, v.Z)
+        local keep  = flat:Dot(dir)
+        if keep < 0 then keep = 0 end
+        local newFlat = dir * (keep * 0.35 + power)
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.new(newFlat.X, math.max(v.Y, up), newFlat.Z)
+        end)
+    end
+
+    ------------------------------------------------------------
+    -- PIXEL SURF (CS style ramp surfing on a generated pixel)
+    ------------------------------------------------------------
+    local PS = { part = nil, conn = nil, active = false, speed = 0 }
+
+    local function _psDestroy()
+        if PS.conn then pcall(function() PS.conn:Disconnect() end) PS.conn = nil end
+        if PS.part then pcall(function() PS.part:Destroy() end) PS.part = nil end
+        PS.active = false
+        PS.speed  = 0
+        if _G.ECLIPSE_HUB_SURF_PART then _G.ECLIPSE_HUB_SURF_PART = nil end
+    end
+
+    local function _psBuild()
+        if PS.part and PS.part.Parent then return PS.part end
+        local sz = math.clamp(tonumber(Config.Movement.PixelSurfSize) or 7, 2, 24)
+        local p = Instance.new("Part")
+        p.Name         = "ECLIPSE_PixelSurf"
+        p.Anchored     = true
+        p.CanCollide   = true
+        p.CanQuery     = false
+        p.CanTouch     = false
+        p.CastShadow   = false
+        p.TopSurface   = Enum.SurfaceType.Smooth
+        p.BottomSurface= Enum.SurfaceType.Smooth
+        p.Material     = Enum.Material.Neon
+        p.Color        = Config.Movement.PixelSurfColor
+        p.Size         = Vector3.new(sz, 0.4, sz)
+        p.Transparency = Config.Movement.PixelSurfVisible and 0.55 or 1
+        p.Parent       = Workspace
+        PS.part = p
+        _G.ECLIPSE_HUB_SURF_PART = p
+        return p
+    end
+
+    local function _psStep(dt)
+        local ch, hrp, hum = _lpChar()
+        if not hrp then _psDestroy() return end
+        if Config.Movement.PixelSurfAirOnly and _isGrounded(hum) and PS.speed <= 0 then
+            if PS.part then PS.part.CFrame = CFrame.new(0, -5000, 0) end
+            return
+        end
+
+        local part  = _psBuild()
+        local sz    = math.clamp(tonumber(Config.Movement.PixelSurfSize) or 7, 2, 24)
+        if part.Size.X ~= sz then part.Size = Vector3.new(sz, 0.4, sz) end
+        part.Transparency = Config.Movement.PixelSurfVisible and 0.55 or 1
+        part.Color        = Config.Movement.PixelSurfColor
+
+        local dir    = _moveDir(hrp)
+        local ang    = math.rad(math.clamp(tonumber(Config.Movement.PixelSurfAngle) or 32, 3, 75))
+        local hgt    = math.clamp(tonumber(Config.Movement.PixelSurfHeight) or 3.2, 1, 12)
+        local maxSpd = math.clamp(tonumber(Config.Movement.PixelSurfSpeed) or 90, 10, 500)
+        local accel  = math.clamp(tonumber(Config.Movement.PixelSurfAccel) or 260, 20, 2000)
+
+        -- ramp sits just under the feet, tilted downhill along the move direction
+        local base = hrp.Position - Vector3.new(0, hgt, 0) + dir * (sz * 0.18)
+        local look = CFrame.lookAt(base, base + dir)
+        part.CFrame = look * CFrame.Angles(ang, 0, 0)
+
+        -- surf acceleration: gravity component along the ramp, capped by max speed
+        PS.speed = PS.speed + accel * dt * math.sin(ang)
+        if PS.speed > maxSpd then
+            PS.speed = PS.speed + (maxSpd - PS.speed) * math.clamp(dt * 6, 0, 1)
+        end
+
+        local v  = hrp.AssemblyLinearVelocity
+        local vy = v.Y
+        if Config.Movement.PixelSurfNoFall then
+            vy = math.clamp(vy, -14, math.max(vy, 0))
+        end
+        local flat = dir * PS.speed
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.new(flat.X, vy, flat.Z)
+        end)
+    end
+
+    ------------------------------------------------------------
+    -- MAIN LOOP
+    ------------------------------------------------------------
+    task.spawn(function()
+        while scriptRunning do
+            local okStep = pcall(function()
+                local globalOn = (Config.GlobalEnable ~= false)
+                local ch, hrp, hum = _lpChar()
+
+                -- LONG JUMP
+                if globalOn and Config.Movement.LongJump and hrp and hum then
+                    local mode = tostring(Config.Movement.LongJumpMode or "On Jump")
+                    local grounded = _isGrounded(hum)
+                    if mode == "On Jump" then
+                        if LJ.wasGrounded and not grounded then _doLongJump(hrp, hum) end
+                    elseif mode == "Hold Key" then
+                        if _keyDown("LongJump_Key") then
+                            if grounded then
+                                pcall(function() hum.Jump = true end)
+                            end
+                            _doLongJump(hrp, hum)
+                        end
+                    else -- Auto (jump + boost by itself)
+                        if grounded then
+                            pcall(function() hum.Jump = true end)
+                        else
+                            if LJ.wasGrounded then _doLongJump(hrp, hum) end
+                        end
+                    end
+                    LJ.wasGrounded = grounded
+                elseif hum then
+                    LJ.wasGrounded = _isGrounded(hum)
+                end
+
+                -- PIXEL SURF
+                local surfOn = globalOn and Config.Movement.PixelSurf
+                if surfOn then
+                    if not PS.conn then
+                        PS.conn = RunSvc.Heartbeat:Connect(function(dt)
+                            if not (Config.Movement.PixelSurf and scriptRunning) then return end
+                            pcall(_psStep, math.min(dt, 0.05))
+                        end)
+                    end
+                elseif PS.conn or PS.part then
+                    _psDestroy()
+                end
+            end)
+            if not okStep then task.wait(0.2) end
+            task.wait(0.03)
+        end
+        _psDestroy()
+    end)
+
+    -- keep the surf pixel out of bunny hop / raycast ground checks
+    if type(_G.ECLIPSE_HUB_IgnoreInstance) == "function" then
+        pcall(function() _G.ECLIPSE_HUB_IgnoreInstance(function() return PS.part end) end)
+    end
+
+    ------------------------------------------------------------
+    -- UI
+    ------------------------------------------------------------
+    local LJGB = Tabs.Movement:AddRightGroupbox("LONG JUMP", "move-up-right")
+    LJGB:AddToggle("LongJump_Toggle", {
+        Text = "LONG JUMP", Default = false,
+        Tooltip = "Boosts your horizontal velocity when you leave the ground.",
+        Callback = function(v) Config.Movement.LongJump = v and true or false end,
+    }):AddKeyPicker("LongJump_Key", { Default = "X", SyncToggleState = false, Mode = "Toggle", Text = "Long Jump" })
+    SafeAddDropdown(LJGB, "LongJump_Mode", {
+        Text = "MODE",
+        Values = { "On Jump", "Hold Key", "Auto" },
+        Default = "On Jump", Multi = false,
+        Callback = function(v) Config.Movement.LongJumpMode = tostring(v) end,
+    })
+    LJGB:AddSlider("LongJump_Power", {
+        Text = "JUMP POWER", Default = 55, Min = 10, Max = 220, Rounding = 0,
+        Callback = function(v) Config.Movement.LongJumpPower = tonumber(v) or 55 end,
+    })
+    LJGB:AddSlider("LongJump_Up", {
+        Text = "UPWARD FORCE", Default = 12, Min = 0, Max = 90, Rounding = 0,
+        Callback = function(v) Config.Movement.LongJumpUp = tonumber(v) or 12 end,
+    })
+    LJGB:AddSlider("LongJump_CD", {
+        Text = "COOLDOWN (S)", Default = 0.35, Min = 0.05, Max = 2, Rounding = 2,
+        Callback = function(v) Config.Movement.LongJumpCooldown = tonumber(v) or 0.35 end,
+    })
+
+    local PSGB = Tabs.Movement:AddRightGroupbox("PIXEL SURF", "waves")
+    PSGB:AddToggle("PixelSurf_Toggle", {
+        Text = "PIXEL SURF", Default = false,
+        Tooltip = "Spawns an invisible ramp pixel under you and surfs it, CS style.",
+        Callback = function(v) Config.Movement.PixelSurf = v and true or false end,
+    }):AddKeyPicker("PixelSurf_Key", { Default = "B", SyncToggleState = true, Mode = "Toggle", Text = "Pixel Surf" })
+    PSGB:AddSlider("PixelSurf_Speed", {
+        Text = "SURF SPEED", Default = 90, Min = 20, Max = 400, Rounding = 0,
+        Callback = function(v) Config.Movement.PixelSurfSpeed = tonumber(v) or 90 end,
+    })
+    PSGB:AddSlider("PixelSurf_Accel", {
+        Text = "ACCELERATION", Default = 260, Min = 40, Max = 1200, Rounding = 0,
+        Callback = function(v) Config.Movement.PixelSurfAccel = tonumber(v) or 260 end,
+    })
+    PSGB:AddSlider("PixelSurf_Angle", {
+        Text = "RAMP ANGLE", Default = 32, Min = 5, Max = 70, Rounding = 0,
+        Callback = function(v) Config.Movement.PixelSurfAngle = tonumber(v) or 32 end,
+    })
+    PSGB:AddSlider("PixelSurf_Height", {
+        Text = "RAMP DISTANCE", Default = 3.2, Min = 1, Max = 10, Rounding = 1,
+        Callback = function(v) Config.Movement.PixelSurfHeight = tonumber(v) or 3.2 end,
+    })
+    PSGB:AddSlider("PixelSurf_Size", {
+        Text = "PIXEL SIZE", Default = 7, Min = 2, Max = 20, Rounding = 0,
+        Callback = function(v) Config.Movement.PixelSurfSize = tonumber(v) or 7 end,
+    })
+    PSGB:AddToggle("PixelSurf_AirOnly", {
+        Text = "AIR ONLY", Default = true,
+        Tooltip = "Only surf while airborne, so normal walking stays untouched.",
+        Callback = function(v) Config.Movement.PixelSurfAirOnly = v and true or false end,
+    })
+    PSGB:AddToggle("PixelSurf_NoFall", {
+        Text = "ANTI FALL", Default = true,
+        Callback = function(v) Config.Movement.PixelSurfNoFall = v and true or false end,
+    })
+    PSGB:AddToggle("PixelSurf_Visible", {
+        Text = "SHOW RAMP", Default = false,
+        Callback = function(v) Config.Movement.PixelSurfVisible = v and true or false end,
+    }):AddColorPicker("PixelSurf_Color", {
+        Default = Config.Movement.PixelSurfColor, Title = "Ramp color",
+        Callback = function(c) Config.Movement.PixelSurfColor = c end,
+    })
+
+    -- keybind handling for the modes that are not synced by the library
+    task.spawn(function()
+        local deb = {}
+        UIS.InputBegan:Connect(function(input, gp)
+            if not scriptRunning or gp then return end
+            if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+            local optLJ  = Library.Options and Library.Options["LongJump_Key"]
+            local togLJ  = Library.Toggles and Library.Toggles["LongJump_Toggle"]
+            if optLJ and togLJ and optLJ.Value == input.KeyCode then
+                local now = tick()
+                if not deb.lj or now - deb.lj > 0.15 then
+                    deb.lj = now
+                    if tostring(Config.Movement.LongJumpMode or "") == "Hold Key" then return end
+                    pcall(function() togLJ:SetValue(not togLJ.Value) end)
+                end
+            end
+        end)
+    end)
 end)()
