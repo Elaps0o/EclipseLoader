@@ -27,7 +27,7 @@ local MarketplaceSvc = game:GetService("MarketplaceService")
 local LocalPlayer = Players.LocalPlayer
 
 local _ECLIPSE_HUBFrameStart = os.clock()
-local _ECLIPSE_HUB_FRAME_BUDGET = 1/240   
+local _ECLIPSE_HUB_FRAME_BUDGET = 1/240
 local RunService_forYield = game:GetService("RunService")
 local function ECLIPSE_HUBYield()
     local now = os.clock()
@@ -172,8 +172,8 @@ EX_IS_XENO    = false
 EX_IS_SOLARA  = false
 EX_IS_MEDIUM  = false
 EX_IS_VELOCITY = false
-EX_BLOCK_SILENT = false  
-EX_LIMITED      = false  
+EX_BLOCK_SILENT = false
+EX_LIMITED      = false
 do
     local exec = ""
     pcall(function()
@@ -188,7 +188,7 @@ do
     EX_IS_MEDIUM    = lc:find("medium",    1, true) ~= nil or lc:find("madium",    1, true) ~= nil
     EX_IS_VELOCITY  = lc:find("velocity",  1, true) ~= nil
     EX_BLOCK_SILENT = EX_IS_XENO or EX_IS_SOLARA or EX_IS_VELOCITY
-    
+
     EX_LIMITED      = false
 
     if EX_IS_XENO then
@@ -218,7 +218,7 @@ local function _genHex(n)
     return table.concat(t)
 end
 local function _genHWID()
-    
+
     return string.format("%s-%s-%s-%s-%s",
         _genHex(8), _genHex(4), _genHex(4), _genHex(4), _genHex(12))
 end
@@ -279,7 +279,7 @@ local function InstallDeviceSpoofer()
 
     local UIS = game:GetService("UserInputService")
     local GuiSvc = game:GetService("GuiService")
-    
+
     local _isTouchDevice = false
     pcall(function()
         _isTouchDevice = (UIS.TouchEnabled == true) and (UIS.KeyboardEnabled ~= true)
@@ -548,7 +548,6 @@ function _EMT.bind(name, btn)
     _EMT.btnConns[btn] = conns
 end
 
-
 if _ECLIPSE_HUBIsMobile then
     _EMT.enabled = true
     pcall(_EMT.scan)
@@ -573,8 +572,6 @@ if _ECLIPSE_HUBIsMobile then
             _EMT.recompute()
         end)
     end)
-
-
 
     task.spawn(function()
         while true do
@@ -652,7 +649,7 @@ function _ECLIPSE_HUBMobileAimAt(worldPos, alpha)
     local cam = workspace.CurrentCamera; if not cam then return end
     alpha = tonumber(alpha) or 1
     if alpha <= 0 then return end
-    
+
     local now = tick()
     local last = _G.__ECLIPSE_HUBMobileAimTick or (now - 1/60)
     _G.__ECLIPSE_HUBMobileAimTick = now
@@ -662,13 +659,13 @@ function _ECLIPSE_HUBMobileAimAt(worldPos, alpha)
     local pos = cam.CFrame.Position
     local dir = worldPos - pos
     if dir.Magnitude < 1e-3 then return end
-    
+
     local target = CFrame.lookAt(pos, worldPos, Vector3.new(0, 1, 0))
-    
+
     local curRot = cam.CFrame - pos
     local tgtRot = target - pos
     local newRot = curRot:Lerp(tgtRot, alpha)
-    
+
     if newRot.UpVector.Y < 0.05 then newRot = tgtRot end
     cam.CFrame = CFrame.new(pos) * (newRot - newRot.Position)
 end
@@ -681,9 +678,9 @@ function _ECLIPSE_HUBMobileFire()
         if not ch then return end
         local tool = ch:FindFirstChildOfClass("Tool")
         if not tool then return end
-        
+
         pcall(function() tool:Activate() end)
-        
+
         for _, n in ipairs({"Shoot","Fire","shoot","fire","ShootWeapon","FireWeapon"}) do
             local r = tool:FindFirstChild(n)
             if r and r:IsA("RemoteEvent") then pcall(function() r:FireServer() end); break
@@ -723,10 +720,8 @@ local function _ECLIPSE_HUB_GetIC()
     return _ECLIPSE_HUB_IC_Cached
 end
 
-
 function _ECLIPSE_HUB_GetEquipped()
-    -- never auto-allow: the InventoryController is only touched after a feature
-    -- that actually needs it is enabled (calling AllowIC explicitly)
+
     local IC = _ECLIPSE_HUB_GetIC(); if not IC then return nil end
 
     local w
@@ -770,7 +765,6 @@ local function _wField(w, key)
 end
 _ECLIPSE_HUB_WField = _wField
 
--- true only for real guns (a knife has no Rounds field)
 function _ECLIPSE_HUB_EquippedGunReady()
     local w = _ECLIPSE_HUB_GetEquipped()
     if not w then return nil end
@@ -801,7 +795,6 @@ task.spawn(function()
     end
 end)
 
-
 function _ECLIPSE_HUB_ShootCached()
     _ECLIPSE_HUB_AllowIC()
     local weapon = _ECLIPSE_HUB_CachedWeapon
@@ -819,7 +812,7 @@ function _ECLIPSE_HUB_ShootCached()
     return (pcall(shoot, weapon))
 end
 task.spawn(function()
-    
+
     task.wait(12)
     local RS       = game:GetService("RunService")
     local Stats    = game:FindService("Stats")
@@ -828,13 +821,13 @@ task.spawn(function()
     local samples = {}
     local conn
     local function currentFps()
-        
+
         if #samples > 5 then
             local sum = 0
             for _, v in ipairs(samples) do sum = sum + v end
             return sum / #samples
         end
-        
+
         local ok, v = pcall(function() return Workspace:GetRealPhysicsFPS() end)
         if ok and type(v) == "number" and v > 0 then return v end
         return 60
@@ -969,7 +962,7 @@ do
                 end
             end
         end
-        
+
         pcall(function() if isfile("ECLIPSE_HUBHub/session.flag") then delfile("ECLIPSE_HUBHub/session.flag") end end)
     end
 end
@@ -1005,7 +998,7 @@ do
     local Gradient = Color3.fromRGB(70, 40, 160)
     pcall(function() NLLib:ChangeTheme("Accent", Accent) end)
     pcall(function() NLLib:ChangeTheme("AccentGradient", Gradient) end)
-    
+
     pcall(function() NLLib.MenuKeybind = "__ECLIPSE_HUB_MENU_DISABLED__" end)
 end
 
@@ -1025,14 +1018,14 @@ setmetatable(Library, { __index = function(_, k)
 end })
 
 local _NLWindow
-local _resolveECLIPSE_HUBogoAsset  
+local _resolveECLIPSE_HUBogoAsset
 
 local function _stripRich(s)
     s = tostring(s or "")
-    
+
     s = s:gsub("<[bB][rR]%s*/?>", "\n")
     s = s:gsub("<[^>]->", "")
-    
+
     s = s:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&amp;", "&"):gsub("&quot;", '"')
     return s
 end
@@ -1058,7 +1051,7 @@ function Library:Notify(data)
             Icon        = data.Icon or customIcon or "120959262762131",
         })
     end)
-    
+
     task.delay(duration + 1.75, function()
         pcall(function()
             if not holder or not holder.Parent then return end
@@ -1132,7 +1125,7 @@ function Library:_BuildWatermark()
         logo.Size = UDim2.new(0, 18, 0, 18)
         logo.LayoutOrder = 1
         logo.ScaleType = Enum.ScaleType.Fit
-        
+
         local LOGO_URL = "https://raw.githubusercontent.com/eclipsehub-rbx/assets/main/logo.png"
         pcall(function()
             if type(getcustomasset) == "function" and type(isfile) == "function" and type(writefile) == "function" then
@@ -1269,7 +1262,7 @@ local function _setControlDisabled(nlObj, disabled)
             end
         end)
     end)
-    
+
 end
 
 local _ECLIPSE_HUBInlineCounts = setmetatable({}, { __mode = "k" })
@@ -1320,7 +1313,7 @@ local function _makeInlineSlot(nlToggle, kind, color)
             ColorSequenceKeypoint.new(0, Color3.fromRGB(255,255,255)),
             ColorSequenceKeypoint.new(1, Color3.fromRGB(150,150,150)),
         }
-        
+
         local inner = Instance.new("Frame", slot)
         inner.Name = "Gloss"
         inner.BackgroundColor3 = Color3.fromRGB(255,255,255)
@@ -1360,7 +1353,7 @@ do
                 local nm = tostring(d.Name or ""):lower()
                 if nm:find("color") or nm:find("picker") or nm:find("holder") then
                     _bumpZ(d)
-                    
+
                     local sg = d:FindFirstAncestorOfClass("ScreenGui")
                     if sg then _bumpZ(sg) end
                 end
@@ -1371,7 +1364,7 @@ do
         local CoreGui = game:GetService("CoreGui")
         local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         _hookRoot(CoreGui); _hookRoot(pg)
-        
+
         for _, root in ipairs({CoreGui, pg}) do
             if root then
                 for _, d in ipairs(root:GetDescendants()) do
@@ -1481,7 +1474,7 @@ local function wrapToggle(id, nlToggle, cbHolder)
     else
         warn("[wrapToggle] cbHolder is not a table when registering callback for id", id, "got", typeof(cbHolder), type(cbHolder))
     end
-    
+
     local function resolveKey(k)
         if typeof(k) == "EnumItem" then return k end
         if type(k) ~= "string" or k == "" then return Enum.KeyCode.Unknown end
@@ -1499,11 +1492,11 @@ local function wrapToggle(id, nlToggle, cbHolder)
         if ok and v then return v end
         return Enum.KeyCode.Unknown
     end
-    
+
     function self:AddColorPicker(cid, data)
         data = data or {}
         local cp, slot
-        
+
         local w
         pcall(function()
             slot = _makeInlineSlot(nlToggle, "Color", data.Default or Color3.new(1,1,1))
@@ -1524,7 +1517,7 @@ local function wrapToggle(id, nlToggle, cbHolder)
                 })
                 task.defer(function()
                     pcall(function()
-                        
+
                         for _, d in ipairs(slot:GetDescendants()) do
                             if d:IsA("TextButton") then
                                 d.Size = UDim2.fromScale(1, 1)
@@ -1538,7 +1531,7 @@ local function wrapToggle(id, nlToggle, cbHolder)
                             elseif d:IsA("ImageLabel") or d:IsA("ImageButton") then
                                 d.Visible = false
                             elseif d:IsA("Frame") then
-                                
+
                                 d.BackgroundTransparency = 1
                                 for _, gc in ipairs(d:GetChildren()) do
                                     if gc:IsA("UICorner") or gc:IsA("UIStroke") or gc:IsA("UIGradient") then
@@ -1603,12 +1596,12 @@ local function wrapToggle(id, nlToggle, cbHolder)
                 end
             end,
         }
-        
+
         pcall(function() if slot and w.Value then slot.BackgroundColor3 = w.Value end end)
         registerEntry(Library.Options, cid, w)
         return self
     end
-    
+
     function self:AddKeyPicker(kid, data)
         data = data or {}
         local defaultKey = resolveKey(data.Default)
@@ -1635,7 +1628,7 @@ local function wrapToggle(id, nlToggle, cbHolder)
             if not w then return end
             w.Toggled = v and true or false
             if data.SyncToggleState then
-                
+
                 if self and type(self.SetValue) == "function" then
                     pcall(function() self:SetValue(w.Toggled) end)
                 end
@@ -1717,7 +1710,7 @@ local function makeGroupbox(nlSection)
                 end
             end)
         end
-        
+
         function handle:AddColorPicker(cid, data)
             data = data or {}
             local w
@@ -1763,7 +1756,7 @@ local function makeGroupbox(nlSection)
                     end
                 end,
             }
-            
+
             pcall(function()
                 if cp and cp.Value and typeof(cp.Value) == "Color3" then
                     w.Value = cp.Value
@@ -1840,7 +1833,7 @@ local function makeGroupbox(nlSection)
         data = data or {}
         local nlS
         local w = { Value = tonumber(data.Default) or 0 }
-        
+
         local rounding = data.Rounding
         if rounding == nil then rounding = data.Decimals end
         rounding = tonumber(rounding) or 0
@@ -1936,7 +1929,7 @@ local function makeGroupbox(nlSection)
             SetVisible = function(_, b) pcall(function() if tb and tb.SetVisibility then tb:SetVisibility(b and true or false) end end) end,
             SetDisabled = function() end,
             OnChanged = function(_, cb)
-                
+
                 if type(cb) == "function" then data.Callback = cb end
             end,
         }
@@ -1974,14 +1967,14 @@ local function wrapPage(page)
 end
 
 local ICON_MAP = {
-    
+
     ["home"]               = "10723407389",
     ["target"]             = "10734977012",
     ["crosshair"]          = "10709818534",
     ["eye"]                = "10723346959",
     ["palette"]            = "10734910430",
     ["swords"]             = "10734975692",
-    ["footprints"]         = "10723395708", 
+    ["footprints"]         = "10723395708",
     ["move"]               = "10734900011",
     ["gauge"]              = "10723395708",
     ["map"]                = "10734886202",
@@ -1992,7 +1985,7 @@ local ICON_MAP = {
     ["sliders-horizontal"] = "10734963191",
     ["activity"]           = "10709752035",
     ["rocket"]             = "10734934585",
-    
+
     ["shield"]             = "10734975692",
     ["volume-2"]           = "10709752035",
     ["volume"]             = "10709752035",
@@ -2002,7 +1995,7 @@ local ICON_MAP = {
     ["zap"]                = "10723395708",
     ["bell"]               = "10709802634",
     ["shuffle"]            = "10734934585",
-    
+
     ["house"] = "10723407389", ["power"] = "10734950309",
     ["link"]  = "120959262762131", ["user"] = "120959262762131",
 }
@@ -2049,7 +2042,7 @@ local SECTION_ICON_MAP = {
 function _sectionIcon(explicit, name)
     if explicit and explicit ~= "" then
         local k = tostring(explicit):lower()
-        
+
         if SECTION_ICON_MAP[k] then return SECTION_ICON_MAP[k] end
         return resolveIcon(explicit)
     end
@@ -2113,7 +2106,7 @@ function Library:CreateWindow(cfg)
         Library.ScreenGui = NLLib and NLLib.Holder and NLLib.Holder.Instance
         Library.Main = _NLWindow and _NLWindow.Items and _NLWindow.Items.MainFrame and _NLWindow.Items.MainFrame.Instance
     end)
-    
+
     pcall(function()
         local sg = Library.ScreenGui
         if not sg then return end
@@ -2123,12 +2116,12 @@ function Library:CreateWindow(cfg)
         end
         target = target or game:GetService("CoreGui")
         if target and sg.Parent ~= target then sg.Parent = target end
-        
+
         sg:GetPropertyChangedSignal("Parent"):Connect(function()
             if sg.Parent ~= target then pcall(function() sg.Parent = target end) end
         end)
     end)
-    
+
     pcall(function() NLLib:KeybindList("Keybinds") end)
     task.spawn(function()
         for _ = 1, 8 do
@@ -2146,7 +2139,7 @@ function Library:CreateWindow(cfg)
     end)
     pcall(_applyECLIPSE_HUBogo)
     pcall(_repairNeverloseInput)
-    
+
     local W = {}
     function W:AddTab(name, icon)
         local page = _NLWindow:Page({ Name = name or "TAB", Icon = resolveIcon(icon) })
@@ -2160,7 +2153,7 @@ end
 function Library:FinalizeUI()
     if self._inited then return end
     self._inited = true
-    
+
     pcall(function() if _NLWindow and _NLWindow.Init then _NLWindow:Init() end end)
     pcall(_repairNeverloseInput)
     pcall(_applyECLIPSE_HUBogo)
@@ -2193,7 +2186,7 @@ function _ECLIPSE_HUBCloseFloatingUi()
             if type(obj) == "table" and type(obj.SetOpen) == "function" then
                 pcall(function() obj:SetOpen(false) end)
             else
-                
+
                 pcall(function()
                     local inst = nil
                     if typeof(obj) == "Instance" then
@@ -2385,7 +2378,7 @@ _ECLIPSE_HUBMobileFab = nil
 function _ECLIPSE_HUBUpdateMobileFab(guiOpen) end
 if _ECLIPSE_HUBIsMobile then
     task.spawn(function()
-        
+
         while not (Library and (Library.ScreenGui or (NLLib and NLLib.Holder and NLLib.Holder.Instance))) do
             task.wait(0.1)
         end
@@ -2409,7 +2402,7 @@ if _ECLIPSE_HUBIsMobile then
         btn.BackgroundTransparency = 0.1
         btn.BorderSizePixel = 0
         btn.AutoButtonColor = false
-        btn.Image = "rbxassetid://14004312109" 
+        btn.Image = "rbxassetid://14004312109"
         btn.ImageColor3 = Color3.fromRGB(255, 255, 255)
         btn.ScaleType = Enum.ScaleType.Fit
         btn.Active = true
@@ -2456,7 +2449,7 @@ if _ECLIPSE_HUBIsMobile then
                 _ECLIPSE_HUBMobileFab.Visible = not guiOpen
             end
         end
-        
+
         pcall(function() _ECLIPSE_HUBUpdateMobileFab(Library._guiOpen == true) end)
     end)
 end
@@ -2473,7 +2466,7 @@ end
 
 local function _ECLIPSE_HUBMouseApplyUnlock()
     pcall(function() UserInput.MouseBehavior = Enum.MouseBehavior.Default end)
-    
+
     pcall(function() UserInput.MouseIconEnabled = false end)
     pcall(function()
         if LocalPlayer and LocalPlayer.DevEnableMouseLock ~= false then
@@ -2483,7 +2476,7 @@ local function _ECLIPSE_HUBMouseApplyUnlock()
 end
 
 local function _ECLIPSE_HUBEnsureModalButton()
-    
+
     if _ECLIPSE_HUBIsMobile then return end
     if _ECLIPSE_HUBMouseUnlock.modal and _ECLIPSE_HUBMouseUnlock.modal.Parent then return end
     pcall(function()
@@ -2497,7 +2490,7 @@ local function _ECLIPSE_HUBEnsureModalButton()
         btn.Size           = UDim2.fromScale(1, 1)
         btn.Position       = UDim2.fromScale(0, 0)
         btn.ZIndex         = 0
-        btn.Modal          = true   
+        btn.Modal          = true
         btn.Active         = true
         btn.Selectable     = false
         btn.Parent         = host
@@ -2510,7 +2503,7 @@ local function _ECLIPSE_HUBKillModalButton()
         pcall(function() _ECLIPSE_HUBMouseUnlock.modal:Destroy() end)
         _ECLIPSE_HUBMouseUnlock.modal = nil
     end
-    
+
     pcall(function()
         local hosts = {}
         if Library and Library.ScreenGui then hosts[#hosts+1] = Library.ScreenGui end
@@ -2523,7 +2516,7 @@ local function _ECLIPSE_HUBKillModalButton()
 end
 
 local function _ECLIPSE_HUBSinkMouseLockActions()
-    
+
     for _, act in ipairs({ "MouseLockSwitch", "RbxCameraMouseLock", "PlayerCameraMouseLock" }) do
         pcall(function() ContextActionService:UnbindAction(act) end)
     end
@@ -2607,7 +2600,7 @@ local function _ECLIPSE_HUBCursorUpdate()
 end
 
 function _ECLIPSE_HUBMouseUnlockRefresh()
-    
+
     if _ECLIPSE_HUBIsMobile then
         _ECLIPSE_HUBKillModalButton()
         _ECLIPSE_HUBCursorKill()
@@ -2655,7 +2648,7 @@ _G.__ECLIPSE_HUBMouseUnlockUnbind = function()
     pcall(function() RunService:UnbindFromRenderStep(_ECLIPSE_HUBRenderBind) end)
     _ECLIPSE_HUBKillModalButton()
     _ECLIPSE_HUBCursorKill()
-    
+
     if _ECLIPSE_HUBMouseUnlock.active then
         local s = _ECLIPSE_HUBMouseUnlock.saved or {}
         pcall(function() if s.Behavior then UserInput.MouseBehavior = s.Behavior end end)
@@ -2682,7 +2675,7 @@ function safeUpdate(name, fn)
     local ok, err = pcall(fn)
     if ok then return end
     local es = tostring(err or "")
-    
+
     if es:find("lacking capability", 1, true) or es:find("capability Plugin", 1, true) then return end
     local now = tick()
     if (RuntimeWarnAt[name] or 0) + 2 < now then
@@ -2764,12 +2757,12 @@ end
 
 local sessionStart = os.time()
 local KIND_META = {
-    connected     = { label = "Connection Established", color = 5763338  }, 
-    left          = { label = "Player Left the Game",   color = 15105570 }, 
-    kicked        = { label = "Player Was Kicked",      color = 15548997 }, 
-    banned        = { label = "Player BANNED (BAC)",    color = 10038562 }, 
-    disconnected  = { label = "Client Disconnected",    color = 8421504  }, 
-    unloaded      = { label = "Script Unloaded",        color = 5505847  }, 
+    connected     = { label = "Connection Established", color = 5763338  },
+    left          = { label = "Player Left the Game",   color = 15105570 },
+    kicked        = { label = "Player Was Kicked",      color = 15548997 },
+    banned        = { label = "Player BANNED (BAC)",    color = 10038562 },
+    disconnected  = { label = "Client Disconnected",    color = 8421504  },
+    unloaded      = { label = "Script Unloaded",        color = 5505847  },
     error         = { label = "Script Error (Auto-Kick)", color = 15158332 },
 }
 
@@ -2825,13 +2818,13 @@ local function _isECLIPSE_HUBError(message, stack, scriptObj)
     pcall(function() srcName = scriptObj and scriptObj:GetFullName() or "" end)
     local blob = tostring(message or "") .. "\n" .. tostring(stack or "") .. "\n" .. srcName
     local low = string.lower(blob)
-    
+
     if string.find(low, "loadingscreen", 1, true) then return false end
     if string.find(low, "replicatedfirst", 1, true) then return false end
     if string.find(low, "playerscripts", 1, true) then return false end
     if string.find(low, "corescript", 1, true) then return false end
     if string.find(low, "bac ", 1, true) or string.find(low, "|frog", 1, true) then return false end
-    
+
     if string.find(low, "EclipseHub", 1, true) then return true end
     if string.find(low, "obsidian", 1, true) then return true end
     if string.find(low, "linoria",  1, true) then return true end
@@ -3126,7 +3119,7 @@ pcall(function()
             sendWebhook("banned", msg)
             getgenv().EclipseHub.heartbeatEnabled = false
         elseif string.find(msg, "DisconnectClientInitiated") then
-            
+
             getgenv().EclipseHub.heartbeatEnabled = false
         else
             sendWebhook("kicked", msg)
@@ -3203,7 +3196,7 @@ local Config = {
     ESP      = {
         Enabled=true, MaxDistance=600,
         CornerBox=true, CornerBoxStyle="Corner", Name=true, Distance=true, HealthBar=true, TargetLine=true, Position="Top",
-        
+
         SlotPos = { Name=1, Distance=1, Weapon=1, Health=1 },
         WeaponName=false, WeaponNameColor=Color3.fromRGB(200, 200, 220),
         BoxColor       = Color3.fromRGB(230, 45, 55),
@@ -3223,13 +3216,13 @@ local Config = {
         ChinaHat       = false, ChinaHatColor = Color3.fromRGB(220,220,220),
         ChinaHatSize   = 1.0, ChinaHatHeight = 1.15, ChinaHatSegments = 12, ChinaHatThickness = 1.2,
         Arrows         = false, ArrowsColor  = Color3.fromRGB(180,100,255),
-        
+
         Chams          = false,
         ChamsColor     = Color3.fromRGB(255, 60, 60),
         ChamsGlowColor = Color3.fromRGB(255, 180, 180),
         ChamsGlow      = 0.35,
         ChamsIntensity = 1.0,
-        
+
         VisibleCheck        = false,
         VisibleBoxColor     = Color3.fromRGB(80, 255, 120),
         InvisibleBoxColor   = Color3.fromRGB(255, 60, 60),
@@ -3238,7 +3231,7 @@ local Config = {
 
          Ammo           = false, AmmoColor = Color3.fromRGB(255,255,255),
          IdentifyMoney  = false, MoneyColor = Color3.fromRGB(60, 220, 90),
-        
+
     },
     Crosshair = { SniperEnabled=false, Color=Color3.fromRGB(255,255,255), Size=10, Gap=4, Thickness=1, Dot=true, HideOnScope=true, PenetrationEnabled=false, PenetrationOkColor=Color3.fromRGB(0,255,0), PenetrationNoColor=Color3.fromRGB(255,60,60), Wallbang=false },
     RCS       = { Enabled=false, Vertical=50, Horizontal=30, PerWeapon={}, PerCategory={}, Mode="Global", SelectedWeapon="AK-47", SelectedCategory="Rifles" },
@@ -3249,7 +3242,7 @@ local Config = {
     Grenade  = { Prediction=false, LineColor=Color3.fromRGB(0,200,255), DotColor=Color3.fromRGB(255,60,60), Warning=false, WarningColor=Color3.fromRGB(255,120,60) },
     KeybindList = { Enabled=false },
     Sounds      = { Enabled=false, Overrides={}, PresetOverrides={} },
-    
+
     Stretch   = { Enabled=false, Ratio=1.30 },
     Logging   = { Enabled=false },
 
@@ -3261,7 +3254,7 @@ local Config = {
         PlayerMaterialColor=Color3.fromRGB(120, 200, 255), PlayerMaterialWeapons=false,
         KillNameAnim=false, KillNameText="EclipseHub", KillNameAnimStyle="Rainbow",
         KillIndicator=false, KillIndicatorColor=Color3.fromRGB(255,255,255),
-        
+
         BulletTracer      = false,
         BulletTracerColor = Color3.fromRGB(170, 90, 255),
         BulletTracerDuration = 4.0,
@@ -3464,7 +3457,7 @@ function _ecfgSanitizeEncodedPayload(encodedConfig, encodedControls)
         encodedConfig.Skins.HUDIconOverrideConfirmed = false
         encodedConfig.Skins.HUDIconConfirmedKey = nil
     end
-    
+
 end
 
 function _ecfgFileApi()
@@ -3551,7 +3544,6 @@ function _ecfgDecode(v)
     return out
 end
 
-
 function _ecfgMerge(dst, src)
     if type(dst) ~= "table" or type(src) ~= "table" then return end
     for k, v in pairs(src) do
@@ -3581,7 +3573,7 @@ function _ecfgLoadIntoConfig()
     local data = _ecfgReadRaw()
     if type(data) ~= "table" then return end
     _ECLIPSE_HUBAutoConfig.loaded = data
-    
+
     local cfg = _ecfgDecode(data.Config)
     if type(cfg) == "table" and type(cfg.UI) == "table" then
         Config.UI = Config.UI or {}
@@ -3734,7 +3726,7 @@ function _ecfgApplyLoadedControls()
     for _, ent in ipairs(entries) do
         local id, val = ent.id, ent.val
         _ecfgApplied = _ecfgApplied + 1
-        
+
         if (_ecfgApplied % 8) == 0 then ECLIPSE_HUBYield() end
         pcall(function()
             local tog = Library.Toggles and Library.Toggles[id]
@@ -3857,7 +3849,6 @@ function _ecfgApplyLoadedControls()
 
 end
 
-
 function _ecfgColorSnapshot()
     local out = {}
     pcall(function()
@@ -3944,7 +3935,7 @@ function _ecfgSnapshotJson()
     }
     local ok, json = pcall(function() return HttpService:JSONEncode(payload) end)
     if not ok or type(json) ~= "string" then
-        
+
         local ok2, json2 = pcall(function()
             return HttpService:JSONEncode({
                 Version = EclipseHub.Version,
@@ -3966,23 +3957,22 @@ function _ecfgSnapshotJson()
         if ok3 and type(json3) == "string" then return json3 end
         return nil
     end
-    
+
     if #json > 4 * 1024 * 1024 then return nil end
     return json
 end
 
-
 function _ecfgWriteNow(force)
-    
+
     return false
-    
+
 end
 
 function _ecfgStartAutosave()
-    
+
     _ECLIPSE_HUBAutoConfig.started = true
     return false
-    
+
 end
 
 local AIM_WEAPON_LIST = {
@@ -4292,7 +4282,7 @@ end
 
 function isScopedIn()
     local base = OriginalCameraFOV or 70
-    
+
     local extra = tonumber(Config and Config.Misc and Config.Misc.CustomFOV) or 0
     local effectiveBase = base + extra
     local cur  = Camera.FieldOfView or effectiveBase
@@ -4300,7 +4290,7 @@ function isScopedIn()
 end
 
 function updateSniperCrosshair()
-    
+
     for _, o in pairs(CH) do o.Visible = false end
 end
 
@@ -4423,7 +4413,7 @@ function updatePenetrationCrosshair()
                               or (Config.Crosshair.PenetrationNoColor or Color3.fromRGB(255,60,60))
     local pos = res.Position + (res.Normal or Vector3.new(0,1,0)) * 0.05
     local dist = (pos - origin).Magnitude
-    
+
     local scale = math.clamp(0.55 + dist * 0.006, 0.7, 3.2)
     st.part.Color = col
     st.part.Transparency = 0.35
@@ -4503,7 +4493,6 @@ function gpdClear()
     table.clear(GPD.ActiveDots)
     if GPD.Dot then pcall(function() GPD.Dot.Visible = false end) end
 end
-
 
 function gpdIdentifyGrenade()
     local cam = Workspace.CurrentCamera; if not cam then return nil end
@@ -4715,7 +4704,7 @@ function _renderGrenade3D()
     if not (Config and Config.GlobalEnable and Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning)) then
         _g3dHide(); return
     end
-    
+
     local hasPred = Config.Grenade.Prediction and GPD and GPD.ShowNow and GPD.CachedPts and #GPD.CachedPts >= 2
     local warnPts = (Config.Grenade.Warning and EclipseHub and EclipseHub._warn3DPts) or nil
     local hasWarn = warnPts and #warnPts >= 2
@@ -4771,7 +4760,7 @@ do
     connectSignal(game:GetService("RunService").Heartbeat:Connect(function(dt)
         if not scriptRunning then return end
         _gAcc = _gAcc + dt
-        if _gAcc < 0.05 then return end 
+        if _gAcc < 0.05 then return end
         _gAcc = 0
         if not (Config.Grenade and (Config.Grenade.Prediction or Config.Grenade.Warning)) then return end
         pcall(_renderGrenade3D)
@@ -4843,18 +4832,18 @@ function _rcsReset()
 end
 
 local function _rcsIsFiring(held)
-    
+
     local okM, down = pcall(function()
         return UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
     end)
     if okM and down then return true end
-    
+
     if _ECLIPSE_HUBIsMobile then
         if _EMT and (_EMT.fireDown == true) then return true end
         if held then return true end
         return false
     end
-    
+
     if RCSState.lastAmmoDropT and (tick() - RCSState.lastAmmoDropT) < 0.12 then
         return true
     end
@@ -4918,7 +4907,7 @@ function updateRCS()
     if newBullet and prof then
         local scale  = _rcsBaselineScale(prof)
         local vSlider, hSlider = ActiveRCS()
-        
+
         local kV = (vSlider / 100) * scale
         local kH = (hSlider / 100) * scale
         RCSState.pendPitch = RCSState.pendPitch + (prof.RecoilY * kV)
@@ -4929,7 +4918,7 @@ function updateRCS()
     local last = RCSState.lastTick > 0 and RCSState.lastTick or (now - 1/60)
     local dt = math.max(1/240, math.min(1/30, now - last))
     RCSState.lastTick = now
-    
+
     local drain = math.clamp(dt / 0.03, 0, 1)
     local aP = RCSState.pendPitch * drain
     local aY = RCSState.pendYaw   * drain
@@ -4985,7 +4974,7 @@ end
 function IsAlly(plr)
     if _IS_DEATHMATCH then return false end
     if not plr or plr == LocalPlayer then return false end
-    
+
     local Characters = Workspace:FindFirstChild("Characters")
     if not Characters then return false end
     local tFolder  = Characters:FindFirstChild("Terrorists")
@@ -5087,9 +5076,9 @@ function SafeAddDropdown(group, id, data)
 end
 
 local HealthGrad = {
-    {threshold=0.00, color=Color3.fromRGB(200, 30, 40)},   
-    {threshold=0.50, color=Color3.fromRGB(235,170, 30)},   
-    {threshold=1.00, color=Color3.fromRGB( 60,200, 70)},   
+    {threshold=0.00, color=Color3.fromRGB(200, 30, 40)},
+    {threshold=0.50, color=Color3.fromRGB(235,170, 30)},
+    {threshold=1.00, color=Color3.fromRGB( 60,200, 70)},
 }
 function GetHealthColor(pct)
     if Config and Config.ESP and typeof(Config.ESP.HealthColor) == "Color3" then
@@ -5113,7 +5102,7 @@ local SkeletonBones = {
     {"UpperTorso","RightUpperArm"},{"RightUpperArm","RightLowerArm"},{"RightLowerArm","RightHand"},
     {"LowerTorso","LeftUpperLeg"},{"LeftUpperLeg","LeftLowerLeg"},{"LeftLowerLeg","LeftFoot"},
     {"LowerTorso","RightUpperLeg"},{"RightUpperLeg","RightLowerLeg"},{"RightLowerLeg","RightFoot"},
-    
+
     {"Head","Torso"},{"Torso","Left Arm"},{"Torso","Right Arm"},{"Torso","Left Leg"},{"Torso","Right Leg"},
 }
 
@@ -5142,7 +5131,7 @@ local _DRAW_OK = false
 local _DRAW_AVAILABLE = (type(Drawing) == "table" or type(Drawing) == "userdata")
     and (type(rawget(_G, "Drawing")) ~= "nil")
     and pcall(function() return Drawing.new end)
-local _ = _DRAW_AVAILABLE 
+local _ = _DRAW_AVAILABLE
 
 local function _espMakeDraw(kind)
     if not _DRAW_OK then return nil end
@@ -5153,7 +5142,7 @@ end
 
 function _espEnsureDrawBox(data)
     if data.DrawBox then return data.DrawBox end
-    
+
     local sq = _espMakeDraw("Square")
     if not sq then return nil end
     pcall(function()
@@ -5177,7 +5166,7 @@ function _espEnsureDrawBox(data)
         end)
         data.DrawBoxBorder = br
     end
-    
+
     data.DrawBoxGrad = {}
     for i = 1, 22 do
         local ln = _espMakeDraw("Line")
@@ -5206,7 +5195,7 @@ function _espEnsureDrawName(data)
         t.OutlineColor = Color3.fromRGB(0, 0, 0)
         t.Color        = Color3.fromRGB(240, 240, 250)
         t.Visible      = false
-        t.Font         = 3  
+        t.Font         = 3
         t.Transparency = 1
         t.ZIndex       = 24
     end)
@@ -5218,7 +5207,7 @@ function _espSyncDrawBoxGeom(data, L, T, w, h, col)
     if not _DRAW_OK then return end
     local sq = _espEnsureDrawBox(data); if not sq then return end
     pcall(function()
-        
+
         sq.Position = Vector2.new(math.floor(L), math.floor(T))
         sq.Size     = Vector2.new(math.floor(w), math.floor(h))
         sq.Color    = col
@@ -5236,7 +5225,7 @@ function _espSyncDrawBoxGeom(data, L, T, w, h, col)
             br.Visible   = true
         end)
     end
-    
+
     local pool = data.DrawBoxGrad
     if pool then
         local N       = #pool
@@ -5253,7 +5242,7 @@ function _espSyncDrawBoxGeom(data, L, T, w, h, col)
                 pcall(function()
                     ln.From      = Vector2.new(xMid, math.floor(yMid))
                     ln.To        = Vector2.new(xMid, math.floor(yMid))
-                    
+
                     ln.From      = Vector2.new(math.floor(L),         math.floor(yMid))
                     ln.To        = Vector2.new(math.floor(L + w - 1), math.floor(yMid))
                     ln.Thickness = thickness
@@ -5265,7 +5254,7 @@ function _espSyncDrawBoxGeom(data, L, T, w, h, col)
             end
         end
     end
-    
+
     if data.GuiBox then
         pcall(function()
             data.GuiBox.BackgroundTransparency = 1
@@ -5284,7 +5273,7 @@ function _espSyncDrawNameGeom(data, cx, topY, text, col)
         t.Color    = col or Color3.fromRGB(240, 240, 250)
         t.Visible  = (text ~= nil and text ~= "")
     end)
-    
+
     if data.GuiTagName then
         pcall(function()
             data.GuiTagName.TextTransparency       = 1
@@ -5380,7 +5369,7 @@ function _espSyncDrawArrow(data, tipX, tipY, ang, col)
     local ar = ensureESPArrow and ensureESPArrow(data) or data.Arrow
     if not ar then return false end
     local sz = 10
-    
+
     local bx = tipX + math.cos(ang + math.pi - 0.35) * sz
     local by = tipY + math.sin(ang + math.pi - 0.35) * sz
     local cX = tipX + math.cos(ang + math.pi + 0.35) * sz
@@ -5413,7 +5402,7 @@ function _espDestroyDraw(data)
 end
 
 function _espEnsureBoxGui(data)
-    if _DRAW_OK then return nil end 
+    if _DRAW_OK then return nil end
     if data.GuiBox and data.GuiBox.Parent then return data.GuiBox end
     local parent = _espGetOverlay(); if not parent then return nil end
     local f = Instance.new("Frame")
@@ -5466,10 +5455,10 @@ end
 function _espEnsureTagGui(data)
     if data.GuiTag and data.GuiTag.Parent then return data.GuiTag end
     local parent = _espGetOverlay(); if not parent then return nil end
-    
+
     local f = Instance.new("Frame")
     f.Name = "ESPTag"
-    f.AnchorPoint = Vector2.new(0.5, 1)   
+    f.AnchorPoint = Vector2.new(0.5, 1)
     f.BorderSizePixel = 0
     f.BackgroundTransparency = 1
     f.Visible = false
@@ -5526,7 +5515,7 @@ function _espEnsureTagGui(data)
     fb.Parent = parent
     data.GuiTag       = f
     data.GuiTagBot    = fb
-    data.GuiTagLbl    = nameLbl        
+    data.GuiTagLbl    = nameLbl
     data.GuiTagName   = nameLbl
     data.GuiTagIcon   = iconImg
     data.GuiTagDist   = distLbl
@@ -5567,7 +5556,7 @@ function _espEnsureMoneyGui(data)
     local parent = _espGetOverlay(); if not parent then return nil end
     local t = Instance.new("TextLabel")
     t.Name = "ESPMoney"
-    
+
     t.AnchorPoint = Vector2.new(0, 0.5)
     t.BackgroundTransparency = 1
     t.TextXAlignment = Enum.TextXAlignment.Left
@@ -5641,7 +5630,7 @@ function _espAnimScale()
 
     local dt = tick() - _ESP_ANIM.t0
     local p  = math.clamp(dt / math.max(0.01, _ESP_ANIM.dur), 0, 1)
-    
+
     local eased
     if _ESP_ANIM.on then
         local c1, c3 = 1.70158, 2.70158
@@ -5689,13 +5678,13 @@ function _espApplyAlpha(data, alpha)
             end
         end
     end
-    
+
     if data.GuiBox then
         pcall(function()
             if alpha <= 0.02 then
                 data.GuiBox.Visible = false
             elseif data.GuiBox.Visible then
-                
+
                 if _DRAW_OK and data.DrawBox then
                     data.GuiBox.BackgroundTransparency = 1
                     if data.GuiBoxStroke then data.GuiBoxStroke.Transparency = 1 end
@@ -5717,7 +5706,7 @@ function _espApplyAlpha(data, alpha)
             end
         end)
     end
-    
+
     if data.DrawBox then
         pcall(function()
             if alpha <= 0.02 then
@@ -5727,23 +5716,23 @@ function _espApplyAlpha(data, alpha)
                     for _, ln in ipairs(data.DrawBoxGrad) do ln.Visible = false end
                 end
             else
-                
+
                 data.DrawBox.Visible = false
                 if data.DrawBoxBorder and data.DrawBoxBorder.Visible then
                     data.DrawBoxBorder.Transparency = math.clamp(0.90 * alpha, 0, 1)
                 end
                 if data.DrawBoxGrad then
                     local pool = data.DrawBoxGrad
-                    
+
                     local vis = 0
                     for i = 1, #pool do if pool[i] and pool[i].Visible then vis = i else break end end
                     if vis > 0 then
                         for i = 1, vis do
                             local ln = pool[i]
                             if ln then
-                                
+
                                 local f = (i - 0.5) / vis
-                                
+
                                 local opa = (1 - f) * 0.55
                                 ln.Transparency = math.clamp(opa * alpha, 0, 1)
                             end
@@ -5822,7 +5811,7 @@ function _espApplyAlpha(data, alpha)
             end
         end)
     end
-    
+
     for _, key in ipairs({"GuiSkeleton", "GuiChinaHat"}) do
         local pool = data[key]
         if pool then
@@ -5850,13 +5839,13 @@ function _espApplyAlpha(data, alpha)
 end
 
 function _espFadeTick()
-    
+
     local now = tick()
     local dt  = now - (_ESP_FADE_TICK or now)
     _ESP_FADE_TICK = now
     if dt <= 0 then dt = 1/60 end
-    local FADE_IN  = 1 / 0.12   
-    local FADE_OUT = 1 / 0.90   
+    local FADE_IN  = 1 / 0.12
+    local FADE_OUT = 1 / 0.90
     for plr, data in pairs(ESPObjects) do
         local gone = (not plr) or (not plr.Parent)
         local a = data._alpha or 0
@@ -5871,7 +5860,7 @@ function _espFadeTick()
         if a < target then
             a = math.min(target, a + dt * FADE_IN)
         elseif a > target then
-            
+
             if data._frozen then
                 a = math.max(target, a - dt * FADE_OUT)
             else
@@ -5938,7 +5927,7 @@ function createESPObjects()
         ln.Thickness = 1; ln.Transparency = 1; ln.Visible = false
         d.ChinaHat[i] = ln
     end
-    
+
     for i = 1, 4 do
         local ln = Drawing.new("Line")
         ln.Thickness = 1; ln.Transparency = 0.85
@@ -6088,7 +6077,7 @@ function _espDrawArrow(data, root)
     local tipX = cx + math.cos(ang) * rad
     local tipY = cy + math.sin(ang) * rad
     local col  = Config.ESP.ArrowsColor or Color3.fromRGB(255,255,255)
-    
+
     if _DRAW_OK and _espSyncDrawArrow(data, tipX, tipY, ang, col) then
         if data.GuiArrow then data.GuiArrow.Visible = false end
         return
@@ -6102,7 +6091,7 @@ function _espDrawArrow(data, root)
 end
 
 function _espDrawCornerBox(data, plr, L, R, T, B, cW, cH)
-    
+
     local col
     if Config.ESP.VisibleCheck and not IsAlly(plr) then
         local ch = plr.Character
@@ -6143,7 +6132,7 @@ function _espDrawCornerBox(data, plr, L, R, T, B, cW, cH)
             data.GuiBoxStroke.Transparency = 0.05
         end
     elseif style == "Full" then
-        
+
         f.BackgroundColor3 = col
         f.BackgroundTransparency = 0.35
         if data.GuiBoxStroke then
@@ -6152,7 +6141,7 @@ function _espDrawCornerBox(data, plr, L, R, T, B, cW, cH)
             data.GuiBoxStroke.Transparency = 0.15
         end
     else
-        
+
         f.BackgroundColor3 = col
         f.BackgroundTransparency = 0.55
         if data.GuiBoxStroke then
@@ -6196,7 +6185,7 @@ function _espHealthValues(plr, char, hum)
         hp = _espNum(hum2.Health)
         mx = _espNum(hum2.MaxHealth)
     end
-    
+
     if not hp then
         hp = _espReadNumber(char, hpKeys) or _espReadNumber(plr, hpKeys)
     end
@@ -6213,13 +6202,13 @@ function _espHealthValues(plr, char, hum)
 end
 
 _ESP_HP_COLS = {
-    Color3.fromRGB(70, 230, 130), 
-    Color3.fromRGB(240, 220, 60), 
-    Color3.fromRGB(255, 150, 50), 
-    Color3.fromRGB(255, 65, 65),  
+    Color3.fromRGB(70, 230, 130),
+    Color3.fromRGB(240, 220, 60),
+    Color3.fromRGB(255, 150, 50),
+    Color3.fromRGB(255, 65, 65),
 }
 local function _espHpGradAt(f)
-    
+
     f = math.clamp(f, 0, 1)
     local G, Y, O, R = _ESP_HP_COLS[1], _ESP_HP_COLS[2], _ESP_HP_COLS[3], _ESP_HP_COLS[4]
     local function L(a, b, t)
@@ -6315,7 +6304,7 @@ function _espDrawSkeleton(data, char)
             if useDraw and data.Skeleton[i] then pcall(function() data.Skeleton[i].Visible = false end) end
         end
     end
-    
+
     if useDraw then
         if data.GuiSkeleton then for _, f in pairs(data.GuiSkeleton) do f.Visible = false end end
     else
@@ -6346,7 +6335,7 @@ function _espDrawChinaHat(data, char)
     local size    = head.Size
     local baseR   = math.max(size.X, size.Z) * 0.9 * sizeMul
     local peakUp  = math.max(size.Y, 1) * hMul
-    
+
     local headPos = head.Position
     local peakWorld = headPos + Vector3.new(0, peakUp, 0)
     local pk, pkOn = Camera:WorldToViewportPoint(peakWorld)
@@ -6479,7 +6468,7 @@ function _espDrawAmmo(data, L, R, T, cx, plr, weaponName)
     local width = math.clamp((R - L) + 28, 42, 118)
     local y = math.floor(T - 6)
     local col = Config.ESP.AmmoColor or Color3.fromRGB(255, 255, 255)
-    
+
     if _DRAW_OK and _espSyncDrawAmmo(data, cx, y, width, pct, col) then
         if data.GuiAmmo then data.GuiAmmo.Visible = false end
         return
@@ -6628,7 +6617,7 @@ function _espIconAssetForWeapon(weaponName)
 end
 
 function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
-    
+
     local function hideLegacyBox()
         if data.TagBg then data.TagBg.Visible = false end
         if data.TagBorder then for _, l in ipairs(data.TagBorder) do l.Visible = false end end
@@ -6729,7 +6718,7 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
                 data.GuiTagIcon.Image = weaponIconAsset
                 data.LastWeaponIcon = weaponIconAsset
             end
-            
+
             data.GuiTagIcon.Size = UDim2.fromOffset(BOX_W, ICON_H)
             data.GuiTagIcon.Position = UDim2.new(0.5, 0, 0, 0)
             data.GuiTagIcon.Visible = true
@@ -6752,7 +6741,7 @@ function _espDrawTag(data, L, R, T, cx, plr, dist, weaponName, B)
         local midY = math.floor(((T or 0) + (B or (T or 0))) * 0.5)
         local mx = math.floor((R or cx) + 10)
         local col = Color3.fromRGB(80, 220, 110)
-        
+
         if _DRAW_OK and _espSyncDrawMoney(data, mx, midY, moneyStr, col) then
             if data.GuiMoney then data.GuiMoney.Visible = false end
         else
@@ -6796,7 +6785,7 @@ end
 
 function _espTextLayout(L, R, T, B, cx)
     local buckets = { Top={}, Bottom={}, Left={}, Right={} }
-    
+
     for _, kind in ipairs({"Name","Distance","Weapon"}) do
         table.insert(buckets[_espSlotSide(kind)], kind)
     end
@@ -6827,7 +6816,7 @@ function _espProcessPlayer(plr, myRoot, center)
     end
     local char = GetCharacter(plr)
     local data = ESPObjects[plr]
-    
+
     local root, head, hum
     if char then
         root = char:FindFirstChild("HumanoidRootPart")
@@ -6837,7 +6826,7 @@ function _espProcessPlayer(plr, myRoot, center)
 
     local aliveOk = char and char.Parent and root and head and hum and hum.Health > 0
     if aliveOk then
-        
+
         local okState, st = pcall(function() return hum:GetState() end)
         if okState and (st == Enum.HumanoidStateType.Dead
                      or st == Enum.HumanoidStateType.PlatformStanding and hum.Health <= 1) then
@@ -6879,12 +6868,12 @@ function _espProcessPlayer(plr, myRoot, center)
     if dist > maxD then if data then data._wantVisible = false end; return nil end
 
     if not data then
-        if isFrozen then return nil end 
+        if isFrozen then return nil end
         data = createESPObjects()
         ESPObjects[plr] = data
         data._alpha = 0
     end
-    
+
     if not isFrozen then
         data._lastHeadPos = headPos
         data._lastRootPos = rootPos
@@ -6892,7 +6881,7 @@ function _espProcessPlayer(plr, myRoot, center)
         data._lastMaxHP   = maxHp
         if data._frozen then data._frozen = false; data._deathAt = nil end
     end
-    
+
     if isFrozen then data._wantVisible = true end
 
     local hP, hOn = Camera:WorldToViewportPoint(headPos + Vector3.new(0,0.75,0))
@@ -6910,7 +6899,7 @@ function _espProcessPlayer(plr, myRoot, center)
     local T, B = cy - height/2, cy + height/2
 
     local vs = Camera.ViewportSize
-    
+
     local scopedNow = (isScopedIn and isScopedIn()) or (Camera.FieldOfView and Camera.FieldOfView < (OriginalCameraFOV or 70) * 0.6)
     local margin = scopedNow and math.max(vs.X, vs.Y) or 6
     if L < -margin or R > vs.X + margin or T < -margin or B > vs.Y + margin then
@@ -6971,7 +6960,7 @@ function _espProcessPlayer(plr, myRoot, center)
 
     if Config.ESP.HeadDot then
         if _DRAW_OK and data.HeadDot then
-            
+
             local r = math.clamp(height * 0.04, 2, 5)
             pcall(function()
                 data.HeadDot.Position = Vector2.new(math.floor(hP.X), math.floor(hP.Y))
@@ -7056,7 +7045,7 @@ end
 
 local function _chamsPartIncluded(part)
     if not part or not part:IsA("BasePart") then return false end
-    
+
     if part.Name == "HumanoidRootPart" then return false end
     local parent = part.Parent
     if parent and parent:IsA("Accessory") then return false end
@@ -7071,14 +7060,14 @@ local function _getChamsData(plr, holder)
         ChamsData[plr] = data
     end
     data.boxes = data.boxes or {}
-    
+
     if data.main then pcall(function() data.main:Destroy() end); data.main = nil end
     if data.glow then pcall(function() data.glow:Destroy() end); data.glow = nil end
     return data
 end
 
 function updateChams()
-    
+
     local on = Config.GlobalEnable and Config.ESP.Enabled and Config.ESP.Chams
     if not on then
         for plr, _ in pairs(ChamsData) do _destroyChamsFor(plr) end
@@ -7131,7 +7120,7 @@ function updateChams()
                             end)
                         end
                     end
-                    
+
                     for part, box in pairs(data.boxes) do
                         if not seen[part] then
                             pcall(function() box:Destroy() end)
@@ -7169,7 +7158,7 @@ function updateESP()
     end
     local espInterval = (ES152.Load and ES152.Load > 0.55) and 0.05 or ((ES152.Load and ES152.Load > 0.25) and 0.033 or 0)
     if espInterval > 0 and not ES152.tick("ESP.scan", espInterval) then
-        
+
         _espFadeTick()
         return
     end
@@ -7212,7 +7201,7 @@ end
 
 WorldEspPool = WorldEspPool or {}
 WorldEspSeen = WorldEspSeen or {}
-WorldGrenadeFirstSeen = WorldGrenadeFirstSeen or {} 
+WorldGrenadeFirstSeen = WorldGrenadeFirstSeen or {}
 
 GRENADE_LIFETIME = GRENADE_LIFETIME or { smoke = 18.0, molotov = 7.0 }
 
@@ -7313,7 +7302,7 @@ function updateWorldESP()
                     local dist = (myRoot.Position - pos).Magnitude
                     local s = math.clamp(260 / math.max(1, dist), 10, 30)
                     local bx, by = sp.X - s/2, sp.Y - s/2
-                    
+
                     local fade = math.clamp(1 - (dist - 40) / math.max(1, (Config.ESP.MaxDistance or 500) - 40), 0.55, 1)
 
                     local pulse = 1
@@ -7325,7 +7314,7 @@ function updateWorldESP()
 
                     if e.Fill then e.Fill.Visible = false end
                     if isGrenade then
-                        
+
                         e.Box.Visible = false
                         e.Dot.Visible = false
                         e.Tag.Visible = false
@@ -7369,10 +7358,7 @@ function updateWorldESP()
                         end
                     end
 
-                    -- big floating grenade countdown removed: the zone ring
-                    -- already carries the single fixed timer
                     if e.Timer then e.Timer.Visible = false end
-
 
                 else
                     hideWorldEntry(e)
@@ -7475,7 +7461,7 @@ function _bombLooksPlanted(inst)
 end
 
 function getBombModel()
-    
+
     local ok, tagged = pcall(function() return CollectionService:GetTagged("Bomb") end)
     if ok and type(tagged) == "table" then
         for _, bomb in ipairs(tagged) do
@@ -7614,7 +7600,7 @@ function ensureC4UI()
         sh.Size = UDim2.new(1, 44, 1, 44)
         sh.ZIndex = 58
     end
-    
+
     do
         local grad = Instance.new("UIGradient", f)
         grad.Rotation = 115
@@ -7624,7 +7610,7 @@ function ensureC4UI()
             ColorSequenceKeypoint.new(1.00, BG_BOT),
         })
     end
-    
+
     do
         local st = Instance.new("UIStroke", f)
         st.Thickness = 1
@@ -7850,7 +7836,7 @@ function ensureC4UI()
         ColorSequenceKeypoint.new(0, Color3.fromRGB(255,255,255)),
         ColorSequenceKeypoint.new(1, Color3.fromRGB(230,205,255)),
     })
-    
+
     local timeSub = Instance.new("TextLabel", timerBox)
     timeSub.Name = "TimeSub"
     timeSub.BackgroundTransparency = 1
@@ -7942,7 +7928,7 @@ function updateC4Ring(remain, total, color)
     end
     pcall(function()
         C4UI.timeFill.Size = UDim2.new(pct, 0, 1, 0)
-        
+
         if pct > 0.5 then
             C4UI.timeFill.BackgroundColor3 = Color3.fromRGB(170, 90, 240)
         elseif pct > 0.25 then
@@ -7973,14 +7959,14 @@ function C4Hide()
     if not C4UI.shown then C4UI.frame.Visible = false; return end
     C4UI.shown = false; C4UI.pinned = false
     local f = C4UI.frame
-    
+
     local tw = TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
         { BackgroundTransparency = 1 })
     tw:Play()
     connectSignal(tw.Completed:Once(function()
         if scriptRunning and not C4UI.shown then
             f.Visible = false
-            f.BackgroundTransparency = 0.05 
+            f.BackgroundTransparency = 0.05
         end
     end))
 
@@ -8046,7 +8032,7 @@ function C4Show(status, timeText, sub, color, info)
         C4UI.infoStatus.Text = (sub and sub ~= "" and sub) or "defusing"
     else
         C4UI._curUserId = nil
-        
+
         if C4UI.avatarBox then C4UI.avatarBox.Visible = false end
         C4UI.avatar.Image = ""
         C4UI.avFallback.Visible = false
@@ -8165,7 +8151,7 @@ function tryAutoDefuse()
         if AutoDefuse.holding then _holdE(false) end
         return
     end
-    
+
     if dist > 1.2 then
         local look = root.CFrame.LookVector
         local dir = delta.Unit
@@ -8246,7 +8232,7 @@ function updateC4Timer()
         else
             _C4Show("BOMB LOST", "--", "signal lost", Color3.fromRGB(200,200,200))
         end
-        
+
         C4Timer.hideAt = 0
         C4Timer.resolvedShown = true
         stopC4Timer(); return
@@ -8299,7 +8285,7 @@ function updateC4Timer()
         end
         local defRemain = math.max(0, dur - elapsed)
         local pct = math.clamp(defRemain / dur, 0, 1)
-        
+
         local info = { player = d }
         local ok = pcall(function()
             local char = d.Character
@@ -8333,7 +8319,7 @@ function updateC4Timer()
     elseif remain <= 10 then col = Color3.fromRGB(255, 90, 60)
     elseif remain <= 20 then col = Color3.fromRGB(255, 170, 60)
     else                     col = Color3.fromRGB(255, 110, 70) end
-    
+
     do
         local bpart = C4Timer.bomb and (C4Timer.bomb.PrimaryPart or C4Timer.bomb:FindFirstChildWhichIsA("BasePart"))
         local lp = Players.LocalPlayer
@@ -8345,7 +8331,7 @@ function updateC4Timer()
     end
     _C4Show("PLANTED", tostring(math.ceil(remain)), sub, col)
     do
-        
+
         local total = C4Timer.duration > 0 and C4Timer.duration or C4_FALLBACK_DURATION
         updateC4Ring(remain, total, col)
     end
@@ -8545,7 +8531,7 @@ function _isLocalFlashed()
     if _FlashEffectMod and type(_FlashEffectMod.IsFlashed) == "function" then
         local ok, r = pcall(_FlashEffectMod.IsFlashed); if ok then return r == true end
     end
-    
+
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     if pg and pg:FindFirstChild("FlashbangEffect") then return true end
     local cc = Lighting:FindFirstChild("FlashbangColorCorrection")
@@ -8629,7 +8615,7 @@ function updateAimbot()
 
     local keyHeld = false
     if _ECLIPSE_HUBIsMobile then
-        
+
         keyHeld = _mobileFireHeld()
     else
         pcall(function()
@@ -8718,7 +8704,7 @@ function updateAimbot()
         if scoped then
             k = 95
         else
-            
+
             k = 7 + s * 16
         end
         local alpha = 1 - math.exp(-dt * k)
@@ -8751,7 +8737,7 @@ function updateAimbot()
         if scoped then alpha = math.min(0.86, math.max(alpha, 0.45)) end
 
         if _ECLIPSE_HUBIsMobile then
-            
+
             _ECLIPSE_HUBMobileAimAt(predictPos, alpha)
         else
             local maxStep = scoped and 120 or math.clamp(20 + s * 75, 24, 95)
@@ -8768,7 +8754,7 @@ function updateAimbot()
     end
 end
 
-end)() 
+end)()
 
 ;(function()
 local lastTrigger = 0
@@ -8871,7 +8857,7 @@ function updateTriggerBot()
         end
     end
 end
-end)() 
+end)()
 
 ;(function()
 local ControllerCache = {}
@@ -8893,7 +8879,7 @@ local _RECOIL_METHODS = {
 }
 
 function _installCombatNamecallHooks()
-    
+
     RecoilHook.installed = true
 end
 
@@ -8915,7 +8901,7 @@ local function _tryScopeCurrentWeapon()
     end
 end
 
-function _updateNoRecoil() pcall(_installCombatNamecallHooks) end 
+function _updateNoRecoil() pcall(_installCombatNamecallHooks) end
 function _updateForceScope()
     if Config and Config.Misc and Config.Misc.ForceScope then
         if not _forceScopeConn then
@@ -9096,10 +9082,10 @@ function updateMovement()
     local stateGrounded = (floorMat ~= nil and floorMat ~= Enum.Material.Air)
                       and hstate ~= Enum.HumanoidStateType.Jumping
                       and hstate ~= Enum.HumanoidStateType.Freefall
-    
+
     local rayGrounded = false
     do
-        
+
         local filter = { char }
         local sd = _G.__ECLIPSE_SELF_DUMMY or (Workspace:FindFirstChild("_EclipseSelfDummy"))
         if sd then filter[#filter+1] = sd end
@@ -9112,7 +9098,7 @@ function updateMovement()
 
         _MV.ASF_RAY.FilterDescendantsInstances = filter
         local down = Workspace:Raycast(root.Position, Vector3.new(0,-4.5,0), _MV.ASF_RAY)
-        
+
         if down and down.Instance and down.Instance.CanCollide then rayGrounded = true end
     end
     local cvY_check = root.AssemblyLinearVelocity.Y
@@ -9192,7 +9178,7 @@ function updateMovement()
                     flat = (horiz.Magnitude > 0.1) and horiz or Vector3.new()
                 end
                 if inputFlat and inputFlat.Magnitude > 0.05 and flat.Magnitude > 0.05 then
-                    
+
                     flat = flat.Unit:Lerp(inputFlat.Unit, 0.42)
                 elseif inputFlat and inputFlat.Magnitude > 0.05 then
                     flat = inputFlat
@@ -9206,7 +9192,7 @@ function updateMovement()
                 local cv     = root.AssemblyLinearVelocity
                 local horiz  = Vector3.new(cv.X, 0, cv.Z)
                 local curDir = (horiz.Magnitude > 0.1) and horiz.Unit or flat
-                
+
                 local newDir = curDir:Lerp(flat, 0.28)
                 if newDir.Magnitude > 0.01 then newDir = newDir.Unit else newDir = flat end
 
@@ -9360,7 +9346,7 @@ function UpdateWeather(t)
         WeatherEmitter.Transparency=NumberSequence.new({
             NumberSequenceKeypoint.new(0,0.2), NumberSequenceKeypoint.new(1,0.4)
         })
-        
+
         local glow = Instance.new("ParticleEmitter", WeatherPart)
         glow.EmissionDirection = Enum.NormalId.Bottom
         glow.Texture="rbxassetid://243098098"
@@ -9376,7 +9362,7 @@ function UpdateWeather(t)
         WeatherEmitter.Size=NumberSequence.new(0.25,0.35); WeatherEmitter.Speed=NumberRange.new(30,30)
         WeatherEmitter.Lifetime=NumberRange.new(5,10); WeatherEmitter.SpreadAngle=Vector2.new(50,50)
     elseif t == "Aurora" then
-        
+
         WeatherEmitter.Texture="rbxassetid://243098098"
         WeatherEmitter.Rate=180
         WeatherEmitter.Color=ColorSequence.new({
@@ -9446,7 +9432,7 @@ function UpdateWeather(t)
         halo.Speed=NumberRange.new(0.5,1.5)
         halo.SpreadAngle=Vector2.new(180,180)
     end
-    
+
     ApplyWeatherSpeed()
 end
 
@@ -9568,7 +9554,7 @@ function _TW_InitSkinChangerHooks()
         _TW_Originals.Sk = Sk
         _TW_Originals.Vm = Vm
         local function _TW_LPActive()
-            
+
             local lp = LocalPlayer or (Players and Players.LocalPlayer)
             if not lp then return false end
             local ch = lp.Character
@@ -9586,7 +9572,7 @@ function _TW_InitSkinChangerHooks()
             _TW_Originals.GetCameraModel = _TW_Originals.GetCameraModel or Sk.GetCameraModel
             local oGCM = _TW_Originals.GetCameraModel
             Sk.GetCameraModel = function(w, sk, ...)
-                
+
                 if not (Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning) then
                     return oGCM(w, sk, ...)
                 end
@@ -9601,13 +9587,13 @@ function _TW_InitSkinChangerHooks()
         end
         if type(Sk.GetCharacterModel) == "function" then
             _TW_Originals.GetCharacterModel = _TW_Originals.GetCharacterModel or Sk.GetCharacterModel
-            
+
         end
         if type(Vm) == "table" and type(Vm.new) == "function" then
             _TW_Originals.VmNew = _TW_Originals.VmNew or Vm.new
             local oVN = _TW_Originals.VmNew
             Vm.new = function(vc, w, sk, ...)
-                
+
                 if not (Config.Skins.SkinChangerEnabled and SkinSystem.scriptRunning) then
                     return oVN(vc, w, sk, ...)
                 end
@@ -9622,7 +9608,7 @@ function _TW_InitSkinChangerHooks()
         end
         if type(Sk.GetGloves) == "function" then
             _TW_Originals.GetGloves = _TW_Originals.GetGloves or Sk.GetGloves
-            
+
         end
 
     end)
@@ -9726,7 +9712,7 @@ function _restoreOriginalSA(part)
 end
 
 function _purgeECLIPSE_HUBSkinMarks()
-    
+
     local scanRoots = { Camera, LocalPlayer and LocalPlayer.Character }
     local processed = 0
     for _, root in ipairs(scanRoots) do
@@ -9768,7 +9754,7 @@ function _cacheSkinTarget(target)
         end
     end
     SkinSystem._skinRestore[target] = rec
-    
+
     pcall(_saveOriginalSA, target)
 end
 
@@ -9802,7 +9788,7 @@ function _restoreAppliedSkins()
         pcall(_restoreSkinTarget, target)
     end
     SkinSystem._skinRestore = {}
-    
+
     if _ECLIPSE_HUBOrigSA then
         for part in pairs(_ECLIPSE_HUBOrigSA) do
             processed = processed + 1
@@ -10078,7 +10064,7 @@ function _applySkinSourceToPart(target, source)
     local sourceKey = nil
     pcall(function() sourceKey = source:GetFullName() end)
     if sourceKey and target:GetAttribute("ECLIPSE_HUBSkinSource") == sourceKey then return end
-    
+
     pcall(_cacheSkinTarget, target)
     pcall(function()
         for _, ch in ipairs(target:GetChildren()) do
@@ -10214,7 +10200,7 @@ end
 function _canonicalGloveReference(side, ref)
     local cached = SkinSystem._canonicalGloves and SkinSystem._canonicalGloves[side]
     if cached and cached.Part and cached.Part:IsA("BasePart") then return cached end
-    return nil 
+    return nil
 end
 
 function _fitGloveToReference() return true, 1.0 end
@@ -10276,7 +10262,7 @@ function playSound(folder, name)
     local s
     local sounds = ReplicatedSt:FindFirstChild("Sounds")
     local ws = sounds and sounds:FindFirstChild(Config.Skins.SelectedKnife)
-    
+
     local variants = { folder }
     if folder == "Inspect" then variants = { "Inspect", "Inspect1", "FirstInspect", "Inspect_1", "InspectMain", "FirstInspect_1" }
     elseif folder == "SecondInspect" then variants = { "SecondInspect", "Inspect2", "SecondInspect_1", "Inspect_2", "InspectAlt", "SecondaryInspect", "Inspect Two", "InspectTwo", "AltInspect", "InspectB", "Inspect_B", "SecondaryInspect_1" }
@@ -10292,7 +10278,7 @@ function playSound(folder, name)
         if src and src:IsA("Sound") then break end
         src = nil
     end
-    
+
     if not src and folder == "SecondInspect" and ws then
         local primary = ws:FindFirstChild("Inspect") or ws:FindFirstChild("Inspect1") or ws:FindFirstChild("FirstInspect")
         for _, child in ipairs(ws:GetChildren()) do
@@ -10303,7 +10289,7 @@ function playSound(folder, name)
             end
         end
     end
-    
+
     if not src and folder == "SecondInspect" and ws then
         for _, vname in ipairs({ "Inspect", "Inspect1", "FirstInspect", "Inspect_1" }) do
             sf = ws:FindFirstChild(vname)
@@ -10354,7 +10340,7 @@ function handleAction(actionName, state)
         local hasAltInspect = isButterfly
             or (selKnife == "Skeleton Knife")
             or (selKnife == "Stiletto Knife")
-        
+
         local useAlt = hasAltInspect and (SkinSystem._inspectFlip == true)
         local track  = (useAlt and SkinSystem.inspectAlt) or SkinSystem.inspectAnim
         if not track then return Enum.ContextActionResult.Pass end
@@ -10391,7 +10377,7 @@ function handleAction(actionName, state)
             _signalOnce(track.Stopped, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
             local dur = (track.Length and track.Length > 0) and track.Length or 2.2
             task.delay(dur + 0.6, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
-            
+
             task.delay(6, function() if SkinSystem._inspectToken == myTok then SkinSystem.inspecting = false end end)
         else SkinSystem.inspecting = false end
 
@@ -10404,7 +10390,7 @@ function handleAction(actionName, state)
         if SkinSystem.idleAnim then pcall(function() SkinSystem.idleAnim:Stop() end) end
         local chosen, sf
         if actionName == "RightAttackKnifeAction" then
-            
+
             chosen = SkinSystem.HeavySwingAnim or SkinSystem.Swing1Anim or SkinSystem.Swing2Anim
             sf = "HitOne"
         else
@@ -10459,13 +10445,13 @@ function _spawnViewmodelCore(knife, me)
     local selKnife = Config.Skins.SelectedKnife
     local tpl = weapons:FindFirstChild(selKnife)
     local camTpl = tpl and tpl:FindFirstChild("Camera")
-    
+
     if not camTpl and _TW_Sk and type(_TW_Sk.GetCameraModel) == "function" then
         local sk = (Config.Skins.SelectedSkins and Config.Skins.SelectedSkins[selKnife]) or "Vanilla"
         local ok, mdl = pcall(_TW_Sk.GetCameraModel, selKnife, sk)
         if ok and mdl then camTpl = mdl end
     end
-    
+
     if not camTpl then
         tpl = weapons:WaitForChild("Butterfly Knife", 5)
         camTpl = tpl and tpl:WaitForChild("Camera", 5)
@@ -10499,7 +10485,7 @@ function _spawnViewmodelCore(knife, me)
     local knifeAnims = animRoot and (animRoot:FindFirstChild(selKnife) or animRoot:FindFirstChild("Butterfly Knife"))
     local af = knifeAnims and knifeAnims:FindFirstChild("CameraAnimations")
     if not af then
-        
+
         if not SkinSystem.vm.PrimaryPart then SkinSystem.vm.PrimaryPart = SkinSystem.vm:FindFirstChildWhichIsA("BasePart") end
         SkinSystem.spawned = true
         return
@@ -10516,7 +10502,7 @@ function _spawnViewmodelCore(knife, me)
                 _alt = _loadSkinAnimTrack(af, n)
                 if _alt then break end
             end
-            
+
             if not _alt and af then
                 local primary = af:FindFirstChild("Inspect")
                 for _, child in ipairs(af:GetChildren()) do
@@ -10553,7 +10539,7 @@ function _spawnViewmodelCore(knife, me)
 end
 
 function spawnViewmodel(knife)
-    
+
     if not SkinSystem.scriptRunning then return end
     _sanitizeSkinConfig()
     if SkinSystem.spawned and SkinSystem.vm and SkinSystem.vm.Parent then return end
@@ -10592,7 +10578,7 @@ function _ECLIPSE_HUBCurrentSkinRealtimeKey()
     return table.concat(parts, "|")
 end
 function _ECLIPSE_HUBForceKnifeRealtime()
-    
+
     return false
 end
 
@@ -10839,7 +10825,7 @@ function _TW_ApplyAllCameraSkins()
                             processed = processed + 1
                             local nm = obj.Name
                             if nm == "CT Knife" or nm == "T Knife" or nm == "Knife" then
-                                
+
                                 pcall(_applyWeaponSkinCore, obj, nil)
                             else
                                 local sn = Config.Skins.SelectedSkins[nm]
@@ -10851,7 +10837,7 @@ function _TW_ApplyAllCameraSkins()
                         end
                     end
                 end
-                
+
                 task.wait(0.15)
                 pcall(_applySelectedGloveSkin)
             end
@@ -10878,7 +10864,7 @@ function _hudOverlayRoot()
 end
 
 function _hudDbg(...)
-    
+
 end
 
 HUD_KNIFE_ASSETS = (function()
@@ -11152,13 +11138,13 @@ function _iconFromAssetsFolder(name)
         return weapons and weapons:FindFirstChild(name)
     end)
     if not ok or not root then return nil end
-    
+
     for _, key in ipairs(HUD_ICON_KEYS) do
         local okA, val = pcall(function() return root:GetAttribute(key) end)
         local a = okA and _assetString(val) or nil
         if a then return a end
     end
-    
+
     for _, d in ipairs(root:GetDescendants()) do
         local dn = tostring(d.Name):lower()
         if not dn:find("reverse", 1, true) then
@@ -11310,7 +11296,7 @@ function _slotParts(slotFrame)
         if not iconLbl and not iconViewport then
             for _, d in ipairs(named:GetDescendants()) do
                 if tostring(d.Name):find("^ECLIPSE_HUBHUD") then
-                    
+
                 elseif (d:IsA("ImageLabel") or d:IsA("ImageButton")) and not iconLbl then
                     iconLbl = d
                 elseif d:IsA("ViewportFrame") and not iconViewport then
@@ -11322,7 +11308,7 @@ function _slotParts(slotFrame)
     if not iconLbl and not iconViewport then
         for _, d in ipairs(w:GetDescendants()) do
             if tostring(d.Name):find("^ECLIPSE_HUBHUD") then
-                
+
             elseif (d:IsA("ImageLabel") or d:IsA("ImageButton")) and not iconLbl then
                 iconLbl = d
             elseif d:IsA("ViewportFrame") and not iconViewport then
@@ -11660,7 +11646,7 @@ function _hudIconTint(rec)
 end
 
 function _hudNameTint(rec)
-    
+
     local c = _hudIconTint(rec)
     if c then return c end
     local teamKey = _hudActiveTeamKey()
@@ -11671,7 +11657,7 @@ function _ensureIconImage(rec, anchor)
 
     if not (rec and anchor and anchor.Parent) then return nil end
     local parent = anchor.Parent
-    
+
     _sweepDuplicateOverlays(rec.slotFrame, "ECLIPSE_HUBHUDIcon", rec.iconImage)
     local img = rec.iconImage
     if not (img and img.Parent == parent) then
@@ -12401,7 +12387,7 @@ function _hideAllHUDOverlays()
             if rec.iconLabelRef and rec.iconLabelRef.Parent then
                 rec.iconLabelRef.Visible = true
                 rec.iconLabelRef.ImageTransparency = rec.iconImageTransparency or 0
-                
+
             end
             if rec.iconViewportRef and rec.iconViewportRef.Parent then
                 rec.iconViewportRef.Visible = true
@@ -12561,7 +12547,7 @@ function _restoreKnifeModuleOverride()
     _TW_Vm = nil
 end
 
-_HUDLite = { originals = {} } 
+_HUDLite = { originals = {} }
 _HUDLiteReverseKeys = { ["reverseicon"]=true, ["reverse_icon"]=true, ["reverse"]=true, ["backicon"]=true, ["back_icon"]=true }
 
 function _hudLiteKnownIcons()
@@ -12709,7 +12695,7 @@ function _restoreHUDKnife()
     end
     HUDSkin.slots = setmetatable({}, {__mode="k"})
     pcall(_purgeAllHUDOverlays)
-    
+
     _restoreHUDLiteIcons()
 end
 
@@ -12876,7 +12862,7 @@ function CleanupScript()
             end
         end
     end)
-    
+
     pcall(function()
         local cam = workspace.CurrentCamera
         if cam then
@@ -12899,7 +12885,7 @@ function CleanupScript()
     if _forceScopeConn then pcall(function() _forceScopeConn:Disconnect() end); _forceScopeConn = nil end
     for _, c in ipairs(UnloadConnections) do pcall(function() c:Disconnect() end) end
     table.clear(UnloadConnections)
-    
+
     pcall(function() if _G.ECLIPSE_HUBPurgeGuis then _G.ECLIPSE_HUBPurgeGuis() end end)
 
     if Camera.CameraType == Enum.CameraType.Scriptable then
@@ -12909,7 +12895,7 @@ function CleanupScript()
             if h then Camera.CameraSubject = h end
         end
     end
-    
+
     pcall(function() if _G.__ECLIPSE_HUBFOVConn  then _G.__ECLIPSE_HUBFOVConn:Disconnect();  _G.__ECLIPSE_HUBFOVConn  = nil end end)
     pcall(function() if _G.__ECLIPSE_HUBFOVConn2 then _G.__ECLIPSE_HUBFOVConn2:Disconnect(); _G.__ECLIPSE_HUBFOVConn2 = nil end end)
     pcall(function() game:GetService("RunService"):UnbindFromRenderStep("ECLIPSE_HUBCustomFOV") end)
@@ -12936,7 +12922,7 @@ function CleanupScript()
             pcall(_restoreHUDKnife)
             pcall(_restoreKnifeModuleOverride)
             pcall(_purgeAllHUDOverlays)
-            
+
             pcall(function()
                 if SkinSystem and SkinSystem.vm and SkinSystem.vm.Parent then
                     SkinSystem.vm:Destroy(); SkinSystem.vm = nil
@@ -12944,7 +12930,7 @@ function CleanupScript()
                 SkinSystem.spawned = false
             end)
             pcall(restoreOriginalKnife)
-            
+
             pcall(function()
                 for _, obj in ipairs(Camera:GetChildren()) do
                     for _, ch in ipairs(obj:GetDescendants()) do
@@ -12954,7 +12940,7 @@ function CleanupScript()
                             pcall(function() ch:Destroy() end)
                         end
                     end
-                    
+
                     local nm = tostring(obj.Name):lower()
                     if nm == "t knife" or nm == "ct knife" or nm:find("glove") or nm:find("arm") then
                         for _, p in ipairs(obj:GetDescendants()) do
@@ -12965,7 +12951,7 @@ function CleanupScript()
                     end
                 end
             end)
-            
+
             pcall(function()
                 for part in pairs(_ECLIPSE_HUBOrigSA) do pcall(_restoreOriginalSA, part) end
             end)
@@ -13002,9 +12988,9 @@ function CleanupScript()
         end
     end)
     pcall(function() if TargetLine then TargetLine:Remove() end end); pcall(function() if FOVCircle then FOVCircle.Visible=false; FOVCircle:Remove() end end); pcall(function() if FOVCircleInner then FOVCircleInner.Visible=false; FOVCircleInner:Remove() end end); pcall(function() if AimFOVGui then AimFOVGui:Destroy() end end)
-    
+
     pcall(function() for _, o in pairs(CH) do pcall(function() o.Visible=false; o:Remove() end) end end)
-    
+
     pcall(function()
         for _, p in ipairs(EX.WarnLines or {}) do
             pcall(function() if p.outer then p.outer:Remove() end end)
@@ -13023,7 +13009,7 @@ function CleanupScript()
         if EX.WarnLabel    then pcall(function() EX.WarnLabel.Visible=false;    EX.WarnLabel:Remove()    end) end
         EX.WarnRing, EX.WarnRingGlow, EX.WarnDot, EX.WarnLabel = nil, nil, nil, nil
     end)
-    
+
     pcall(function()
         if EX._LogSG then EX._LogSG:Destroy() end
         EX._LogSG, EX._LogHolder = nil, nil
@@ -13066,7 +13052,7 @@ function CleanupScript()
     table.clear(WorldEspPool)
     if WorldGrenadeFirstSeen then table.clear(WorldGrenadeFirstSeen) end
     removeViewmodel()
-    
+
     pcall(function()
         local ui = (gethui and gethui()) or CoreGui
         for _, n in ipairs({"ECLIPSE_HUBSkinPreview", "ECLIPSE_HUBEspPreview", "ECLIPSE_HUBModelPreview", "ECLIPSE_HUBHUDAssetViewer"}) do
@@ -13131,7 +13117,7 @@ do
         connectSignal(p.CharacterAdded:Connect(function(c)
             if not scriptRunning then return end
             _clearPlayerESP(p)
-            
+
             task.delay(0.10, function() if scriptRunning then _clearPlayerESP(p) end end)
         end))
     end
@@ -13167,7 +13153,7 @@ connectSignal(RunService.RenderStepped:Connect(function()
     safeUpdate("ESP", updateESP)
     if heavy then
         safeUpdate("Chams", updateChams)
-        
+
         safeUpdate("WorldESP", updateWorldESP)
         safeUpdate("AntiFlash", updateAntiFlash)
         safeUpdate("AntiSmoke", updateAntiSmoke)
@@ -13231,7 +13217,7 @@ connectSignal(RunService.RenderStepped:Connect(function()
                             local hit = Workspace:Raycast(hrp.Position, Vector3.new(0, -12, 0), rayParams)
                             local floorPos = hit and hit.Position or (hrp.Position - Vector3.new(0, 3, 0))
                             local floorNormal = hit and hit.Normal or Vector3.new(0, 1, 0)
-                            
+
                             local orient = CFrame.lookAt(floorPos + floorNormal * 0.06, floorPos + floorNormal * 0.06 + floorNormal)
 
                             local anchor = Instance.new("Part")
@@ -13302,16 +13288,16 @@ task.spawn(function()
 end)
 
 local _SkinDX = {
-    skinsDirty      = false,   
-    gloveDirty      = false,   
-    skinsMinTs      = 0,       
+    skinsDirty      = false,
+    gloveDirty      = false,
+    skinsMinTs      = 0,
     gloveMinTs      = 0,
-    lastSkins       = 0,       
+    lastSkins       = 0,
     lastGlove       = 0,
     lastVMCheck     = 0,
     lastWatchdog    = 0,
     lastSafety      = 0,
-    
+
     skinsRepeatTs   = 0,
     gloveRepeatTs   = 0,
 }
@@ -13346,7 +13332,7 @@ end)
 connectSignal(Camera.ChildAdded:Connect(function(_obj)
     if not scriptRunning then return end
     if not (Config.Skins.SkinChangerEnabled and IsAlive()) then return end
-    
+
     _skinMarkGloveDirty(0.28)
     _skinMarkSkinsDirty(0.28)
     _SkinDX.gloveRepeatTs = os.clock() + 0.56
@@ -13357,9 +13343,9 @@ connectSignal(Camera.DescendantAdded:Connect(function(d)
     if not scriptRunning then return end
     if not (Config.Skins.SkinChangerEnabled and IsAlive()) then return end
     if not d:IsA("BasePart") then return end
-    
+
     _skinMarkSkinsDirty(0.25)
-    
+
     if d.Name == "Glove" or (d.Parent and (d.Parent.Name == "Left Arm" or d.Parent.Name == "Right Arm")) then
         _skinMarkGloveDirty(0.22)
         _SkinDX.gloveRepeatTs = os.clock() + 0.44
@@ -13461,7 +13447,7 @@ end))
 
 _ECLIPSE_HUBSkinDescReapplyPending = false
 
-;(function() 
+;(function()
 
 do
     local GlobGB = Tabs.Aim:AddLeftGroupbox("GLOBAL", "settings")
@@ -13555,7 +13541,7 @@ AimGB:AddToggle("SilentAim_Toggle", { Text="SILENT AIM", Default=false,
             pcall(_G.ECLIPSE_HUBInstallSilentBypass)
         end
         if not v then
-            
+
             if not (Config and Config.Aimbot and Config.Aimbot.WallBang) then
                 _G.ECLIPSE_HUB_SILENT_TARGET = nil
                 _G.ECLIPSE_HUB_SILENT_TARGET_HEAD = nil
@@ -13571,7 +13557,7 @@ AimGB:AddToggle("WallBang_Toggle", { Text="WALLBANG", Default=false,
             pcall(_G.ECLIPSE_HUBInstallSilentBypass)
         end
         if type(_G.ECLIPSE_HUB_ApplyWallBang) == "function" then
-            pcall(_G.ECLIPSE_HUB_ApplyWallBang) 
+            pcall(_G.ECLIPSE_HUB_ApplyWallBang)
         end
         if not v then
             if not (Config and Config.Misc and Config.Misc.SilentAim) then
@@ -13634,13 +13620,13 @@ do
         for _, entry in pairs(_WB_CACHE) do
             local d, o = entry.Data, entry.Orig
             pcall(function() if setreadonly then setreadonly(d, false) end end)
-            
+
             if on then
                 pcall(function() d.WallbangMultiplier = amt end)
                 pcall(function() d.Penetration        = amt end)
                 pcall(function() d.ArmorPenetration   = 1   end)
                 pcall(function() d.Range              = amt end)
-                pcall(function() d.RangeModifier      = 1   end) 
+                pcall(function() d.RangeModifier      = 1   end)
             else
                 pcall(function() d.WallbangMultiplier = o.WM end)
                 pcall(function() d.Penetration        = o.P  end)
@@ -13651,7 +13637,7 @@ do
             pcall(function() if setreadonly then setreadonly(d, true) end end)
         end
     end
-    
+
     if LocalPlayer and not _G._ECLIPSE_HUBWBRespawnHooked then
         _G._ECLIPSE_HUBWBRespawnHooked = true
         LocalPlayer.CharacterAdded:Connect(function()
@@ -13728,7 +13714,7 @@ do
                 end
             end
             if not RaycastModule then
-                
+
                 for _, obj in next, getgc(true) do
                     if type(obj) == "table" and rawget(obj, "cast") then RaycastModule = obj; break end
                 end
@@ -13791,7 +13777,6 @@ do
                 return (targetPos - aimDir * backDist), (aimDir * backDist)
             end
 
-
             local function _silentVisible(origin, part)
                 if not (part and part.Parent) then return false end
                 local ch = LP.Character
@@ -13825,7 +13810,6 @@ do
                 _G.ECLIPSE_HUB_SILENT_TARGET = _target
                 return origin, (_target.Position - origin)
             end
-
 
             local _lastVis = 0
             local function _shotVisuals(origin, direction)
@@ -13911,7 +13895,6 @@ do
             _installOn("cast")
             if RaycastModule.castThrough then _installOn("castThrough") end
 
-
         end)
         if not ok then
             installed = false
@@ -13949,17 +13932,17 @@ EspGB = Tabs.Visuals:AddLeftGroupbox("ESP")
 EspGB:AddToggle("ESP_Toggle",    { Text="ENABLE ESP", Default=true, Callback=function(v) Config.ESP.Enabled=v end })
     :AddKeyPicker("ESP_Key",     { Default="X", SyncToggleState=true, Mode="Toggle", Text="Enable ESP" })
 EspGB:AddToggle("ESP_Box",       { Text="CORNER BOX", Default=true,  Callback=function(v) Config.ESP.CornerBox=v end })
-    
+
     :AddColorPicker("ESP_BoxCol",  { Default=Config.ESP.BoxColor,      Title="Enemy box color", Callback=function(c) Config.ESP.BoxColor=c end })
 
 Config.ESP.CornerBoxStyle = "Corner"
 EspGB:AddToggle("ESP_Name",      { Text="NAMES",      Default=true,  Callback=function(v) Config.ESP.Name=v end })
 EspGB:AddToggle("ESP_Distance",  { Text="DISTANCE",   Default=true,  Callback=function(v) Config.ESP.Distance=v end })
 EspGB:AddToggle("ESP_HP",        { Text="HEALTH BAR", Default=true,  Callback=function(v) Config.ESP.HealthBar=v end })
-    
+
     :AddColorPicker("ESP_HPCol",  { Default=Config.ESP.HealthColor,    Title="Health color", Callback=function(c) Config.ESP.HealthColor=c end })
 EspGB:AddToggle("ESP_Target",    { Text="TARGET LINE",Default=true,  Callback=function(v) Config.ESP.TargetLine=v end })
-    
+
     :AddColorPicker("ESP_LineCol", { Default=Config.ESP.LineColor,     Title="Target line color", Callback=function(c) Config.ESP.LineColor=c end })
 EspGB:AddToggle("ESP_OffScreen", { Text="OFF SCREEN ARROWS", Default=false, Callback=function(v) Config.ESP.Arrows=v end })
     :AddColorPicker("ESP_ArrowCol", { Default=Config.ESP.ArrowsColor, Title="Off-screen arrow color", Callback=function(c) Config.ESP.ArrowsColor=c end })
@@ -13974,20 +13957,20 @@ EspGB:AddToggle("ESP_ChinaHat", { Text="ESP CHINA HAT", Default=false, Callback=
     :AddColorPicker("ESP_ChinaHatCol", { Default=Config.ESP.ChinaHatColor, Title="China hat color", Callback=function(c) Config.ESP.ChinaHatColor=c end })
 
 EspGB:AddToggle("ESP_Chams",     { Text="ESP CHARMS",  Default=false, Callback=function(v) Config.ESP.Chams=v end })
-    
+
     :AddColorPicker("ESP_ChamsCol",     { Default=Config.ESP.ChamsColor,     Title="ESP Charms fill color", Callback=function(c) Config.ESP.ChamsColor=c end })
 EspGB:AddSlider("ESP_ChamsIntensity", { Text="INTENSITY", Default=1.0, Min=0.2, Max=3.0, Rounding=2, Compact=true,
     Callback=function(v) Config.ESP.ChamsIntensity = v end })
 
 EspGB:AddToggle("ESP_Visible", { Text="ESP VISIBLE", Default=false,
     Callback=function(v) Config.ESP.VisibleCheck = v end })
-    
+
     :AddColorPicker("ESP_VisCol",   { Default=Config.ESP.VisibleChamsColor,   Title="Visible color",   Callback=function(c) Config.ESP.VisibleChamsColor=c; Config.ESP.VisibleBoxColor=c end })
     :AddColorPicker("ESP_InvisCol", { Default=Config.ESP.InvisibleChamsColor, Title="Invisible color", Callback=function(c) Config.ESP.InvisibleChamsColor=c; Config.ESP.InvisibleBoxColor=c end })
 Config.Misc.WeaponHighlightIntensity = Config.Misc.WeaponHighlightIntensity or 1.0
 EspGB:AddToggle("ESP_WeaponChams", { Text="WEAPON CHAMS", Default=false,
     Callback=function(v) Config.Misc.WeaponHighlight = v end })
-    
+
     :AddColorPicker("ESP_WeaponChamsCol", { Default=Config.Misc.WeaponHighlightColor or Color3.fromRGB(0,170,255),
         Title="Weapon Chams color",
         Callback=function(c) Config.Misc.WeaponHighlightColor = c end })
@@ -14004,9 +13987,8 @@ EspGB:AddDropdown("ESP_WeaponChamsStyle", { Text = "CHAMS STYLE",
 Config.ESP.Footstep = Config.ESP.Footstep or false
 Config.ESP.FootstepColor = Config.ESP.FootstepColor or Color3.fromRGB(150, 95, 255)
 EspGB:AddToggle("ESP_Footstep", { Text="ESP FOOTSTEP", Default=false, Callback=function(v) Config.ESP.Footstep=v end })
-    
-    :AddColorPicker("ESP_FootstepCol", { Default=Config.ESP.FootstepColor, Title="Footstep color", Callback=function(c) Config.ESP.FootstepColor=c end })
 
+    :AddColorPicker("ESP_FootstepCol", { Default=Config.ESP.FootstepColor, Title="Footstep color", Callback=function(c) Config.ESP.FootstepColor=c end })
 
 Config.ESP.Preview        = false
 Config.ESP.PreviewAutoOpen = true
@@ -14258,7 +14240,6 @@ do
         end
     end
 
-
     local SKEL_R15 = {
         {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
         {"UpperTorso","LeftUpperArm"},{"LeftUpperArm","LeftLowerArm"},{"LeftLowerArm","LeftHand"},
@@ -14440,7 +14421,6 @@ do
         end
     end
 
-
     local function buildGui()
         if gui then return end
         gui = Instance.new("ScreenGui")
@@ -14496,13 +14476,8 @@ do
         pcam.Parent = viewport
         viewport.CurrentCamera = pcam
 
-
-
-
         buildOverlay()
 
-        -- panel is docked to the menu: no window drag, no orbit drag.
-        -- zoom is mouse-scroll only, rotation is a slow automatic orbit.
         dragging = false
         viewport.InputChanged:Connect(function(i)
             if i.UserInputType == Enum.UserInputType.MouseWheel then
@@ -14515,8 +14490,6 @@ do
             end
         end)
 
-        -- dock the panel to the right side of the main window (same behaviour
-        -- as the skin preview) so it always travels with the menu
         do
             local lx, ly = -1, -1
             local dockConn
@@ -14545,7 +14518,6 @@ do
         end
     end
 
-
     function PV.Rebuild()
         if not gui then return end
         buildRig()
@@ -14555,7 +14527,6 @@ do
         if not gui then return end
         if not (rig and rig.Parent) then buildRig() end
     end
-
 
     function PV.SetEnabled(on)
         Config.ESP.Preview = on and true or false
@@ -14601,27 +14572,26 @@ task.spawn(function()
     end
 end)
 
-
 EspGB:AddDivider()
 
 WorldEspGB = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
 WorldEspGB:AddToggle("World_Bomb",    { Text="ESP C4",          Default=false, Callback=function(v) Config.ESP.WorldBomb=v; for _,e in pairs(WorldEspPool) do hideWorldEntry(e) end end })
-    
+
     :AddColorPicker("World_BombCol", { Default=Config.ESP.BombColor,    Title="C4 color",      Callback=function(c) Config.ESP.BombColor=c end })
 WorldEspGB:AddToggle("ESP_C4Timer",   { Text="C4 PANEL",         Default=false,  Callback=function(v) Config.Misc.C4Timer=v end })
-    
+
 WorldEspGB:AddToggle("World_Weapons", { Text="DROPPED WEAPONS", Default=false, Callback=function(v) Config.ESP.WorldWeapons=v end })
-    
+
     :AddColorPicker("World_WepCol",  { Default=Config.ESP.WeaponColor,  Title="Weapon color",  Callback=function(c) Config.ESP.WeaponColor=c end })
 WorldEspGB:AddToggle("World_Molotov", { Text="MOLOTOVS",        Default=false, Callback=function(v) Config.ESP.WorldMolotov=v end })
-    
+
     :AddColorPicker("World_MolCol",  { Default=Config.ESP.MolotovColor, Title="Molotov color", Callback=function(c) Config.ESP.MolotovColor=c end })
 WorldEspGB:AddToggle("World_Smoke",   { Text="SMOKES",          Default=false, Callback=function(v) Config.ESP.WorldSmoke=v end })
-    
+
     :AddColorPicker("World_SmkCol",  { Default=Config.ESP.SmokeColor,   Title="Smoke color",   Callback=function(c) Config.ESP.SmokeColor=c end })
 WorldEspGB:AddToggle("Grenade_Warning", { Text="GRENADE WARNING", Default=false,
     Callback=function(v) Config.Grenade.Warning = v end })
-    
+
     :AddColorPicker("Grenade_WarnCol", { Default=Config.Grenade.WarningColor, Title="Warning color",
         Callback=function(c) Config.Grenade.WarningColor = c end })
 WorldEspGB:AddToggle("Grenade_Pred", { Text="GRENADE PREDICTION", Default=false, Callback=function(v)
@@ -14632,7 +14602,7 @@ WorldEspGB:AddToggle("Grenade_Pred", { Text="GRENADE PREDICTION", Default=false,
         if GPD.Dot then pcall(function() GPD.Dot.Visible=false end) end
     end
 end })
-    
+
     :AddColorPicker("Grenade_LineCol", { Default=Config.Grenade.LineColor, Title="Trajectory color", Callback=function(c) Config.Grenade.LineColor=c end })
 
 Config.Grenade.ESP = false
@@ -14642,9 +14612,9 @@ Config.Grenade.Trajectory3D = true
 Config.Grenade.ZoneESP    = Config.Grenade.ZoneESP    or false
 Config.Grenade.ZoneColor  = Config.Grenade.ZoneColor  or Color3.fromRGB(255, 255, 255)
 do
-    
+
     local _GZ = { Zones = {}, Hooked = false }
-    
+
     local function _gzColor()
         return Config.Grenade.ZoneColor or Color3.fromRGB(255, 255, 255)
     end
@@ -14678,8 +14648,6 @@ do
         local isFire = folder.Name:find("VoxelFire") ~= nil
         local life   = isFire and 7 or 18
 
-        -- de-dupe: one single counter per physical zone (VoxelFire + VoxelSmoke
-        -- of the same grenade spawn as two folders in the same spot)
         for other, z in pairs(_GZ.Zones) do
             if other.Parent and z.center and (z.center - center).Magnitude <= 12 then
                 z.linked = z.linked or {}
@@ -14765,7 +14733,7 @@ do
         if not child or not child.Parent then return end
         local n = child.Name
         if not (n:find("VoxelFire") or n:find("VoxelSmoke")) then return end
-        
+
         task.defer(function()
             if child.Parent and Config.Grenade.ZoneESP then _makeZone(child) end
         end)
@@ -14864,7 +14832,7 @@ SafeAddDropdown(PVGB, "PV_KillEffectType", {
         return d
     end)(),
     Callback=function(v)
-        
+
         if v == "Eclipse" then v = "EclipseHub" end
         Config.Visuals.KillEffectType = v
     end,
@@ -14893,7 +14861,7 @@ Config.Visuals.PlayerChamsInWeapons = (Config.Visuals.PlayerChamsInWeapons ~= ni
 
 Config.Visuals.GlassFX        = Config.Visuals.GlassFX        or false
 Config.Visuals.GlassFXColor   = Config.Visuals.GlassFXColor   or Color3.fromRGB(85, 190, 255)
-Config.Visuals.GlassFXOpacity = 0.94 
+Config.Visuals.GlassFXOpacity = 0.94
 PVGB:AddToggle("PV_GlassFX", { Text = "GLASS EFFECT", Default = false,
     Callback = function(v)
         Config.Visuals.GlassFX = v and true or false
@@ -14911,9 +14879,9 @@ do
     local LP         = Players.LocalPlayer
     local ATTR       = "ECLIPSE_HUBDeadHL"
 
-    local dead    = {}   
-    local tracked = {}   
-    local hooked  = {}   
+    local dead    = {}
+    local tracked = {}
+    local hooked  = {}
 
     local function _cleanup(char)
         dead[char]    = nil
@@ -14946,7 +14914,7 @@ do
         if plr.Character then _hookChar(plr.Character) end
         connectSignal(plr.CharacterAdded:Connect(function(c)
             if not scriptRunning then return end
-            
+
             for c2,_ in pairs(tracked) do
                 if c2 ~= c and c2:IsDescendantOf(game) == false then _cleanup(c2) end
             end
@@ -14970,7 +14938,7 @@ do
             end
             return
         end
-        
+
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= LP and plr.Character then
                 local hum = plr.Character:FindFirstChildOfClass("Humanoid")
@@ -14978,7 +14946,7 @@ do
                 if not hooked[plr.Character] then _hookChar(plr.Character) end
             end
         end
-        
+
         for char, _ in pairs(dead) do
             if char and char.Parent then
                 local h = tracked[char]
@@ -15004,7 +14972,7 @@ do
 end
 
 do
-    
+
     _G.ECLIPSE_HUBPlayerChamsClear = function() end
 end
 
@@ -15014,9 +14982,9 @@ do
     local LP         = Players.LocalPlayer
     local TAG        = "ECLIPSE_HUBGlassFX"
 
-    local touched  = {} 
-    local outlines = {} 
-    local shells   = {} 
+    local touched  = {}
+    local outlines = {}
+    local shells   = {}
 
     local function _snapshot(p)
         if touched[p] then return end
@@ -15108,7 +15076,7 @@ do
     local function _clearAll()
         for p, _ in pairs(touched) do _restorePart(p) end
         _clearOutlines()
-        
+
         pcall(function()
             local char = LP and LP.Character
             if not char then return end
@@ -15118,7 +15086,7 @@ do
                 elseif d:IsA("Highlight") and tostring(d.Name):sub(1, 12) == "ECLIPSE_HUBGlass" then
                     pcall(function() d:Destroy() end)
                 elseif d:IsA("BasePart") and d.Transparency == 1 and d.LocalTransparencyModifier == 0 then
-                    
+
                     local n = tostring(d.Name):lower()
                     if not (n == "head" or n:find("hair", 1, true) or n:find("hat", 1, true) or n:find("face", 1, true)) then
                         pcall(function()
@@ -15228,7 +15196,7 @@ do
         then
             return true
         end
-        
+
         local snap = touched[part]
         local origT = (snap and snap.Transparency) or part.Transparency
         if origT >= 0.98 and not part:FindFirstChildOfClass("SurfaceAppearance") and not part:FindFirstChildOfClass("SpecialMesh") then
@@ -15242,7 +15210,7 @@ do
     end
 
     local function _isWeaponDesc(part, stopAt)
-        
+
         if _hasWord(part.Name, weaponPartWords) then return true end
         local a = part
         local hasBody = _hasBodyHint(part, stopAt)
@@ -15254,10 +15222,10 @@ do
             if a:IsA("Model") then
                 local nm = _normName(a.Name)
                 if _hasWord(nm, weaponWords) then
-                    
+
                     return true
                 end
-                
+
                 local h = a:FindFirstChild("Handle")
                 if h and h:IsA("BasePart") and not hasBody then
                     return true
@@ -15271,7 +15239,7 @@ do
     local function _collectHosts()
         local hosts = {}
         local ch = LP and LP.Character
-        
+
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
         local lpDead = (hum == nil) or (hum.Health <= 0)
         if _G.ECLIPSE_HUBCPMActive then
@@ -15286,7 +15254,7 @@ do
         if cam then
             for _, top in ipairs(cam:GetChildren()) do
                 if top:IsA("Model") then
-                    
+
                     if _hostHasBodyHint(top) then hosts[#hosts + 1] = top end
                 end
             end
@@ -15322,7 +15290,7 @@ do
             if _insideClass(part, "Accessory") or _hasOverlayHint(part, host) then return false end
             return true
         end
-        
+
         if _isWeaponDesc(part, host) then return false end
         if _hasOverlayHint(part, host) then return false end
         if not _hasBodyHint(part, host) then return false end
@@ -15371,7 +15339,7 @@ do
             if next(touched) or next(outlines) then _clearAll() end
             return
         end
-        
+
         do
             local _ch  = LP and LP.Character
             local _hum = _ch and _ch:FindFirstChildOfClass("Humanoid")
@@ -15380,12 +15348,12 @@ do
                 return
             end
         end
-        
+
         if Config.Misc and Config.Misc.ThirdPerson then
             if next(touched) or next(outlines) or next(shells) then _clearAll() end
             return
         end
-        
+
         local col       = Config.Visuals.GlassFXColor   or Color3.fromRGB(85, 190, 255)
         local styleName = "Ghost"
         local st        = GLASS_STYLES[styleName] or GLASS_STYLES.Default
@@ -15627,7 +15595,7 @@ do
         p.Material = Enum.Material.Neon
         p.Color = col
         p.Size = Vector3.new(0.45, 0.45, 0.05)
-        
+
         local cam = Workspace.CurrentCamera
         if cam then
             p.CFrame = CFrame.new(hitPos, cam.CFrame.Position)
@@ -15665,7 +15633,7 @@ do
             else
                 _spawnCrosshair(hitPos, col, life)
             end
-            
+
             if style ~= "Square" then _spawnSquare(hitPos, col, life) end
         end)
     end
@@ -15724,7 +15692,7 @@ do
         if not mb1 then return end
         if not (Config and Config.Visuals and Config.Visuals.BulletImpact) then return end
         if os.clock() - lastLocal < 0.08 then return end
-        
+
         local ch = LP and LP.Character
         local tool = ch and ch:FindFirstChildOfClass("Tool")
         local tn = tool and tool.Name and tool.Name:lower() or ""
@@ -15833,9 +15801,9 @@ RS.rv = RcsGB:AddSlider("RCS_V", { Text="VERTICAL",   Default=0.50, Min=0, Max=1
     Callback=function(v) RS.setV(v * 100) end })
 RS.rh = RcsGB:AddSlider("RCS_H", { Text="HORIZONTAL", Default=0.30, Min=0, Max=1, Rounding=2,
     Callback=function(v) RS.setH(v * 100) end })
-end)() 
+end)()
 
-;(function() 
+;(function()
 SkinGB = Tabs.Skins:AddLeftGroupbox("SKIN CHANGER")
 
 _skinLockedUI = {}
@@ -15844,7 +15812,7 @@ function _collectGuiInstances(obj, out, depth, seen)
     out = out or {}; depth = depth or 0; seen = seen or {}
     if type(obj) ~= "table" or depth > 3 or seen[obj] then return out end
     seen[obj] = true
-    
+
     local inst = rawget(obj, "Instance")
     if typeof(inst) == "Instance" and inst:IsA("GuiObject") then
         table.insert(out, inst)
@@ -15880,7 +15848,7 @@ function _uiSetDisabled(obj, disabled)
             end
         end
     end
-    
+
 end
 
 function _syncKnifeLock()
@@ -15976,18 +15944,18 @@ SafeAddDropdown(SkinGB, "Knife_Select", { Text="SELECT KNIFE",
         end
         if Config.Skins.SelectedKnife == v then return end
         Config.Skins.SelectedKnife = v
-        
+
     end })
 pcall(function() SkinGB:AddLabel("Applies on the next round", true) end)
 
 task.defer(_syncKnifeLock)
 
-SKIN_PREVIEW_DIST_MULT = 1.045  
-SKIN_PREVIEW_SPIN_DPS  = 45     
+SKIN_PREVIEW_DIST_MULT = 1.045
+SKIN_PREVIEW_SPIN_DPS  = 45
 SkinPreview = { gui=nil, frame=nil, vp=nil, vpCam=nil, model=nil,
     title=nil, focus=Vector3.new(), dist=4,
-    rotX = -10,   
-    rotY =   0 }  
+    rotX = -10,
+    rotY =   0 }
 
 function _skinPreviewBuild()
     if SkinPreview.gui then return end
@@ -16363,7 +16331,7 @@ function SetSkinPreview(weapon)
             SkinPreview.gui.Enabled = true
             return
         end
-        
+
     end
 
     local assetsFolder = ReplicatedSt:FindFirstChild("Assets")
@@ -16392,7 +16360,7 @@ function SetSkinPreview(weapon)
         clone:Destroy()
         clone = wrap
     end
-    
+
     do
         local hasPart = false
         for _, d in ipairs(clone:GetDescendants()) do
@@ -16465,7 +16433,7 @@ function SetSkinPreview(weapon)
         for _, p in ipairs(clone:GetDescendants()) do
             if p:IsA("BasePart") then p.CFrame = rot * p.CFrame end
         end
-        
+
         cf0, size = _visBBox(clone)
         if size.Magnitude == 0 then cf0, size = clone:GetBoundingBox() end
         offset = -cf0.Position
@@ -16474,23 +16442,23 @@ function SetSkinPreview(weapon)
         end
         SkinPreview.rotX = -10
         SkinPreview.rotY = 0
-        SkinPreview.spin = true  
+        SkinPreview.spin = true
     else
         SkinPreview.rotX = -10
         SkinPreview.spin = true
     end
     SkinPreview.focus = Vector3.new(0, 0, 0)
-    
+
     local maxDim = math.max(size.X, size.Y, size.Z)
     local mult
     if isKnife then
-        mult = 0.845  
+        mult = 0.845
     elseif maxDim > 6 then
-        mult = 0.945  
+        mult = 0.945
     elseif maxDim > 3 then
-        mult = 1.08   
+        mult = 1.08
     else
-        mult = 1.40   
+        mult = 1.40
     end
     SkinPreview.dist = math.max(2.0, maxDim * mult)
     if SkinPreview.title then
@@ -16627,7 +16595,7 @@ function CreateSkinDropdown(weapon, section)
                 pcall(_applySelectedGloveSkin)
             end
         end })
-    
+
     if Options and Options["Skin_"..weapon] then
         table.insert(_skinLockedUI, Options["Skin_"..weapon])
     end
@@ -16635,7 +16603,7 @@ end
 
 if SkinsFolder then
     local KGB = Tabs.Skins:AddLeftGroupbox("KNIVES")
-    
+
     for n in pairs(KNIVES) do
         if not (n == "T Knife" or n == "CT Knife") then
             CreateSkinDropdown(n, KGB)
@@ -16658,9 +16626,9 @@ else
 end
 
 task.defer(_syncKnifeLock)
-end)() 
+end)()
 
-;(function() 
+;(function()
 MoveGB = Tabs.Movement:AddLeftGroupbox("MOVEMENT")
 BhopToggle = MoveGB:AddToggle("Bhop_Toggle", {
     Text = "BUNNY HOP",
@@ -16696,7 +16664,6 @@ MoveGB:AddDropdown("AutoStop_Options", {
         Config.Movement.QuickStopOptions = list
     end,
 })
-
 
 Config.Combat = Config.Combat or {}
 task.spawn(function()
@@ -16753,10 +16720,14 @@ end)
 Config.Movement.StrafeSpeed = 1.5
 MoveGB:AddToggle("Jumpbug_Toggle", { Text="JUMPBUG", Default=false, Callback=function(v) Config.Movement.Jumpbug=v end })
 MoveGB:AddToggle("Edgebug_Toggle", { Text="EDGEBUG", Default=false, Callback=function(v) Config.Movement.Edgebug=v end })
+MoveGB:AddToggle("LongJump_Toggle", { Text="LONG JUMP", Default=false, Callback=function(v) Config.Movement.LongJump=v end })
+    :AddKeyPicker("LongJump_Key", { Default="X", SyncToggleState=true, Mode="Toggle", Text="Long Jump" })
+MoveGB:AddToggle("PixelSurf_Toggle", { Text="WALL SURF", Default=false, Callback=function(v) Config.Movement.PixelSurf=v end })
+    :AddKeyPicker("PixelSurf_Key", { Default="B", SyncToggleState=true, Mode="Toggle", Text="Wall Surf" })
 
 MoveGB:AddToggle("TP_Toggle", { Text="THIRD PERSON", Default=false, Callback=function(v)
     Config.Misc.ThirdPerson = v and true or false
-    
+
     pcall(function() if _G.ECLIPSE_HUBCPMClear     then _G.ECLIPSE_HUBCPMClear()     end end)
     pcall(function() if _G.ECLIPSE_HUBGlassFXClear then _G.ECLIPSE_HUBGlassFXClear() end end)
     if v then
@@ -16770,7 +16741,7 @@ MoveGB:AddToggle("TP_Toggle", { Text="THIRD PERSON", Default=false, Callback=fun
         end)
     else
         pcall(function() if _G.ECLIPSE_HUBTPDisable then _G.ECLIPSE_HUBTPDisable() end end)
-        
+
         task.delay(0.1, function() pcall(function() if _G.ECLIPSE_HUBGlassFXClear then _G.ECLIPSE_HUBGlassFXClear() end end) end)
     end
 end })
@@ -16924,7 +16895,6 @@ task.spawn(function()
     end
 end)
 
-
 task.spawn(function()
     while scriptRunning do
         pcall(function()
@@ -16941,9 +16911,9 @@ end)
 Config.Skins.ViewModelEnabled = false
 
 Config.Misc = Config.Misc or {}
-end)() 
+end)()
 
-;(function() 
+;(function()
 MiscGB = Tabs.Misc:AddLeftGroupbox("MISC")
 
 do
@@ -16964,9 +16934,9 @@ do
         Config.Misc.AutoSkillPart     = Config.Misc.AutoSkillPart or "Head"
         ASGB:AddSlider("AS_Distance", { Text = "DISTANCE", Default = Config.Misc.AutoSkillDistance, Min = 0, Max = 600, Rounding = 0, Suffix = "m",
             Callback = function(v) Config.Misc.AutoSkillDistance = v end })
-        
+
         Config.Misc.SilentAim         = false
-        Config.Misc.SilentAimTrigger  = false 
+        Config.Misc.SilentAimTrigger  = false
         Config.Misc.AutoSkillChangeWeapon = false
     end
     Config.Misc.AutoSkillRespectBuy = true
@@ -17053,7 +17023,6 @@ do
         })
     end
 
-
     Config.Misc.NoCamRecoil = Config.Misc.NoCamRecoil or false
     do
         local CC, OrigKick, OrigSet
@@ -17082,10 +17051,10 @@ do
             end,
         })
     end
-    
+
     Config.Misc.FireRateMult = Config.Misc.FireRateMult or 0.0
     do
-        local _FR_CACHE = {}   
+        local _FR_CACHE = {}
         local _FR_INIT  = false
         local _FR_HOOKED = false
 
@@ -17167,7 +17136,7 @@ do
     local _mirrorClone, _mirrorSourceName, _mirrorSourceRef, _mirrorRootRel, _mirrorLastSeen, _mirrorNextUnhide
     local _mirrorWeaponCache, _mirrorWeaponCacheAt = nil, 0
     local _mirrorOffset
-    
+
     local _MIRROR_ROT_LONG   = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
     local _MIRROR_ROT_PISTOL = CFrame.Angles(math.rad(-90), 0, math.rad(2))
     local _MIRROR_ROT_KNIFE  = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
@@ -17175,7 +17144,7 @@ do
     local _MIRROR_OFFSET_LONG   = CFrame.new(0.12, -0.10, -0.28) * _MIRROR_ROT_LONG
     local _MIRROR_OFFSET_SNIPER = CFrame.new(0.14, -0.08, -0.42) * _MIRROR_ROT_LONG
     local _MIRROR_OFFSET_SHOTGUN= CFrame.new(0.12, -0.10, -0.34) * _MIRROR_ROT_LONG
-    
+
     local _MIRROR_ROT_SMG       = CFrame.Angles(math.rad(-90), math.rad(90), 0)
     local _MIRROR_OFFSET_SMG    = CFrame.new(0.11, -0.09, -0.27) * _MIRROR_ROT_SMG
     local _MIRROR_OFFSET_HEAVY  = CFrame.new(0.14, -0.12, -0.34) * _MIRROR_ROT_LONG
@@ -17194,7 +17163,7 @@ do
         ["XM1014"]         = _MIRROR_OFFSET_SHOTGUN,
         ["MAG-7"]          = _MIRROR_OFFSET_SHOTGUN,
         ["Sawed-Off"]      = _MIRROR_OFFSET_SHOTGUN,
-        
+
         ["MP9"]            = _MIRROR_OFFSET_SMG,
         ["MAC-10"]         = _MIRROR_OFFSET_SMG,
         ["MP7"]            = _MIRROR_OFFSET_SMG,
@@ -17437,9 +17406,6 @@ do
         return Vector3.new(0.07, -0.07, -0.22)
     end
 
-    -- Automatic weapon alignment: figures out which local axis of the model is the
-    -- barrel and which one points up, so every weapon lands in the hand pointing
-    -- forward without needing a hand made rotation table.
     local function _computeMirrorAlign(model, root)
         local okAll, result = pcall(function()
             local rcf   = root.CFrame
@@ -17483,7 +17449,6 @@ do
                 if i == 1 then return v.X elseif i == 2 then return v.Y else return v.Z end
             end
 
-            -- barrel points to the thinner half of the longest axis
             local fSign = 1
             do
                 local pos, posN, neg, negN = 0, 0, 0, 0
@@ -17504,7 +17469,6 @@ do
                 end
             end
 
-            -- up is the half that carries the long receiver/barrel, not the grip
             local uSign = 1
             do
                 local pos, neg = 0, 0
@@ -17686,8 +17650,7 @@ do
             _mirrorWeaponCacheAt = now
         end
         if not weapon then
-            -- keep the mirrored weapon welded to the hand even when the
-            -- viewmodel momentarily disappears (idle / standing still)
+
             if _mirrorClone and _mirrorClone.Parent then
                 _positionMirror(hand)
                 return
@@ -18030,9 +17993,9 @@ end
 
 do
     local RunS = game:GetService("RunService")
-    
-    local _highlights = {}   
-    local _cache      = {}   
+
+    local _highlights = {}
+    local _cache      = {}
     local _visualCache = setmetatable({}, { __mode = "k" })
     local _whShells   = setmetatable({}, { __mode = "k" })
     local function _clearWHShell(part)
@@ -18161,7 +18124,7 @@ do
 
     local function _clearAll()
         for m,_ in pairs(_highlights) do _clearOne(m) end
-        
+
         for p,_ in pairs(_cache) do _restore(p) end
         _cache = {}
         for inst,_ in pairs(_visualCache) do _restoreVisual(inst) end
@@ -18345,7 +18308,7 @@ do
            or n:find("bound", 1, true) or n:find("bbox", 1, true) then
             return false
         end
-        
+
         local origTr = _cache[part] and _cache[part].tr or part.Transparency
         if origTr >= 0.98 and not part:FindFirstChildOfClass("SpecialMesh")
            and not part:IsA("MeshPart") and not part:FindFirstChildOfClass("SurfaceAppearance") then
@@ -18367,7 +18330,6 @@ do
         Ghost = { mat = Enum.Material.ForceField, refl = 0.00, partTr = 1.00, clearTex = true,
                   shell = true, shellMat = Enum.Material.ForceField, shellT = 0.15, shellScale = 1.004 },
     }
-
 
     local WH_SHELL_NAME = "ECLIPSE_HUBWHGhostShell"
 
@@ -18419,9 +18381,6 @@ do
         end
     end
 
-
-
-
     local function _applyChams(model, color, inten)
         if not model or not model.Parent then return end
         local rec = _highlights[model]
@@ -18440,13 +18399,10 @@ do
             partTr = 1.00
         end
 
-
         do
             local old = model:FindFirstChild("ECLIPSE_HUBWHGhostFF")
             if old then pcall(function() old:Destroy() end) end
         end
-
-
 
         local seen = {}
         for _, part in ipairs(model:GetDescendants()) do
@@ -18544,22 +18500,22 @@ end
 do
     local ABGB = Tabs.Misc:AddRightGroupbox("AUTO SHOP")
     local AUTOBUY_ITEMS = {
-        
+
         "Kevlar","Kevlar + Helmet","Zeus x27","Defuse Kit",
-        
+
         "USP-S","Glock-18","R8 Revolver","P250","Five-SeveN","Tec-9",
         "CZ75-Auto","Desert Eagle","Dual Berettas","P2000",
-        
+
         "MP9","MAC-10","MP7","UMP-45","P90","PP-Bizon","MP5-SD",
-        
+
         "Nova","Sawed-Off","XM1014","MAG-7","M249","Negev",
-        
+
         "FAMAS","Galil AR","M4A4","M4A1-S","AK-47","AWP","SSG 08","AUG","SG 553","SCAR-20","G3SG1",
-        
+
         "Flashbang","Smoke Grenade","HE Grenade","Incendiary Grenade","Molotov","Decoy Grenade",
     }
     table.sort(AUTOBUY_ITEMS)
-    
+
     Config.Misc.AutoBuy         = false
     Config.Misc.AutoBuyDelay    = tonumber(Config.Misc.AutoBuyDelay) or 0.15
     Config.Misc.AutoBuyOnlyAlive = true
@@ -18662,7 +18618,7 @@ do
         if not cam then return end
         local v = tonumber(Config.Misc.CustomFOV) or 0
         local base = OriginalCameraFOV or 70
-        
+
         if v and v > 0 and _isAlive() then
             local target = base + v
             if target > 120 then target = 120 end
@@ -18683,7 +18639,7 @@ do
     if _G.__ECLIPSE_HUBFOVConn  then pcall(function() _G.__ECLIPSE_HUBFOVConn:Disconnect() end)  end
     if _G.__ECLIPSE_HUBFOVConn2 then pcall(function() _G.__ECLIPSE_HUBFOVConn2:Disconnect() end) end
     pcall(function() RunService:UnbindFromRenderStep("ECLIPSE_HUBCustomFOV") end)
-    
+
     _G.__ECLIPSE_HUBFOVConn  = connectSignal(RunService.Heartbeat:Connect(_apply))
     _G.__ECLIPSE_HUBFOVConn2 = connectSignal(RunService.PreRender:Connect(_apply))
     pcall(function()
@@ -18941,9 +18897,6 @@ do
     end
     _ECLIPSE_HUB_ScopeFireHeld = _fireHeld
 
-
-
-
     local ScopeGB = Tabs.Misc:AddRightGroupbox("SCOPE", "crosshair")
     ScopeGB:AddToggle("RemoveScope_Toggle", { Text = "REMOVE SCOPE", Default = false,
         Tooltip = "Hides the sniper scope overlay while keeping the zoom.",
@@ -18961,8 +18914,6 @@ do
     ScopeGB:AddSlider("CustomScopeFov_Value", { Text = "SCOPE FOV", Default = Config.Misc.ScopeFovValue,
         Min = 5, Max = 120, Rounding = 0, Suffix = "°",
         Callback = function(v) Config.Misc.ScopeFovValue = tonumber(v) or 40 end })
-
-
 
 end
 
@@ -19154,7 +19105,7 @@ do
         [28] = "RightArm", [29] = "LeftArm",
         [30] = "LeftLeg", [31] = "RightLeg",
     }
-    
+
     local ACC_TYPE_FIELDS = {
         [8]  = "HatAccessory",       [41] = "HairAccessory",
         [42] = "FaceAccessory",      [43] = "NeckAccessory",
@@ -19198,7 +19149,7 @@ do
     _G.ECLIPSE_HUBCPMActive = false
 
     local function _loadAssetChildren(id)
-        
+
         local function _filterInstances(list)
             local out = {}
             for _, v in ipairs(list or {}) do
@@ -19255,7 +19206,7 @@ do
 
     local function _makeDescription(cfg)
         local desc = Instance.new("HumanoidDescription")
-        
+
         local bundleData  = cfg.bodyBundle    and _fetchBundle(cfg.bodyBundle)    or nil
         local overlayData = cfg.overlayBundle and _fetchBundle(cfg.overlayBundle) or nil
         local headData    = cfg.headBundle    and _fetchBundle(cfg.headBundle)    or nil
@@ -19328,7 +19279,7 @@ do
     end
 
     local function _applyR6Body(model, cfg)
-        
+
         for _, d in ipairs(model:GetDescendants()) do
             if d:IsA("CharacterMesh") then pcall(function() d:Destroy() end) end
             if d:IsA("SpecialMesh") and (d.Name == "ECLIPSE_HUBWomanMesh" or d.Name == "ECLIPSE_HUBWomanHead") then
@@ -19431,7 +19382,7 @@ do
 
     local function _applyLoadedAssets(model, cfg)
         local hum = model:FindFirstChildOfClass("Humanoid")
-        
+
         for _, id in ipairs(cfg.clothing or {}) do
             for _, obj in ipairs(_loadAssetChildren(id)) do
                 if obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("ShirtGraphic") then
@@ -19456,7 +19407,7 @@ do
                 end
             end
         end
-        
+
         local existing = {}
         for _, a in ipairs(model:GetDescendants()) do
             if a:IsA("Accessory") then existing[tostring(a.Name)] = true end
@@ -19484,7 +19435,7 @@ do
     end
 
     local function _buildR6Rig(cfg)
-        
+
         local model = Instance.new("Model")
         model.Name = "CPMRig"
         local function mk(name, size)
@@ -19524,7 +19475,7 @@ do
             a.Parent = parent
             return a
         end
-        
+
         torso.CFrame = CFrame.new(0, 0, 0)
         hrp.CFrame   = CFrame.new(0, 0, 0)
         head.CFrame  = CFrame.new(0,  1.5, 0)
@@ -19532,14 +19483,14 @@ do
         ra.CFrame    = CFrame.new( 1.5, 0, 0)
         ll.CFrame    = CFrame.new(-0.5,-2, 0)
         rl.CFrame    = CFrame.new( 0.5,-2, 0)
-        
+
         motor("RootJoint", hrp, torso, CFrame.new(), CFrame.new())
         motor("Neck", torso, head, CFrame.new(0, 1, 0), CFrame.new(0, -0.5, 0))
         motor("Left Shoulder", torso, la, CFrame.new(-1, 0.5, 0), CFrame.new(0.5, 0.5, 0))
         motor("Right Shoulder", torso, ra, CFrame.new(1, 0.5, 0), CFrame.new(-0.5, 0.5, 0))
         motor("Left Hip", torso, ll, CFrame.new(-0.5, -1, 0), CFrame.new(0, 1, 0))
         motor("Right Hip", torso, rl, CFrame.new(0.5, -1, 0), CFrame.new(0, 1, 0))
-        
+
         att(head,  "HatAttachment",        CFrame.new(0, 0.62, 0))
         att(head,  "HairAttachment",       CFrame.new(0, 0.62, 0))
         att(head,  "FaceFrontAttachment",  CFrame.new(0, 0, -0.51))
@@ -19564,7 +19515,7 @@ do
     local function _sanitizeGeneratedModel(model, cfg, keepCharacterMesh)
         if not model then return nil end
         model.Name = "CPMRig"
-        
+
         local hum = model:FindFirstChildOfClass("Humanoid")
         if hum then
             for _, acc in ipairs(hum:GetAccessories()) do pcall(function() acc:Destroy() end) end
@@ -19706,7 +19657,7 @@ do
             end
         end
         _hidden, _hiddenLTM = {}, {}
-        
+
         pcall(function() if _G.ECLIPSE_HUBGlassFXClear then _G.ECLIPSE_HUBGlassFXClear() end end)
         local ch = LocalPlayer and LocalPlayer.Character
         if ch then
@@ -19789,7 +19740,7 @@ do
         for _, p in ipairs(_getCPMHideList(ch, true)) do
             if p:IsA("BasePart") then
                 _hiddenLTM[p] = p.LocalTransparencyModifier
-                
+
                 pcall(function() p.LocalTransparencyModifier = 1 end)
             elseif p:IsA("Decal") or p:IsA("Texture") then
                 _hidden[p] = p.Transparency
@@ -19799,7 +19750,7 @@ do
     end
 
     local function _lpLimb(ch, dummyName)
-        
+
         local map = {
             ["HumanoidRootPart"] = { "HumanoidRootPart", "Torso", "UpperTorso" },
             ["Torso"]            = { "Torso", "UpperTorso", "LowerTorso", "HumanoidRootPart" },
@@ -19976,7 +19927,7 @@ do
                 end
             end
         end
-        
+
         for _, d in ipairs(model:GetDescendants()) do
             if d:IsA("Animator") or d:IsA("AnimationController") then
                 pcall(function() d:Destroy() end)
@@ -19999,10 +19950,10 @@ do
         local ch  = LocalPlayer.Character
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
         if not (ch and hum and hum.Health > 0) then return end
-        
+
         pcall(function() if _G.ECLIPSE_HUBSelfDummyClear then _G.ECLIPSE_HUBSelfDummyClear() end end)
         local model = _buildModel(name); if not model then return end
-        
+
         local cfg = OUTFITS[name]
         local hs = (cfg and tonumber(cfg.heightScale)) or 1.0
         if hs ~= 1.0 and model.ScaleTo then
@@ -20030,7 +19981,7 @@ do
             task.spawn(function()
                 if v == "Off" then
                     _clearOverlay()
-                    
+
                     if _G.ECLIPSE_HUBSelfDummyClear then pcall(_G.ECLIPSE_HUBSelfDummyClear) end
                     return
                 end
@@ -20042,14 +19993,14 @@ do
     connectSignal(LocalPlayer.CharacterAdded:Connect(function(ch)
         if not scriptRunning then return end
         if _syncConn then pcall(function() _syncConn:Disconnect() end); _syncConn = nil end
-        
+
         pcall(_clearOverlay)
         _overlay, _hidden, _hiddenLTM = nil, {}, {}
         _cpmActive = false
         _G.ECLIPSE_HUBCPMActive = false
         local v = Config.Misc.CustomPlayerModel
         local hum = ch:WaitForChild("Humanoid", 5)
-        
+
         if hum then
             connectSignal(hum.Died:Connect(function()
                 pcall(_clearOverlay)
@@ -20091,7 +20042,7 @@ do
                 local ch = LocalPlayer.Character
                 for _, p in ipairs(_getCPMHideList(ch)) do
                     if p:IsA("BasePart") then
-                        
+
                         if _hiddenLTM[p] == nil then
                             _hiddenLTM[p] = p.LocalTransparencyModifier
                         end
@@ -20330,7 +20281,7 @@ task.spawn(function()
             local attrCount
             pcall(function() attrCount = LocalPlayer:GetAttribute("Spectators") end)
             local count = math.max(#names, tonumber(attrCount) or 0)
-            
+
             while #names < count do table.insert(names, "Spectator #"..(#names+1)) end
             _specSetNames(names)
 
@@ -20407,10 +20358,10 @@ task.spawn(function()
     end
 end)
 
-end)() 
-end)() 
+end)()
+end)()
 
-;(function() 
+;(function()
 GenGB = Tabs.General:AddLeftGroupbox("MENU")
 
 GenGB:AddButton({ Text="Copy Discord",   Func=function() copyToClipboard(EclipseHub.Discord) end })
@@ -20453,7 +20404,7 @@ function _pickServer()
     elseif Config.ServerHop.Mode == "Least Players" then
         table.sort(pool, function(a,b) return (a.playing or 0) < (b.playing or 0) end)
     else
-        
+
         for i = #pool, 2, -1 do local j = math.random(i); pool[i], pool[j] = pool[j], pool[i] end
     end
     return pool[1]
@@ -20488,7 +20439,7 @@ pcall(function()
     RunService:BindToRenderStep("ECLIPSE_HUB_LP_HITBOX_STOMP", Enum.RenderPriority.Camera.Value + 7, function()
         local ch = LocalPlayer and LocalPlayer.Character
         if not ch then return end
-        
+
         for _, p in ipairs(ch:GetChildren()) do
             if p:IsA("BasePart") and (p.Name == "HumanoidRootPart" or _isHelperName(p.Name)) then
                 if p.LocalTransparencyModifier ~= 1 then
@@ -20496,7 +20447,7 @@ pcall(function()
                 end
             end
         end
-        
+
         for _, d in ipairs(ch:GetDescendants()) do
             if d:IsA("BasePart") and _isHelperName(d.Name) then
                 if d.LocalTransparencyModifier ~= 1 then
@@ -20507,7 +20458,7 @@ pcall(function()
     end)
 end)
 
-end)() 
+end)()
 
 ;(function()
 
@@ -20540,7 +20491,6 @@ do
         return name
     end
 
-
     local cfgDD
     cfgDD = SafeAddDropdown(CfgGB, "Cfg_List", {
         Text = "CONFIG", Values = _listConfigs(), Default = nil,
@@ -20553,7 +20503,7 @@ do
     local function _refresh()
         pcall(function() if cfgDD and cfgDD.SetValues then cfgDD:SetValues(_listConfigs()) end end)
     end
-    
+
     local function _combinedSave()
         local nlCfg  = ""
         pcall(function() nlCfg = NLLib:GetConfig() or "" end)
@@ -20581,14 +20531,13 @@ do
             elseif decoded.NL and decoded.NL ~= "" then
                 pcall(function() NLLib:LoadConfig(decoded.NL) end)
             end
-            
+
             pcall(function() _ecfgApplyColorsAndKeys(decoded) end)
             task.delay(0.4, function() pcall(function() _ecfgApplyColorsAndKeys(decoded) end) end)
         else
             pcall(function() NLLib:LoadConfig(raw) end)
         end
     end
-
 
     CfgGB:AddButton({ Text = "Create", Func = function()
         local name = _cfgClean(currentInput)
@@ -20612,7 +20561,7 @@ do
         if not selectedName then Library:Notify({Title="Configs", Description="Select a config.", Time=3}); return end
         local name = _cfgClean(selectedName)
         Library:Notify({Title="Configs", Description="Loading <b>"..name.."</b>...", Time=2})
-        
+
         task.spawn(function()
             ECLIPSE_HUBYield()
             local data
@@ -20632,7 +20581,7 @@ do
                     local ok = pcall(function()
                         local ec = HttpService:JSONDecode(decoded.EclipseHub)
                         _ECLIPSE_HUBAutoConfig.loaded = ec
-                        _ecfgApplyLoadedControls()   
+                        _ecfgApplyLoadedControls()
                     end)
                     okAll = okAll and ok
                     ECLIPSE_HUBYield()
@@ -20641,7 +20590,7 @@ do
                     okAll = okAll and ok
                     ECLIPSE_HUBYield()
                 end
-                
+
                 pcall(function() _ecfgApplyColorsAndKeys(decoded) end)
                 ECLIPSE_HUBYield()
                 task.delay(0.4, function() pcall(function() _ecfgApplyColorsAndKeys(decoded) end) end)
@@ -20649,7 +20598,6 @@ do
                 local ok = pcall(function() NLLib:LoadConfig(data) end)
                 okAll = okAll and ok
             end
-
 
             Library:Notify({
                 Title="Configs",
@@ -20665,7 +20613,7 @@ do
     end })
     CfgGB:AddButton({ Text = "Refresh", Func = _refresh })
 end
-end)() 
+end)()
 
 Library:OnUnload(function()
     scriptRunning = false
@@ -20678,15 +20626,15 @@ end)
 task.spawn(function()
     local screen = Library.ScreenGui; if not screen then return end
     local main = screen:FindFirstChild("Main", true); if not main then return end
-    
+
     local bar = Instance.new("Frame")
     bar.Name = "ECLIPSE_HUBAccent"
     bar.AnchorPoint = Vector2.new(0.5, 0)
-    
-    bar.Position = UDim2.new(0.5, 0, 0, 48) 
-    
+
+    bar.Position = UDim2.new(0.5, 0, 0, 48)
+
     bar.Size = UDim2.new(1, -1, 0, 2)
-    
+
     bar.BorderSizePixel = 0
     bar.BackgroundColor3 = Color3.fromRGB(180, 100, 255)
     bar.ZIndex = 1
@@ -20704,7 +20652,7 @@ task.spawn(function()
             ColorSequenceKeypoint.new(1.00, shift(0.94, 2.0)),
         }
     end
-    
+
     connectSignal(RunService.RenderStepped:Connect(function()
         grad.Color = makeSeq(tick())
     end))
@@ -20763,7 +20711,7 @@ function revealWindow()
 end
 
 function showTermsModal(onAccept)
-    
+
     local BG_       = Color3.fromRGB(14, 12, 20)
     local PANEL_    = Color3.fromRGB(22, 18, 32)
     local STROKE_   = Color3.fromRGB(60, 40, 100)
@@ -20786,7 +20734,7 @@ function showTermsModal(onAccept)
 
     local glow = Instance.new("ImageLabel", dim)
     glow.BackgroundTransparency = 1
-    glow.Image = "rbxassetid://5028857084" 
+    glow.Image = "rbxassetid://5028857084"
     glow.ImageColor3 = ACC_
     glow.ImageTransparency = 1
     glow.AnchorPoint = Vector2.new(0.5,0.5)
@@ -20881,7 +20829,7 @@ function showTermsModal(onAccept)
     local checkRow = Instance.new("Frame", card)
     checkRow.BackgroundTransparency = 1
     checkRow.AnchorPoint = Vector2.new(0.5, 1)
-    checkRow.Position = UDim2.new(0.5, 0, 1, 20) 
+    checkRow.Position = UDim2.new(0.5, 0, 1, 20)
     checkRow.Size = UDim2.new(0, 300, 0, 34)
     checkRow.ZIndex = 8
 
@@ -20898,7 +20846,7 @@ function showTermsModal(onAccept)
     mark.AnchorPoint = Vector2.new(0.5, 0.5)
     mark.Position = UDim2.fromScale(0.5, 0.5)
     mark.Size = UDim2.fromScale(0, 0)
-    mark.Image = "rbxassetid://6031094667" 
+    mark.Image = "rbxassetid://6031094667"
     mark.ImageColor3 = Color3.fromRGB(255, 255, 255)
 
     local cLbl = Instance.new("TextLabel", checkRow)
@@ -20915,7 +20863,7 @@ function showTermsModal(onAccept)
     local T = TweenService
 
     task.spawn(function()
-        
+
         T:Create(dim, TweenInfo.new(0.85, Enum.EasingStyle.Sine), { BackgroundTransparency = 0.32 }):Play()
 
         T:Create(glow, TweenInfo.new(1.55, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
@@ -21408,10 +21356,10 @@ function showWarningModal(titleText, bodyText, acceptText, declineText, onAccept
     end))
 end
 
-EX = {} 
+EX = {}
 EX.originalSoundIds = {}
 
-;(function() 
+;(function()
     local Lighting = game:GetService("Lighting")
     EX.Lighting = Lighting
     local ExtrasParent = Library.ScreenGui or CoreGui
@@ -21476,10 +21424,10 @@ EX.originalSoundIds = {}
         makeDraggable(frame)
         return frame
     end
-end)() 
+end)()
 
 ;(function()
-    
+
     local function getKL() return NLLib and NLLib.KeyList end
     EX.KBRows = {}
 
@@ -21527,7 +21475,7 @@ end)()
         s = s:gsub("^Enum%.KeyCode%.", ""):gsub("^Enum%.UserInputType%.", "")
         return s
     end
-    
+
     local KB_TOGGLE = {
         AS_Key             = "AS_Enable",
         AutoSkill_Key      = "AS_Enable",
@@ -21550,7 +21498,7 @@ end)()
         Trigger_Key        = "Trigger_Toggle",
         ESP_Key            = "ESP_Toggle",
     }
-    
+
     local KB_CFG = {
         AS_Key             = function() return Config.Misc.AutoSkill end,
         AutoSkill_Key      = function() return Config.Misc.AutoSkill end,
@@ -21604,7 +21552,7 @@ end)()
         if key == "" or key == "None" or key == "?" then removeRow(name); return end
         local label = labelFor(name, opt)
         local row = EX.KBRows[name]
-        
+
         if row and row.__key ~= key then
             removeRow(name); row = nil
         end
@@ -21635,7 +21583,7 @@ end)()
                             pcall(upsert, name, opt)
                         end
                     end
-                    
+
                     for name, _ in pairs(EX.KBRows) do
                         if not seen[name] then removeRow(name) end
                     end
@@ -21652,13 +21600,13 @@ EX.applyThirdPerson = function() end
 
 EX.ChatFrame = nil
 
-;(function() 
-    
-    EX.WarnLines = {}     
-    EX.WarnRing = nil     
-    EX.WarnRingGlow = nil 
-    EX.WarnDot = nil      
-    EX.WarnLabel = nil    
+;(function()
+
+    EX.WarnLines = {}
+    EX.WarnRing = nil
+    EX.WarnRingGlow = nil
+    EX.WarnDot = nil
+    EX.WarnLabel = nil
     if GPD_OK then
         pcall(function()
             local ring = Drawing.new("Circle")
@@ -21697,7 +21645,7 @@ EX.ChatFrame = nil
         return { outer = outer, inner = inner }
     end
     local activeWarn = {}
-    EX.WarnActive = activeWarn 
+    EX.WarnActive = activeWarn
     local function clearWarn()
         for _, p in ipairs(activeWarn) do
             pcall(function() p.outer.Visible=false; p.inner.Visible=false end)
@@ -21731,7 +21679,7 @@ EX.ChatFrame = nil
         pcall(function() rp.FilterDescendantsInstances = filter end)
         for _ = 1, math.floor(4.0 / dts) do
             vel = vel + grav * dts
-            vel = vel * (1 - 0.02) 
+            vel = vel * (1 - 0.02)
             local np = pos + vel * dts
             local hit = Workspace:Raycast(pos, np - pos, rp)
             if hit then
@@ -21746,7 +21694,7 @@ EX.ChatFrame = nil
         return pts
     end
 
-    EclipseHub._enemyGrenadeHolders = {}   
+    EclipseHub._enemyGrenadeHolders = {}
     task.spawn(function()
         while scriptRunning do
             if Config.Grenade.Warning and GPD_OK then
@@ -21782,7 +21730,7 @@ EX.ChatFrame = nil
             end
 
                 do
-                    
+
                 end
                 if false then
 
@@ -21813,7 +21761,7 @@ EX.ChatFrame = nil
 
                         local _velOk, _velMag = pcall(function() return obj.AssemblyLinearVelocity.Magnitude end)
                         local espMode = false
-                        
+
                         local velOk = (_velOk and _velMag and _velMag > 15) or espMode
                         if t and props and velOk then
                             local anc = obj.Parent
@@ -21881,7 +21829,7 @@ EX.ChatFrame = nil
                         if head then
                             local cf = head.CFrame
                             local look = cf.LookVector
-                            
+
                             local throwSpeed = 55
                             local startPos = cf.Position + look * 1.2 + Vector3.new(0, 0.8, 0)
                             local startVel = look * throwSpeed + Vector3.new(0, 8, 0)
@@ -21956,10 +21904,10 @@ EX.ChatFrame = nil
             task.wait(ES152.adaptiveInterval(0.12, 2))
         end
     end)
-end)() 
+end)()
 
-;(function() 
-    
+;(function()
+
     EX.SoundPresets = {
         ["Default"]         = { Id="", Volume=1, Pitch=1 },
         ["Electronic Ping"] = { Id="rbxasset://sounds/electronicpingshort.wav", Volume=1.75, Pitch=1.0 },
@@ -21971,7 +21919,7 @@ end)()
         ["Deep Thud"]       = { Id="rbxasset://sounds/impact_water.mp3", Volume=1.85, Pitch=0.7 },
         ["Kov Fire"]        = { Id="", Volume=6.0, Pitch=1.0 },
     }
-    
+
     task.spawn(function()
         local function _resolvePath(indices)
             local ok, inst = pcall(function()
@@ -22186,7 +22134,7 @@ end)()
         end
     end
     EX.SoundLoopAlive = true
-    
+
     task.spawn(function()
         while EX.SoundLoopAlive do
             task.wait(0.75)
@@ -22195,7 +22143,7 @@ end)()
     end)
 end)()
 
-;(function() 
+;(function()
     local ExtrasGB = Tabs.Misc:AddRightGroupbox("EXTRAS")
     ExtrasGB:AddToggle("KeybindList_Toggle", {
         Text="KEYBIND LIST", Default=false,
@@ -22238,7 +22186,7 @@ end)()
         pcall(function() EX.ChatFrame:Destroy() end)
         pcall(EX.restoreAllSounds)
     end)
-end)() 
+end)()
 
 ;(function()
 
@@ -22297,7 +22245,7 @@ end)()
             task.wait(0.5)
         end
     end)
-end)() 
+end)()
 
 ;(function()
     local PV = {}
@@ -22684,7 +22632,7 @@ end)()
         if LocalPlayer.Character then table.insert(ex, LocalPlayer.Character) end
         rp.FilterDescendantsInstances = ex
         rp.IgnoreWater = true
-        
+
         local candidates = {
             "Head","UpperTorso","LowerTorso","Torso","HumanoidRootPart",
             "LeftUpperArm","RightUpperArm","LeftLowerArm","RightLowerArm",
@@ -22726,7 +22674,7 @@ end)()
         f.ZIndex = 10
         f.Parent = sg
         local TS = game:GetService("TweenService")
-        local peak = 0.65 
+        local peak = 0.65
         TS:Create(f, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
             { BackgroundTransparency = peak }):Play()
         task.delay(0.10, function()
@@ -22766,7 +22714,7 @@ end)()
         if plr == LocalPlayer then return end
         if plr and IsAlly and IsAlly(plr) then return end
         if not _localIsAlive() then return end
-        
+
         local lethalAt = plr and (_lastLethalByLP[plr] or _lastLethalByUid[tonumber(plr.UserId)])
         local dmgAt    = plr and _lastDamagedByLP[plr]
         local ok = (lethalAt and (tick()-lethalAt) < 5.0) or (dmgAt and (tick()-dmgAt) < 1.5)
@@ -22842,7 +22790,7 @@ end)()
                             math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255), target:sub(i, i))
                     end
                     rich = "<b>" .. table.concat(buf) .. "</b>"
-                else 
+                else
                     local h = (t * 0.6) % 1
                     local c = Color3.fromHSV(h, 1, 1)
                     local hex = string.format("#%02X%02X%02X",
@@ -22850,7 +22798,7 @@ end)()
                     rich = string.format('<b><font color="%s">%s</font></b>', hex, target)
                 end
                 local finalTag = iconTag .. rich
-                
+
                 local safeTag = finalTag:gsub("%%", "%%%%")
                 local safeName = lpName:gsub("(%W)", "%%%1")
                 for d, orig in pairs(originals) do
@@ -22878,7 +22826,7 @@ end)()
         ["Bell"]     = "rbxassetid://12222030",
         ["Pop"]      = "rbxassetid://5852261334",
     }
-    local function _playKillSound() end 
+    local function _playKillSound() end
 
     pcall(function()
         local Rem = require(ReplicatedSt.Database.Security.Remotes)
@@ -22957,14 +22905,14 @@ end)()
                     if Config.Logging.Enabled then
                         if didLPDamage then
                             local vname = vplr and vplr.Name or (vchar and vchar.Name) or (typeof(victim)=="Instance" and victim.Name) or tostring(victim)
-                            
+
                             local bodyPart
                             if typeof(victim) == "Instance" and victim:IsA("BasePart") then bodyPart = victim.Name end
                             if not bodyPart and type(dmg) == "table" then
                                 bodyPart = dmg.HitPart or dmg.hitPart or dmg.Part or dmg.part or dmg.Bone or dmg.bone
                                 if typeof(bodyPart) == "Instance" then bodyPart = bodyPart.Name end
                             end
-                            
+
                             local wname
                             pcall(function()
                                 local aplr = typeof(attacker)=="Instance" and (attacker:IsA("Player") and attacker or Players:GetPlayerFromCharacter(attacker.Parent) or Players:GetPlayerFromCharacter(attacker)) or nil
@@ -23142,7 +23090,7 @@ end)()
             if not (child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") and (child:FindFirstChild("Head") or child:FindFirstChild("UpperTorso"))) then return end
             if _killEffectDone[child] then return end
             if not _localIsAlive() then return end
-            
+
             local vplr = Players:GetPlayerByUserId(tonumber(child:GetAttribute("UserId")) or -1)
                        or Players:FindFirstChild(child.Name)
             if vplr == LocalPlayer then return end
@@ -23229,7 +23177,7 @@ task.spawn(function()
                 })
             end
         end)
-        task.wait(180) 
+        task.wait(180)
     end
 end)
 
@@ -23303,7 +23251,7 @@ end)
 
     local function _icEquipped()
         local IC = _getInventoryController(); if not IC then return nil end
-        
+
         local candidates = {
             rawget(IC, "EquippedWeapon"),
             rawget(IC, "Equipped"),
@@ -23330,7 +23278,7 @@ end)
     end
 
     local function _findEquippedWeapon()
-        
+
         local w = _icEquipped()
         if w then _weaponTable = w; return w end
 
@@ -23408,7 +23356,7 @@ end)
     _G.ECLIPSE_HUBAS_TryRefill    = _tryRefill
     _G.ECLIPSE_HUBAS_FindEquipped = _findEquippedWeapon
     _G.ECLIPSE_HUBAS_IsMelee      = _isMeleeWeapon
-    
+
     _G.ECLIPSE_HUBAS_SendKill     = function(pl, w) return _sendKill(pl, w) end
 
     local _bloodTemplate
@@ -23448,7 +23396,7 @@ end)
         task.delay(3, function() if clone then pcall(function() clone:Destroy() end) end end)
     end
 
-    local _shootRE          
+    local _shootRE
     local _seq = 0
 
     local function _findShootRE()
@@ -23551,9 +23499,9 @@ end)
         end
         if sent then
             pcall(_playBlood)
-            
+
             _G.__ECLIPSE_HUBSkipTracerUntil = tick() + 0.25
-            
+
         end
     end
 
@@ -23677,31 +23625,31 @@ end)
     }
 
     local T_SLOTS = {
-        
+
         ["Glock-18"]=1,["P2000"]=1,["USP-S"]=1,["P250"]=2,["Five-SeveN"]=3,["Tec-9"]=3,
         ["CZ75-Auto"]=4,["Dual Berettas"]=5,["Desert Eagle"]=6,["R8 Revolver"]=6,
-        
+
         ["MAC-10"]=1,["MP9"]=1,["MP7"]=2,["MP5-SD"]=2,["UMP-45"]=3,["P90"]=4,["PP-Bizon"]=5,
-        
+
         ["Nova"]=1,["Sawed-Off"]=2,["XM1014"]=3,["MAG-7"]=3,["M249"]=4,["Negev"]=5,
-        
+
         ["Galil AR"]=1,["FAMAS"]=1,["AK-47"]=2,["M4A4"]=2,["M4A1-S"]=2,["SG 553"]=3,["AUG"]=3,
         ["SSG 08"]=4,["AWP"]=5,["G3SG1"]=6,["SCAR-20"]=6,
-        
+
         ["Flashbang"]=1,["HE Grenade"]=2,["Smoke Grenade"]=3,["Molotov"]=4,["Incendiary Grenade"]=4,["Decoy Grenade"]=5,
     }
     local CT_SLOTS = {
-        
+
         ["USP-S"]=1,["P2000"]=1,["Glock-18"]=1,["P250"]=2,["Five-SeveN"]=3,["Tec-9"]=3,
         ["CZ75-Auto"]=4,["Dual Berettas"]=5,["Desert Eagle"]=6,["R8 Revolver"]=6,
-        
+
         ["MP9"]=1,["MAC-10"]=1,["MP7"]=2,["MP5-SD"]=2,["UMP-45"]=3,["P90"]=4,["PP-Bizon"]=5,
-        
+
         ["Nova"]=1,["MAG-7"]=2,["Sawed-Off"]=2,["XM1014"]=3,["M249"]=4,["Negev"]=5,
-        
+
         ["FAMAS"]=1,["Galil AR"]=1,["M4A4"]=2,["M4A1-S"]=2,["AK-47"]=2,["AUG"]=3,["SG 553"]=3,
         ["SSG 08"]=4,["AWP"]=5,["SCAR-20"]=6,["G3SG1"]=6,
-        
+
         ["Flashbang"]=1,["HE Grenade"]=2,["Smoke Grenade"]=3,["Incendiary Grenade"]=4,["Molotov"]=4,["Decoy Grenade"]=5,
     }
 
@@ -23780,7 +23728,7 @@ end)
                 pcall(function() re[method](re, { Equipment = false, Path = path, Name = item }) end)
             end
         end
-        
+
         pcall(function() re[method](re, { Equipment = false, Name = item }) end)
         return true
     end
@@ -23868,7 +23816,7 @@ end)
             while scriptRunning do
                 local rate = math.clamp(tonumber(Config.Misc.AutoSkillSpeed) or 6, 1, 8)
                 task.wait(ES152.adaptiveInterval(1 / rate, 1.6))
-                
+
                 _lockedTarget = nil
             end
         end)
@@ -24113,7 +24061,7 @@ end)()
         if not S.enabled then return false end
         local ch = LP and LP.Character
         if not ch then return false end
-        if _isHeldMelee() then return false end  
+        if _isHeldMelee() then return false end
         local hum = ch:FindFirstChildOfClass("Humanoid")
         if not (hum and hum.Health > 0) then return false end
         return true
@@ -24193,7 +24141,7 @@ end)()
             beam.Attachment0 = a0
             beam.Attachment1 = a1
             beam.Color = ColorSequence.new(baseColor)
-            
+
             beam.Width0 = 0.05
             beam.Width1 = 0.012
             beam.LightEmission = 1
@@ -24278,7 +24226,7 @@ end)()
 
         local origin = Camera.CFrame.Position
         local dir
-        
+
         local silentTgt = _G.ECLIPSE_HUB_SILENT_TARGET
         if typeof(silentTgt) == "Instance" and silentTgt:IsA("BasePart") then
             dir = (silentTgt.Position - origin)
@@ -24610,7 +24558,6 @@ task.defer(function() pcall(function()
             _tracerImpactBox(to, col, dur)
         end
 
-
         local proxy = Instance.new("NumberValue"); proxy.Value = 0; proxy.Parent = Workspace.Terrain
         local FADE_IN = 0.16
         local conn; conn = proxy.Changed:Connect(function(v)
@@ -24638,7 +24585,7 @@ task.defer(function() pcall(function()
         tw.Completed:Connect(function() if conn then conn:Disconnect() end; pcall(function() proxy:Destroy() end) end)
         tw:Play()
     end
-    
+
     _G.ECLIPSE_HUB_DrawTracer = drawTracer
 
     local _origLighting = {
@@ -24745,11 +24692,11 @@ task.defer(function() pcall(function()
             local lbl = Instance.new("TextLabel")
             lbl.Size = UDim2.new(1,0,1,0); lbl.BackgroundTransparency = 1
             lbl.Font = Enum.Font.GothamBold
-            lbl.TextSize = math.floor(baseSize * 0.6)     
+            lbl.TextSize = math.floor(baseSize * 0.6)
             lbl.TextStrokeTransparency = 0.6
             lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
             lbl.TextColor3 = isHead and Options.HVH_HM_Head.Value or Options.HVH_HM_Body.Value
-            lbl.TextTransparency = 1                     
+            lbl.TextTransparency = 1
             lbl.Text = tostring(dmg)
             lbl.Parent = bg
             local life = Options.HVH_HM_Life.Value
@@ -24757,10 +24704,10 @@ task.defer(function() pcall(function()
             task.spawn(function()
                 while tick() - t0 < life do
                     local t = (tick() - t0) / life
-                    
+
                     local pop = t < 0.2 and (t / 0.2) or 1
                     local eased = 1 - (1 - pop) * (1 - pop)
-                    local scale = 0.6 + eased * 0.4         
+                    local scale = 0.6 + eased * 0.4
                     lbl.TextSize = math.floor(baseSize * scale)
                     lbl.TextTransparency = math.max(0, 1 - eased * 3) + math.max(0, (t - 0.4) / 0.6)
                     bg.StudsOffset = Vector3.new(0, eased * 0.6 + math.max(0, (t - 0.4)) * 2, 0)
@@ -24782,7 +24729,7 @@ task.defer(function() pcall(function()
         Values = {'Neutral','Up','Down'}, Default = 'Neutral', Multi = false })
     AAGB:AddToggle("HVH_SpinYaw", { Text = "SPIN YAW", Default = true })
     AAGB:AddSlider("HVH_SpinSpeed",  { Text = "SPIN SPEED", Default = 180, Min = 10, Max = 1200, Rounding = 0 })
-    
+
     AAGB:AddSlider("HVH_PitchAmount",  { Text = "PITCH AMOUNT", Default = 58, Min = 0, Max = 80, Rounding = 0, Suffix = "°" })
 
     AAGB:AddDivider()
@@ -24817,9 +24764,9 @@ task.defer(function() pcall(function()
 
     do
         local RunS    = game:GetService("RunService")
-        local JOINT_C0 = setmetatable({}, { __mode = "k" }) 
-        local JOINT_CACHE = setmetatable({}, { __mode = "k" }) 
-        local HUM_AUTOROTATE = setmetatable({}, { __mode = "k" }) 
+        local JOINT_C0 = setmetatable({}, { __mode = "k" })
+        local JOINT_CACHE = setmetatable({}, { __mode = "k" })
+        local HUM_AUTOROTATE = setmetatable({}, { __mode = "k" })
         local AA_STATE = { char = nil, yawMode = nil, pitchMode = nil, spin = nil, baseYaw = 0, yawRad = 0, lastT = nil }
 
         local function _findMotor(char, motorName)
@@ -24902,7 +24849,7 @@ task.defer(function() pcall(function()
                 _restoreJoints(char)
                 return
             end
-            
+
             local sign = (pitchMode == "Up") and 1 or -1
             local rad = math.rad(amount) * sign
             for _, j in ipairs(_collectJoints(char)) do
@@ -25005,8 +24952,6 @@ task.defer(function() pcall(function()
     end
     _G.ECLIPSE_HUBHVH_PlaySound = playSound
 
-    -- unified shot-sound entry point (used by the RaycastModule.cast hook so
-    -- every real bullet plays sounds, exactly like tracers / hitmarkers)
     _G.ECLIPSE_HUB_ShotSound = function(kind, hum)
         if kind == "shoot" then
             if Toggles.HVH_ShootSound and Toggles.HVH_ShootSound.Value then
@@ -25118,7 +25063,7 @@ task.defer(function() pcall(function()
     local function isTargetVisible(origin, targetPart)
         if not targetPart then return false end
         local allowWB = (Config.Misc and Config.Misc.SilentAim) == true
-        
+
         if not allowWB then
             local ok, vis = pcall(IsVisible, targetPart)
             return ok and vis or false
@@ -25325,12 +25270,12 @@ task.defer(function() pcall(function()
         if akIsReloading then return end
         local id, wn = getWeaponIdAndName()
         if not id then return end
-        
+
         local eq = (type(_ECLIPSE_HUB_GetEquipped) == "function") and _ECLIPSE_HUB_GetEquipped() or nil
         if not eq then return end
         local rounds = tonumber(rawget(eq, "Rounds") or eq.Rounds)
-        if not rounds then return end 
-        if rounds <= 0 then return end 
+        if not rounds then return end
+        if rounds <= 0 then return end
         local stats = WeaponDB[wn]
         local fireRate = (stats and stats.FR) or 0.12
 
@@ -25374,7 +25319,7 @@ do
                 local old
                 old = hookfn(sh, function(self, ...)
                     local ret = { old(self, ...) }
-                    
+
                     task.defer(function()
                         local cam = workspace.CurrentCamera; if not cam then return end
                         local ch  = LocalPlayer and LocalPlayer.Character
@@ -25400,12 +25345,12 @@ do
                            and type(_G.ECLIPSE_HUBImpactFire) == "function" then
                             pcall(_G.ECLIPSE_HUBImpactFire, hitInst, hitPos)
                         end
-                        
+
                         if Toggles and Toggles.HVH_Tracers and Toggles.HVH_Tracers.Value
                            and type(_G.ECLIPSE_HUB_DrawTracer) == "function" then
                             pcall(_G.ECLIPSE_HUB_DrawTracer, origin, hitPos)
                         end
-                        
+
                         if hitInst and Toggles and Toggles.HVH_Hitmarker
                            and Toggles.HVH_Hitmarker.Value
                            and type(_G.ECLIPSE_HUBHVH_ShowHitmarker) == "function" then
@@ -25423,7 +25368,7 @@ do
                 end)
 
             end
-            
+
             local function scan()
                 local IC = _ECLIPSE_HUB_GetIC and _ECLIPSE_HUB_GetIC() or nil
                 if IC then
@@ -25450,9 +25395,6 @@ end
 
 end)()
 
--- ============================================================
--- MOTION GRAPH (velocity graph)
--- ============================================================
 ;(function()
     Config.Visuals = Config.Visuals or {}
     Config.Visuals.MotionGraph      = false
@@ -25628,20 +25570,15 @@ end)()
     })
 end)()
 
-
--- ============================================================
--- LONG JUMP + WALL SURF (preset, no sliders)
--- ============================================================
 ;(function()
     Config.Movement = Config.Movement or {}
-    Config.Movement.LongJump  = false
-    Config.Movement.PixelSurf = false
+    Config.Movement.LongJump  = Config.Movement.LongJump or false
+    Config.Movement.PixelSurf = Config.Movement.PixelSurf or false
 
     local UIS       = game:GetService("UserInputService")
     local RunSvc    = game:GetService("RunService")
     local Workspace = game:GetService("Workspace")
 
-    -- preset tuning (embedded, not exposed in the UI)
     local LJ_POWER, LJ_UP, LJ_CD = 78, 22, 0.35
     local WS_SPEED, WS_STICK, WS_RANGE, WS_FALL = 46, 14, 4.5, -4
 
@@ -25677,9 +25614,6 @@ end)()
         return dir.Unit
     end
 
-    ------------------------------------------------------------
-    -- LONG JUMP (fires automatically the moment you leave ground)
-    ------------------------------------------------------------
     local LJ = { last = 0, wasGrounded = true }
 
     local function _doLongJump(hrp)
@@ -25696,9 +25630,6 @@ end)()
         end)
     end
 
-    ------------------------------------------------------------
-    -- WALL SURF: cling to any nearby wall and slide along it
-    ------------------------------------------------------------
     local WS = { params = nil, attached = false }
 
     local function _wsParams(ch)
@@ -25713,7 +25644,6 @@ end)()
         return p
     end
 
-    -- looks around the player for the closest vertical surface
     local function _findWall(ch, hrp)
         local params = _wsParams(ch)
         local origin = hrp.Position
@@ -25755,7 +25685,6 @@ end)()
         local normal = hit.Normal
         local dir    = _moveDir(hrp)
 
-        -- project the wanted direction onto the wall plane so you glide along it
         local along = dir - normal * dir:Dot(normal)
         local vertical = 0
         if UIS:IsKeyDown(Enum.KeyCode.Space)
@@ -25784,9 +25713,6 @@ end)()
         end)
     end
 
-    ------------------------------------------------------------
-    -- MAIN LOOP
-    ------------------------------------------------------------
     RunSvc.Heartbeat:Connect(function()
         if not scriptRunning then return end
         if Config.GlobalEnable == false then return end
@@ -25808,22 +25734,4 @@ end)()
             end
         end)
     end)
-
-    ------------------------------------------------------------
-    -- UI (inside the existing MOVEMENT group, no extra groupboxes)
-    ------------------------------------------------------------
-    local GB = MoveGB
-    if GB then
-        GB:AddToggle("LongJump_Toggle", {
-            Text = "LONG JUMP", Default = false,
-            Tooltip = "Launches you forward every time you leave the ground.",
-            Callback = function(v) Config.Movement.LongJump = v and true or false end,
-        }):AddKeyPicker("LongJump_Key", { Default = "X", SyncToggleState = true, Mode = "Toggle", Text = "Long Jump" })
-
-        GB:AddToggle("PixelSurf_Toggle", {
-            Text = "WALL SURF", Default = false,
-            Tooltip = "Cling to any wall and surf along it to move around.",
-            Callback = function(v) Config.Movement.PixelSurf = v and true or false end,
-        }):AddKeyPicker("PixelSurf_Key", { Default = "B", SyncToggleState = true, Mode = "Toggle", Text = "Wall Surf" })
-    end
 end)()
