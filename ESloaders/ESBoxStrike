@@ -493,6 +493,31 @@ function _ECLIPSE_HUB_ShootEquipped()
     if type(shoot) ~= "function" then return false end
     return (pcall(shoot, w))
 end
+
+_ECLIPSE_HUB_CachedWeapon = nil
+task.spawn(function()
+    while true do
+        task.wait(1)
+        local ok, w = pcall(_ECLIPSE_HUB_GetEquipped)
+        _ECLIPSE_HUB_CachedWeapon = (ok and type(w) == "table") and w or nil
+    end
+end)
+
+function _ECLIPSE_HUB_ShootCached()
+    local weapon = _ECLIPSE_HUB_CachedWeapon
+    if not weapon then
+        local ok, w = pcall(_ECLIPSE_HUB_GetEquipped)
+        weapon = (ok and type(w) == "table") and w or nil
+        _ECLIPSE_HUB_CachedWeapon = weapon
+    end
+    if not weapon then return false end
+    if not _wField(weapon, "IsEquipped") then return false end
+    local rounds = tonumber(_wField(weapon, "Rounds"))
+    if not rounds or rounds <= 0 then return false end
+    local shoot = _wField(weapon, "shoot") or _wField(weapon, "Shoot")
+    if type(shoot) ~= "function" then return false end
+    return (pcall(shoot, weapon))
+end
 task.spawn(function()
     
     task.wait(12)
@@ -8489,11 +8514,10 @@ function updateTriggerBot()
     if not fire then return end
 
     local function _doClick()
-        if type(_ECLIPSE_HUB_ShootEquipped) == "function" then
-            local ok = _ECLIPSE_HUB_ShootEquipped()
-            if ok and isNoSpread then
-                task.delay(0.05, function() pcall(_ECLIPSE_HUB_ShootEquipped) end)
-            end
+        if type(_ECLIPSE_HUB_ShootCached) ~= "function" then return end
+        local ok = _ECLIPSE_HUB_ShootCached()
+        if ok and isNoSpread then
+            task.delay(0.05, function() pcall(_ECLIPSE_HUB_ShootCached) end)
         end
     end
     local function _tryFireOnPlayer(pl)
