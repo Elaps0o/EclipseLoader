@@ -698,13 +698,26 @@ end
 
 function _ECLIPSE_HUB_ICReady()
     if not _ECLIPSE_HUB_IC_ALLOW then return false end
-    if (tick() - (_ECLIPSE_HUB_LOADTIME or 0)) < 6 then return false end
+    if (tick() - (_ECLIPSE_HUB_LOADTIME or 0)) < 15 then return false end
     local ok = pcall(function() return game:IsLoaded() end)
     if not ok or not game:IsLoaded() then return false end
     local ch = LocalPlayer and LocalPlayer.Character
     if not ch or not ch:FindFirstChildOfClass("Humanoid") then return false end
+    local hum = ch:FindFirstChildOfClass("Humanoid")
+    if hum.Health <= 0 then return false end
+
+    local gameReady = false
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not pg then return end
+        for _, n in ipairs({ "Ammo", "Hotbar", "Inventory", "Crosshair", "Killfeed", "Gameplay" }) do
+            if pg:FindFirstChild(n, true) then gameReady = true break end
+        end
+    end)
+    if not gameReady then return false end
     return true
 end
+
 
 local _ECLIPSE_HUB_IC_Cached
 local function _ECLIPSE_HUB_GetIC()
@@ -783,17 +796,151 @@ function _ECLIPSE_HUB_ShootEquipped()
 end
 
 _ECLIPSE_HUB_CachedWeapon = nil
-task.spawn(function()
-    while true do
-        task.wait(1)
-        if _ECLIPSE_HUB_IC_ALLOW and _ECLIPSE_HUB_ICReady() then
-            local ok, w = pcall(_ECLIPSE_HUB_GetEquipped)
-            _ECLIPSE_HUB_CachedWeapon = (ok and type(w) == "table") and w or nil
-        else
-            _ECLIPSE_HUB_CachedWeapon = nil
+
+_ECLIPSE_HUB_KNIFE_WORDS = {
+    "knife","karambit","bayonet","butterfly","huntsman","falchion","shadow dagger",
+    "bowie","gut knife","flip knife","stiletto","talon","ursus","navaja","skeleton",
+    "classic knife","paracord","survival knife","nomad","machete","axe","hammer",
+}
+
+function _ECLIPSE_HUB_HeldItemName()
+    local n
+    local cam = Workspace and Workspace.CurrentCamera
+    if cam then
+        for _, ch in ipairs(cam:GetChildren()) do
+            if ch:IsA("Model") or ch:IsA("Folder") or ch:IsA("BasePart") then
+                local nm = ch.Name
+                if nm and #nm > 1 and nm ~= "Camera" then n = nm break end
+            end
         end
     end
-end)
+    if not n then
+        local c = LocalPlayer and LocalPlayer.Character
+        if c then
+            local tool = c:FindFirstChildOfClass("Tool")
+            if tool then n = tool.Name end
+            if not n then
+                local a = c:GetAttribute("Weapon") or c:GetAttribute("EquippedWeapon")
+                if a then n = tostring(a) end
+            end
+        end
+    end
+    if not n and LocalPlayer then
+        local a = LocalPlayer:GetAttribute("Weapon") or LocalPlayer:GetAttribute("EquippedWeapon")
+        if a then n = tostring(a) end
+    end
+    return n
+end
+
+function _ECLIPSE_HUB_HoldingKnife()
+    local n = _ECLIPSE_HUB_HeldItemName()
+    if not n then return false end
+    local low = tostring(n):lower()
+    for _, w in ipairs(_ECLIPSE_HUB_KNIFE_WORDS) do
+        if low:find(w, 1, true) then return true end
+    end
+    return false
+end
+
+function _ECLIPSE_HUB_HoldingGrenade()
+    local n = _ECLIPSE_HUB_HeldItemName()
+    if not n then return false end
+    local low = tostring(n):lower()
+    for _, w in ipairs({"grenade","flash","molotov","decoy","smoke","incendiary","c4","bomb"}) do
+        if low:find(w, 1, true) then return true end
+    end
+    return false
+end
+
+_ECLIPSE_HUB_LastVirtualShot = 0
+_ECLIPSE_HUB_TouchId = 90
+
+-- Resolves the real game mobile buttons:
+-- PlayerGui -> ... -> Interface.Screens.Gameplay.Middle.MobileButtons.<Shoot|Jump|Crouch|Aim>
+function _ECLIPSE_HUB_MobileButton(name)
+    local btn = _EMT and _EMT.buttons and _EMT.buttons[name]
+    if btn and btn.Parent then return btn end
+    local ok, found = pcall(function()
+        local pg = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not pg then return nil end
+        for _, d in ipairs(pg:GetDescendants()) do
+            if d.Name == "MobileButtons" and d:IsA("GuiObject") then
+                local b = d:FindFirstChild(name, true)
+                if b and b:IsA("GuiButton") then return b end
+            end
+        end
+        for _, d in ipairs(pg:GetDescendants()) do
+            if d.Name == name and d:IsA("GuiButton") then return d end
+        end
+        return nil
+    end)
+    if ok and found then
+        if _EMT and _EMT.buttons then _EMT.buttons[name] = found end
+        return found
+    end
+    return nil
+end
+
+-- Sends a real virtual tap (Begin -> End) on top of a game mobile button.
+function _ECLIPSE_HUB_TapButton(name, holdTime)
+    local btn = _ECLIPSE_HUB_MobileButton(name)
+    if not btn or not btn.Parent or not btn.Visible then return false end
+    local ok = pcall(function()
+        local ap, as = btn.AbsolutePosition, btn.AbsoluteSize
+        if as.X <= 0 or as.Y <= 0 then error("no size") end
+        local inset = 0
+        pcall(function()
+            inset = game:GetService("GuiService"):GetGuiInset().Y
+        end)
+        local x = ap.X + as.X * 0.5
+        local y = ap.Y + as.Y * 0.5 + inset
+        local vim = game:GetService("VirtualInputManager")
+        _ECLIPSE_HUB_TouchId = (_ECLIPSE_HUB_TouchId >= 250) and 90 or (_ECLIPSE_HUB_TouchId + 1)
+        local id = _ECLIPSE_HUB_TouchId
+        vim:SendTouchEvent(id, 0, x, y)
+        task.delay(holdTime or 0.03, function()
+            pcall(function() vim:SendTouchEvent(id, 2, x, y) end)
+        end)
+    end)
+    if ok and _EMT and _EMT.pulse and _EMT.pulse[name] ~= nil then
+        _EMT.pulse[name] = tick()
+    end
+    return ok
+end
+
+function _ECLIPSE_HUB_VirtualJump()
+    if not _ECLIPSE_HUBIsMobile then return false end
+    return _ECLIPSE_HUB_TapButton("Jump", 0.04)
+end
+
+function _ECLIPSE_HUB_VirtualShoot()
+    local now = tick()
+    if (now - _ECLIPSE_HUB_LastVirtualShot) < 0.03 then return false end
+    _ECLIPSE_HUB_LastVirtualShot = now
+
+    if _ECLIPSE_HUBIsMobile then
+        if _ECLIPSE_HUB_TapButton("Shoot", 0.03) then return true end
+    end
+
+    if typeof(mouse1click) == "function" then
+        local ok = pcall(mouse1click)
+        if ok then return true end
+    end
+    if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+        local ok = pcall(function()
+            mouse1press()
+            task.delay(0.02, function() pcall(mouse1release) end)
+        end)
+        if ok then return true end
+    end
+    local ok = pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        vim:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+        vim:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+    end)
+    return ok
+end
+
 
 function _ECLIPSE_HUB_ShootCached()
     _ECLIPSE_HUB_AllowIC()
@@ -1282,6 +1429,56 @@ local function _findNLToggleRow(nlToggle)
     return nil, nil
 end
 
+function _ECLIPSE_HUB_TrackColorPopup(cp, slot)
+    if type(cp) ~= "table" or typeof(slot) ~= "Instance" then return end
+    local pops = {}
+    local function consider(v)
+        if typeof(v) == "Instance" and v:IsA("GuiObject") and not v:IsDescendantOf(slot) and v ~= slot then
+            pops[#pops + 1] = v
+        end
+    end
+    for _, v in pairs(cp) do
+        consider(v)
+        if type(v) == "table" then consider(rawget(v, "Instance")) end
+    end
+    if #pops == 0 then return end
+
+    local function place(pop)
+        pcall(function()
+            if not pop.Parent then return end
+            local par = pop.Parent
+            local base = (par:IsA("GuiObject") and par.AbsolutePosition) or Vector2.new(0, 0)
+            local sp, ss = slot.AbsolutePosition, slot.AbsoluteSize
+            local w, h = pop.AbsoluteSize.X, pop.AbsoluteSize.Y
+            local cam = workspace.CurrentCamera
+            local vp = (cam and cam.ViewportSize) or Vector2.new(1280, 720)
+
+            local x = sp.X + ss.X * 0.5 - w * 0.5
+            local y = sp.Y - h - 6
+            if y < 4 then y = sp.Y + ss.Y + 6 end
+            if x < 4 then x = 4 end
+            if x + w > vp.X - 4 then x = vp.X - w - 4 end
+
+            pop.AnchorPoint = Vector2.new(0, 0)
+            pop.Position = UDim2.fromOffset(math.floor(x - base.X), math.floor(y - base.Y))
+            pop.ZIndex = 5000
+            for _, d in ipairs(pop:GetDescendants()) do
+                if d:IsA("GuiObject") then d.ZIndex = math.max(d.ZIndex, 5001) end
+            end
+        end)
+    end
+
+    for _, pop in ipairs(pops) do
+        connectSignal(pop:GetPropertyChangedSignal("Visible"):Connect(function()
+            if pop.Visible then
+                task.defer(function() place(pop) end)
+            end
+        end))
+        if pop.Visible then task.defer(function() place(pop) end) end
+    end
+end
+
+
 local function _makeInlineSlot(nlToggle, kind, color)
     local row, label = _findNLToggleRow(nlToggle)
     if not row or not label then return nil end
@@ -1518,14 +1715,19 @@ local function wrapToggle(id, nlToggle, cbHolder)
                 task.defer(function()
                     pcall(function()
 
+                        local btn
                         for _, d in ipairs(slot:GetDescendants()) do
                             if d:IsA("TextButton") then
+                                d.AnchorPoint = Vector2.new(0, 0)
                                 d.Size = UDim2.fromScale(1, 1)
                                 d.Position = UDim2.fromScale(0, 0)
                                 d.BackgroundTransparency = 1
                                 d.Text = ""
                                 d.AutoButtonColor = false
+                                d.Active = true
+                                d.Selectable = true
                                 d.ZIndex = (slot.ZIndex or 2) + 10
+                                btn = d
                             elseif d:IsA("TextLabel") then
                                 d.Visible = false
                             elseif d:IsA("ImageLabel") or d:IsA("ImageButton") then
@@ -1533,6 +1735,11 @@ local function wrapToggle(id, nlToggle, cbHolder)
                             elseif d:IsA("Frame") then
 
                                 d.BackgroundTransparency = 1
+                                if d.Name ~= "Gloss" then
+                                    d.AnchorPoint = Vector2.new(0, 0)
+                                    d.Size = UDim2.fromScale(1, 1)
+                                    d.Position = UDim2.fromScale(0, 0)
+                                end
                                 for _, gc in ipairs(d:GetChildren()) do
                                     if gc:IsA("UICorner") or gc:IsA("UIStroke") or gc:IsA("UIGradient") then
                                         pcall(function() gc:Destroy() end)
@@ -1540,8 +1747,27 @@ local function wrapToggle(id, nlToggle, cbHolder)
                                 end
                             end
                         end
+
+                        if btn then
+                            slot.Active = true
+                            slot.AutoButtonColor = false
+                            connectSignal(slot.MouseButton1Click:Connect(function()
+                                if not scriptRunning then return end
+                                pcall(function()
+                                    if typeof(btn) == "Instance" and btn.Parent then
+                                        for _, fnName in ipairs({ "Open", "Toggle", "SetOpen" }) do
+                                            local f = cp and rawget(cp, fnName)
+                                            if type(f) == "function" then pcall(f, cp, true) return end
+                                        end
+                                    end
+                                end)
+                            end))
+                        end
+
+                        _ECLIPSE_HUB_TrackColorPopup(cp, slot)
                     end)
                 end)
+
 
             elseif nlToggle and type(nlToggle.Colorpicker) == "function" then
                 cp = nlToggle:Colorpicker({
@@ -7254,7 +7480,39 @@ function classifyDebrisItem(item)
     return nil
 end
 
-function getWorldPivot(inst)
+function getBombPivot(inst)
+    if not inst then return nil end
+    if inst:IsA("BasePart") then return inst.Position, inst.Size end
+    local best
+    for _, d in ipairs(inst:GetDescendants()) do
+        if d:IsA("BasePart") or d:IsA("MeshPart") then
+            local n = tostring(d.Name):lower()
+            if n:find("c4", 1, true) or n:find("bomb", 1, true) or n:find("planted", 1, true) then
+                best = d
+                break
+            end
+        end
+    end
+    if not best then
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d:IsA("Model") then
+                local n = tostring(d.Name):lower()
+                if n:find("c4", 1, true) or n:find("bomb", 1, true) then
+                    best = d.PrimaryPart or d:FindFirstChildWhichIsA("BasePart", true)
+                    if best then break end
+                end
+            end
+        end
+    end
+    if best then return best.Position, best.Size end
+    return nil
+end
+
+function getWorldPivot(inst, kind)
+    if kind == "bomb" then
+        local p, s = getBombPivot(inst)
+        if p then return p, s end
+    end
     if inst:IsA("BasePart") then return inst.Position, inst.Size end
     if inst:IsA("Model") then
         if inst.PrimaryPart then return inst.PrimaryPart.Position, inst.PrimaryPart.Size end
@@ -7293,7 +7551,7 @@ function updateWorldESP()
     for _, child in ipairs(debris:GetChildren()) do
         local info = classifyDebrisItem(child)
         if info then
-            local pos = getWorldPivot(child)
+            local pos = getWorldPivot(child, info.kind)
             if pos then
                 WorldEspSeen[child] = true
                 local e = getWorldEspEntry(child)
@@ -8767,93 +9025,110 @@ local function _trigSetIgnore(cam)
     _trigRP.FilterDescendantsInstances = ig
     return _trigRP
 end
-function updateTriggerBot()
-    if not Config.GlobalEnable or not IsAlive() then return end
-    if not (Config.TriggerBot and Config.TriggerBot.Enabled) then return end
-    local now = tick()
-    if (now - _trigLastScan) < 0.06 then return end
-    _trigLastScan = now
-    local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
-    local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
-    if not isNoSpread and (now - lastTrigger) < delay then return end
+-- HVH-style triggerbot: crosshair raycast -> target -> virtual click (mouse / mobile Shoot button)
+local function _trigIsEnemy(pl)
+    if not pl or pl == LocalPlayer then return false end
+    if _IS_DEATHMATCH then return true end
+    if Config.TeamCheck and IsAlly(pl) then return false end
+    return true
+end
 
-    local fire = false
-    if isNoSpread then
-        fire = true
-    elseif Config.TriggerBot.Mode == "HitChance" then
-        if math.random(1,100) <= Config.TriggerBot.HitChance then fire = true end
-    end
-    if not fire then return end
+local function _trigAimPoint()
+    local vp = Camera.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    if _ECLIPSE_HUBIsMobile then return center end
+    local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
+    if ok and loc and loc.X and loc.X > 0 and loc.Y > 0 then return Vector2.new(loc.X, loc.Y) end
+    return center
+end
 
-    local function _doClick()
-        if type(_ECLIPSE_HUB_ShootCached) ~= "function" then return end
-        local ok = _ECLIPSE_HUB_ShootCached()
-        if ok and isNoSpread then
-            task.delay(0.05, function() pcall(_ECLIPSE_HUB_ShootCached) end)
-        end
-    end
-    local function _tryFireOnPlayer(pl)
-        if not pl or pl == LocalPlayer then return false end
-        if not _IS_DEATHMATCH and Config.TeamCheck and IsAlly(pl) then return false end
-        local ch = pl.Character; if not ch then return false end
-        local h = ch:FindFirstChildOfClass("Humanoid"); if not h or h.Health <= 0 then return false end
-        lastTrigger = tick()
-        _doClick()
-        return true
-    end
+local function _trigGetTarget()
+    local aim = _trigAimPoint()
+    local sp = (Config.TriggerBot.Mode == "NoSpread") and 0 or (tonumber(Config.TriggerBot.Spread) or 0)
+    if sp > 0 then aim = aim + Vector2.new(math.random(-sp, sp), math.random(-sp, sp)) end
+    local ray = Camera:ViewportPointToRay(aim.X, aim.Y)
+    local rp = _trigSetIgnore(Camera)
+    local res = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
 
-    if Config.Aimbot and Config.Aimbot.WallBang then
-        local best, bestD = nil, math.huge
-        local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if res and res.Instance then
         for _, pl in ipairs(Players:GetPlayers()) do
-            if pl ~= LocalPlayer then
-                if _IS_DEATHMATCH or not (Config.TeamCheck and IsAlly(pl)) then
-                    local ch = pl.Character
-                    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-                    local root = ch and ch:FindFirstChild("HumanoidRootPart")
-                    if hum and hum.Health > 0 and root then
-                        local d = myRoot and (root.Position - myRoot.Position).Magnitude or 0
-                        if d < bestD then bestD = d; best = pl end
-                    end
-                end
+            if _trigIsEnemy(pl) and pl.Character and res.Instance:IsDescendantOf(pl.Character) then
+                local hum = pl.Character:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then return pl end
             end
         end
-        if best then
-            _G.ECLIPSE_HUB_SILENT_TARGET = best.Character
-                and (best.Character:FindFirstChild("Head") or best.Character:FindFirstChild("HumanoidRootPart"))
-            if _tryFireOnPlayer(best) then return end
-        end
     end
 
-    local vp = Camera.ViewportSize
-    local sp = isNoSpread and 0 or (tonumber(Config.TriggerBot.Spread) or 0)
-    local ap = Vector2.new(vp.X/2, vp.Y/2)
-    if sp > 0 then ap = ap + Vector2.new(math.random(-sp, sp), math.random(-sp, sp)) end
-    local ray = Camera:ViewportPointToRay(ap.X, ap.Y)
-    local rp = _trigSetIgnore(Camera)
-    local r = Workspace:Raycast(ray.Origin, ray.Direction * 1000, rp)
-    if r and r.Instance then
-        local m = r.Instance:FindFirstAncestorOfClass("Model")
-        if m and m:FindFirstChildOfClass("Humanoid") then
-            local plr = Players:GetPlayerFromCharacter(m)
-            if _tryFireOnPlayer(plr) then return end
-        elseif Config.TriggerBot.AutoWall then
-            local origin = ray.Origin
-            local dir = ray.Direction.Unit
-            for _, pl in ipairs(Players:GetPlayers()) do
-                if pl ~= LocalPlayer and pl.Character then
-                    local root = pl.Character:FindFirstChild("HumanoidRootPart")
-                    if root then
-                        local toRoot = (root.Position - origin)
-                        if toRoot.Magnitude > 0 and math.acos(math.clamp(dir:Dot(toRoot.Unit), -1, 1)) < math.rad(2.5) then
-                            local pStats = GetPenetrationStats(origin, dir, tonumber(Config.Aimbot.WallDepth) or 1.0, { LocalPlayer.Character, Camera }, pl.Character)
-                            if pStats and pStats.Success then
-                                if _tryFireOnPlayer(pl) then return end
+    local wallOn = (Config.TriggerBot.AutoWall) or (Config.Aimbot and Config.Aimbot.WallBang)
+    if wallOn then
+        local radius = tonumber(Config.TriggerBot.Radius) or 12
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if _trigIsEnemy(pl) and pl.Character then
+                local ch   = pl.Character
+                local hum  = ch:FindFirstChildOfClass("Humanoid")
+                local root = ch:FindFirstChild("HumanoidRootPart")
+                local head = ch:FindFirstChild("Head")
+                if hum and hum.Health > 0 and root and head then
+                    local bones = { head, root, ch:FindFirstChild("UpperTorso") }
+                    local targetPos = nil
+                    for _, bone in ipairs(bones) do
+                        if bone then
+                            local sPos = Camera:WorldToViewportPoint(bone.Position)
+                            if sPos.Z > 0 then
+                                local d = (Vector2.new(sPos.X, sPos.Y) - aim).Magnitude
+                                if d < radius then targetPos = bone.Position break end
                             end
+                        end
+                    end
+                    if targetPos then
+                        local depth = tonumber(Config.Aimbot and Config.Aimbot.WallDepth) or 1.0
+                        local ok, stats = pcall(GetPenetrationStats, ray.Origin, (targetPos - ray.Origin).Unit, depth, { LocalPlayer.Character, Camera }, ch)
+                        if ok and stats and stats.Success then
+                            _G.ECLIPSE_HUB_SILENT_TARGET = head or root
+                            return pl
                         end
                     end
                 end
             end
+        end
+    end
+
+    return nil
+end
+
+function updateTriggerBot()
+    if not Config.GlobalEnable or not IsAlive() then return end
+    if not (Config.TriggerBot and Config.TriggerBot.Enabled) then return end
+    if type(_ECLIPSE_HUB_HoldingKnife) == "function" and _ECLIPSE_HUB_HoldingKnife() then return end
+    if type(_ECLIPSE_HUB_HoldingGrenade) == "function" and _ECLIPSE_HUB_HoldingGrenade() then return end
+
+    local now = tick()
+    if (now - _trigLastScan) < 0.02 then return end
+    _trigLastScan = now
+
+    local isNoSpread = (Config.TriggerBot.Mode == "NoSpread")
+    local delay = isNoSpread and 0 or (tonumber(Config.TriggerBot.Delay) or 0.01)
+    if (now - lastTrigger) < math.max(delay, 0.05) then return end
+
+    if not isNoSpread and Config.TriggerBot.Mode == "HitChance" then
+        if math.random(1, 100) > (tonumber(Config.TriggerBot.HitChance) or 100) then return end
+    end
+
+    local target = nil
+    if Config.Aimbot and Config.Aimbot.SilentAim and _G.ECLIPSE_HUB_SILENT_TARGET then
+        local part = _G.ECLIPSE_HUB_SILENT_TARGET
+        local ch = part and part.Parent
+        local pl = ch and Players:GetPlayerFromCharacter(ch)
+        if pl and _trigIsEnemy(pl) then target = pl end
+    end
+    if not target then target = _trigGetTarget() end
+    if not target or not target.Character then return end
+
+    lastTrigger = tick()
+    if type(_ECLIPSE_HUB_VirtualShoot) == "function" then
+        local ok = _ECLIPSE_HUB_VirtualShoot()
+        if ok and isNoSpread then
+            task.delay(0.06, function() pcall(_ECLIPSE_HUB_VirtualShoot) end)
         end
     end
 end
@@ -9117,6 +9392,10 @@ function updateMovement()
                     hum.JumpPower = 50
                 end
             end)
+            -- Mobile: virtual tap on the game's Jump button (same dump path as Shoot)
+            if _ECLIPSE_HUBIsMobile and type(_ECLIPSE_HUB_VirtualJump) == "function" then
+                pcall(_ECLIPSE_HUB_VirtualJump)
+            end
             pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
             pcall(function() hum.Jump = true end)
             _MV.lastBhop = tick()
@@ -14659,6 +14938,11 @@ do
         end
 
         local col = _gzColor()
+        if isFire then
+            col = (Config.ESP and Config.ESP.MolotovColor) or col
+        else
+            col = (Config.ESP and Config.ESP.SmokeColor) or col
+        end
 
         local anchor = Instance.new("Part")
         anchor.Name = "BS_ZoneAnchor"
@@ -14705,7 +14989,7 @@ do
         local gui = Instance.new("BillboardGui")
         gui.Name = "BS_ZoneTimer"
         gui.Adornee = txtAnchor
-        gui.Size = UDim2.fromOffset(56, 16)
+        gui.Size = UDim2.fromOffset(110, 30)
         gui.AlwaysOnTop = true
         gui.LightInfluence = 0
         gui.MaxDistance = 350
@@ -14714,11 +14998,12 @@ do
         local txt = Instance.new("TextLabel")
         txt.BackgroundTransparency = 1
         txt.Size = UDim2.fromScale(1, 1)
-        txt.Font = Enum.Font.GothamMedium
-        txt.TextSize = 13
+        txt.Font = Enum.Font.Code
+        txt.TextSize = 22
         txt.TextScaled = false
         txt.TextColor3 = col
-        txt.TextStrokeTransparency = 1
+        txt.TextStrokeTransparency = 0.35
+        txt.TextStrokeColor3 = Color3.new(0, 0, 0)
         txt.Text = string.format("%.1fs", life)
         txt.Parent = gui
 
@@ -16719,11 +17004,13 @@ end)
 
 Config.Movement.StrafeSpeed = 1.5
 MoveGB:AddToggle("Jumpbug_Toggle", { Text="JUMPBUG", Default=false, Callback=function(v) Config.Movement.Jumpbug=v end })
+    :AddKeyPicker("Jumpbug_Key", { Default="J", SyncToggleState=true, Mode="Toggle", Text="Jumpbug" })
 MoveGB:AddToggle("Edgebug_Toggle", { Text="EDGEBUG", Default=false, Callback=function(v) Config.Movement.Edgebug=v end })
+    :AddKeyPicker("Edgebug_Key", { Default="P", SyncToggleState=true, Mode="Toggle", Text="Edgebug" })
 MoveGB:AddToggle("LongJump_Toggle", { Text="LONG JUMP", Default=false, Callback=function(v) Config.Movement.LongJump=v end })
-    :AddKeyPicker("LongJump_Key", { Default="X", SyncToggleState=true, Mode="Toggle", Text="Long Jump" })
+    :AddKeyPicker("LongJump_Key", { Default="G", SyncToggleState=true, Mode="Toggle", Text="Long Jump" })
 MoveGB:AddToggle("PixelSurf_Toggle", { Text="WALL SURF", Default=false, Callback=function(v) Config.Movement.PixelSurf=v end })
-    :AddKeyPicker("PixelSurf_Key", { Default="B", SyncToggleState=true, Mode="Toggle", Text="Wall Surf" })
+    :AddKeyPicker("PixelSurf_Key", { Default="L", SyncToggleState=true, Mode="Toggle", Text="Wall Surf" })
 
 MoveGB:AddToggle("TP_Toggle", { Text="THIRD PERSON", Default=false, Callback=function(v)
     Config.Misc.ThirdPerson = v and true or false
@@ -16817,7 +17104,7 @@ _VoxelFXOrig = _VoxelFXOrig or setmetatable({}, { __mode = "k" })
 function _voxelSnapshot(o)
     if _VoxelFXOrig[o] ~= nil then return end
     if o:IsA("BasePart") then
-        _VoxelFXOrig[o] = { kind = "part", color = o.Color }
+        _VoxelFXOrig[o] = { kind = "part", color = o.Color, material = o.Material }
     elseif o:IsA("ParticleEmitter") then
         _VoxelFXOrig[o] = { kind = "emitter", seq = o.Color }
     elseif o:IsA("PointLight") or o:IsA("SpotLight") or o:IsA("SurfaceLight") then
@@ -16827,30 +17114,35 @@ function _voxelSnapshot(o)
     end
 end
 
+-- HVH method: parts get the color + Neon material, emitters/beams get a flat ColorSequence
+function _voxelTintOne(o, c)
+    pcall(function()
+        _voxelSnapshot(o)
+        local s = _VoxelFXOrig[o]
+        if not s then return end
+        if s.kind == "part" then
+            o.Color = c
+            o.Material = Enum.Material.Neon
+        elseif s.kind == "emitter" then o.Color = ColorSequence.new(c)
+        elseif s.kind == "light" then o.Color = c
+        elseif s.kind == "beam" then o.Color = ColorSequence.new(c) end
+    end)
+end
+
 function _voxelTint(root, c)
     for _, o in ipairs(root:GetDescendants()) do
-        pcall(function()
-            _voxelSnapshot(o)
-            local s = _VoxelFXOrig[o]
-            if not s then return end
-            if s.kind == "part" then o.Color = c
-            elseif s.kind == "emitter" then o.Color = ColorSequence.new(c)
-            elseif s.kind == "light" then o.Color = c
-            elseif s.kind == "beam" then o.Color = ColorSequence.new(c) end
-        end)
+        _voxelTintOne(o, c)
     end
-    pcall(function()
-        _voxelSnapshot(root)
-        local s = _VoxelFXOrig[root]
-        if s and s.kind == "part" then root.Color = c end
-    end)
+    _voxelTintOne(root, c)
 end
 
 function _voxelRestoreAll()
     for o, s in pairs(_VoxelFXOrig) do
         pcall(function()
             if not o or not o.Parent then return end
-            if s.kind == "part" then o.Color = s.color
+            if s.kind == "part" then
+                o.Color = s.color
+                if s.material then o.Material = s.material end
             elseif s.kind == "emitter" then o.Color = s.seq
             elseif s.kind == "light" then o.Color = s.color
             elseif s.kind == "beam" then o.Color = s.seq end
@@ -16859,17 +17151,50 @@ function _voxelRestoreAll()
     _VoxelFXOrig = setmetatable({}, { __mode = "k" })
 end
 
+function _voxelKindOf(inst)
+    local n = inst.Name
+    local low = n:lower()
+    if n:match("^VoxelSmoke") or low:find("voxelsmoke") then return "smoke" end
+    if n:match("^VoxelFire") or low:find("voxelfire") or low:find("molotov") or low:find("incendiar") then return "fire" end
+    return nil
+end
+
+function _voxelFXApply(inst)
+    local cfg = Config.VoxelFX
+    if not (Config.GlobalEnable and cfg) then return end
+    local kind = _voxelKindOf(inst)
+    if kind == "smoke" and cfg.SmokeEnabled then
+        _voxelTint(inst, cfg.SmokeColor)
+    elseif kind == "fire" and cfg.MolotovEnabled then
+        _voxelTint(inst, cfg.MolotovColor)
+    end
+end
+
 function _voxelFXTick()
     local cfg = Config.VoxelFX
     if not (Config.GlobalEnable and (cfg.SmokeEnabled or cfg.MolotovEnabled)) then return end
     for _, inst in ipairs(Workspace:GetChildren()) do
-        local n = inst.Name
-        if cfg.SmokeEnabled and n:match("^VoxelSmoke") then
-            _voxelTint(inst, cfg.SmokeColor)
-        elseif cfg.MolotovEnabled and (n:match("^VoxelFire") or n:lower():find("molotov") or n:lower():find("incendiar")) then
-            _voxelTint(inst, cfg.MolotovColor)
-        end
+        _voxelFXApply(inst)
     end
+end
+
+-- Instant coloring for freshly spawned voxel clouds (same behaviour as the HVH hook)
+if not _VoxelFXHooked then
+    _VoxelFXHooked = true
+    Workspace.ChildAdded:Connect(function(inst)
+        task.wait()
+        if not inst or not inst.Parent then return end
+        pcall(_voxelFXApply, inst)
+        pcall(function()
+            inst.DescendantAdded:Connect(function(d)
+                local cfg = Config.VoxelFX
+                if not (Config.GlobalEnable and cfg) then return end
+                local kind = _voxelKindOf(inst)
+                if kind == "smoke" and cfg.SmokeEnabled then _voxelTintOne(d, cfg.SmokeColor)
+                elseif kind == "fire" and cfg.MolotovEnabled then _voxelTintOne(d, cfg.MolotovColor) end
+            end)
+        end)
+    end)
 end
 
 VoxelFXGB = Tabs.World:AddLeftGroupbox("SMOKE & FIRE", "flame")
@@ -17140,23 +17465,23 @@ do
     local _MIRROR_ROT_LONG   = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
     local _MIRROR_ROT_PISTOL = CFrame.Angles(math.rad(-90), 0, math.rad(2))
     local _MIRROR_ROT_KNIFE  = CFrame.Angles(math.rad(-90), math.rad(-90), 0)
-    local _MIRROR_OFFSET_PISTOL = CFrame.new(0.18, -0.18, -0.46) * _MIRROR_ROT_PISTOL
+    local _MIRROR_OFFSET_PISTOL = CFrame.new(0.18, -0.30, -0.34) * _MIRROR_ROT_PISTOL
     local _MIRROR_OFFSET_LONG   = CFrame.new(0.12, -0.10, -0.28) * _MIRROR_ROT_LONG
-    local _MIRROR_OFFSET_SNIPER = CFrame.new(0.14, -0.08, -0.42) * _MIRROR_ROT_LONG
+    local _MIRROR_OFFSET_SNIPER = CFrame.new(0.13, -0.14, -0.30) * _MIRROR_ROT_LONG
     local _MIRROR_OFFSET_SHOTGUN= CFrame.new(0.12, -0.10, -0.34) * _MIRROR_ROT_LONG
 
-    local _MIRROR_ROT_SMG       = CFrame.Angles(math.rad(-90), math.rad(90), 0)
-    local _MIRROR_OFFSET_SMG    = CFrame.new(0.11, -0.09, -0.27) * _MIRROR_ROT_SMG
+    local _MIRROR_ROT_SMG       = _MIRROR_ROT_LONG
+    local _MIRROR_OFFSET_SMG    = CFrame.new(0.12, -0.16, -0.26) * _MIRROR_ROT_SMG
     local _MIRROR_OFFSET_HEAVY  = CFrame.new(0.14, -0.12, -0.34) * _MIRROR_ROT_LONG
     local _MIRROR_OFFSET_KNIFE  = CFrame.new(0.10, -0.06, -0.28) * _MIRROR_ROT_KNIFE
 
     local _MIRROR_OFFSET_OVERRIDES = {
-        ["R8 Revolver"]    = CFrame.new(0.18, -0.18, -0.42) * _MIRROR_ROT_PISTOL,
-        ["Desert Eagle"]   = CFrame.new(0.18, -0.18, -0.44) * _MIRROR_ROT_PISTOL,
-        ["Dual Berettas"]  = CFrame.new(0.17, -0.17, -0.42) * _MIRROR_ROT_PISTOL,
-        ["Five-SeveN"]     = CFrame.new(0.18, -0.18, -0.44) * _MIRROR_ROT_PISTOL,
-        ["CZ75-Auto"]      = CFrame.new(0.18, -0.18, -0.44) * _MIRROR_ROT_PISTOL,
-        ["Tec-9"]          = CFrame.new(0.18, -0.18, -0.45) * _MIRROR_ROT_PISTOL,
+        ["R8 Revolver"]    = CFrame.new(0.18, -0.30, -0.30) * _MIRROR_ROT_PISTOL,
+        ["Desert Eagle"]   = CFrame.new(0.18, -0.30, -0.32) * _MIRROR_ROT_PISTOL,
+        ["Dual Berettas"]  = CFrame.new(0.17, -0.29, -0.30) * _MIRROR_ROT_PISTOL,
+        ["Five-SeveN"]     = CFrame.new(0.18, -0.30, -0.32) * _MIRROR_ROT_PISTOL,
+        ["CZ75-Auto"]      = CFrame.new(0.18, -0.30, -0.32) * _MIRROR_ROT_PISTOL,
+        ["Tec-9"]          = CFrame.new(0.18, -0.30, -0.33) * _MIRROR_ROT_PISTOL,
         ["Negev"]          = _MIRROR_OFFSET_HEAVY,
         ["M249"]           = _MIRROR_OFFSET_HEAVY,
         ["Nova"]           = _MIRROR_OFFSET_SHOTGUN,
@@ -17171,6 +17496,7 @@ do
         ["UMP-45"]         = _MIRROR_OFFSET_SMG,
         ["P90"]            = _MIRROR_OFFSET_SMG,
         ["PP-Bizon"]       = _MIRROR_OFFSET_SMG,
+
     }
 
     local function _mirrorOffsetFor(weaponName)
@@ -17608,27 +17934,8 @@ do
         if not (_mirrorClone and _mirrorClone.Parent and hand) then return end
         local rel = _mirrorRootRel or CFrame.new()
         pcall(function()
-            local ch  = LocalPlayer.Character
-            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            local cam = workspace.CurrentCamera
-
-            local handPos = hand.Position
-            if hand.Name == "Right Arm" then
-                handPos = (hand.CFrame * CFrame.new(0, -0.62, 0)).Position
-            end
-
-            local look = (hrp and hrp.CFrame.LookVector) or (cam and cam.CFrame.LookVector) or Vector3.new(0, 0, -1)
-            local yaw   = math.atan2(-look.X, -look.Z)
-            local pitch = 0
-            if cam then
-                pitch = math.asin(math.clamp(cam.CFrame.LookVector.Y, -1, 1))
-            end
-
-            local base    = CFrame.new(handPos) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0)
-            local grip    = _mirrorGrip or Vector3.new(0.07, -0.07, -0.22)
-            local align   = _mirrorAlign or CFrame.new()
-            local rootCF  = (base * CFrame.new(grip)) * align
-            _mirrorClone:PivotTo(rootCF * rel:Inverse())
+            local __off = _mirrorOffset or _MIRROR_OFFSET_LONG
+            _mirrorClone:PivotTo((hand.CFrame * __off) * rel:Inverse())
         end)
         local now = tick()
         if not _mirrorNextUnhide or now >= _mirrorNextUnhide then
@@ -17636,6 +17943,7 @@ do
             _forceMirrorVisible()
         end
     end
+
 
     local function _updateMirror()
         local ch = LocalPlayer.Character; if not ch then return _clearMirror() end
@@ -20555,7 +20863,7 @@ do
         if not selectedName then Library:Notify({Title="Configs", Description="Select a config.", Time=3}); return end
         local name = _cfgClean(selectedName)
         pcall(function() writefile(_cfgPath(name), _combinedSave()) end)
-        Library:Notify({Title="Configs", Description="Saved <b>"..name.."</b> (colors + keybinds)", Time=3})
+        Library:Notify({Title="Configs", Description="Saved <b>"..name.."</b>", Time=3})
     end })
     CfgGB:AddButton({ Text = "Load", Func = function()
         if not selectedName then Library:Notify({Title="Configs", Description="Select a config.", Time=3}); return end
@@ -23231,56 +23539,14 @@ end)
         return okA and okB and fr ~= nil and rd ~= nil
     end
 
-    local _ICWepInv
-    local function _getInventoryController()
-        if _ICWepInv then return _ICWepInv end
-        if _ECLIPSE_HUB_ICReady and not _ECLIPSE_HUB_ICReady() then
-            if _ECLIPSE_HUB_AllowIC then _ECLIPSE_HUB_AllowIC() end
+    local function _findEquippedWeapon()
+
+        if type(_ECLIPSE_HUB_HoldingKnife) == "function" and _ECLIPSE_HUB_HoldingKnife() then
+            _weaponTable = nil
             return nil
         end
 
-        local ok, ic = pcall(function()
-            local rs   = game:GetService("ReplicatedStorage")
-            local ctrl = rs:FindFirstChild("Controllers")
-            local mod  = ctrl and ctrl:FindFirstChild("InventoryController")
-            return mod and require(mod) or nil
-        end)
-        if ok and type(ic) == "table" then _ICWepInv = ic end
-        return _ICWepInv
-    end
 
-    local function _icEquipped()
-        local IC = _getInventoryController(); if not IC then return nil end
-
-        local candidates = {
-            rawget(IC, "EquippedWeapon"),
-            rawget(IC, "Equipped"),
-            rawget(IC, "ActiveWeapon"),
-            rawget(IC, "CurrentWeapon"),
-        }
-        for _, c in ipairs(candidates) do
-            if type(c) == "table" and _isWeaponTable(c) then return c end
-        end
-        for _, getter in ipairs({"GetEquippedWeapon", "GetEquipped", "GetActiveWeapon"}) do
-            local fn = rawget(IC, getter)
-            if type(fn) == "function" then
-                local ok, w = pcall(fn, IC)
-                if ok and type(w) == "table" and _isWeaponTable(w) then return w end
-            end
-        end
-        for _, v in pairs(IC) do
-            if type(v) == "table" then
-                local ok, eq = pcall(rawget, v, "IsEquipped")
-                if ok and eq and _isWeaponTable(v) then return v end
-            end
-        end
-        return nil
-    end
-
-    local function _findEquippedWeapon()
-
-        local w = _icEquipped()
-        if w then _weaponTable = w; return w end
 
         if _weaponTable then
             local ok, eq = pcall(rawget, _weaponTable, "IsEquipped")
