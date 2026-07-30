@@ -368,12 +368,197 @@ pcall(function()
 end)
 
 _ECLIPSE_HUBTouchActive = false
-if _ECLIPSE_HUBIsMobile then
+
+_EMT = {
+    enabled = false,
+    jumpDown = false, fireDown = false, aimDown = false,
+    buttons = {}, rects = {}, touches = {}, count = 0,
+    lastScan = 0, pad = 6,
+}
+_G.ECLIPSE_HUB_MobileTouch = _EMT
+
+local _EMT_MAP = { Jump = "jumpDown", Shoot = "fireDown", Aim = "aimDown" }
+
+function _EMT.scan()
+    local ok, pg = pcall(function() return LocalPlayer:FindFirstChildOfClass("PlayerGui") end)
+    if not ok or not pg then return end
+    local found = {}
+    local mb
+    pcall(function() mb = pg:FindFirstChild("MobileButtons", true) end)
+    if mb then
+        for name, _ in pairs(_EMT_MAP) do
+            local b
+            pcall(function() b = mb:FindFirstChild(name, true) end)
+            if b and b:IsA("GuiObject") then found[name] = b end
+        end
+    end
+    for name, _ in pairs(_EMT_MAP) do
+        if not found[name] then
+            local b
+            pcall(function() b = pg:FindFirstChild(name, true) end)
+            if b and b:IsA("GuiButton") then found[name] = b end
+        end
+    end
+    _EMT.buttons = found
+    _EMT.ensureLayer()
+end
+
+function _EMT.ensureLayer()
+    if _EMT.layer and _EMT.layer.Parent then return end
     pcall(function()
-        UserInput.TouchStarted:Connect(function(_, gp) if not gp then _ECLIPSE_HUBTouchActive = true end end)
-        UserInput.TouchEnded:Connect(function() _ECLIPSE_HUBTouchActive = false end)
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not pg then return end
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "ECLIPSE_MobileTouchLayer"
+        sg.ResetOnSpawn = false
+        sg.IgnoreGuiInset = true
+        sg.DisplayOrder = -1000
+        sg.Enabled = true
+        sg.Parent = pg
+        _EMT.layer = sg
+        _EMT.zones = {}
     end)
 end
+
+function _EMT.zoneFor(name, btn)
+    if not _EMT.layer then return nil end
+    local z = _EMT.zones and _EMT.zones[name]
+    if not z or not z.Parent then
+        z = Instance.new("Frame")
+        z.Name = "Zone_" .. name
+        z.BackgroundTransparency = 1
+        z.BorderSizePixel = 0
+        z.Active = false
+        z.ZIndex = 1
+        z.Parent = _EMT.layer
+        if _EMT.zones then _EMT.zones[name] = z end
+    end
+    local ap, as = btn.AbsolutePosition, btn.AbsoluteSize
+    local p = _EMT.pad
+    z.Position = UDim2.fromOffset(ap.X - p, ap.Y - p)
+    z.Size = UDim2.fromOffset(as.X + p * 2, as.Y + p * 2)
+    z.Visible = btn.Visible
+    return z
+end
+
+function _EMT.refreshRects()
+    local r = {}
+    for name, btn in pairs(_EMT.buttons) do
+        if btn and btn.Parent then
+            local vis = true
+            local node = btn
+            while node and node:IsA("GuiObject") do
+                if node.Visible == false then vis = false break end
+                node = node.Parent
+            end
+            if vis then
+                local ap, as = btn.AbsolutePosition, btn.AbsoluteSize
+                if as.X > 0 and as.Y > 0 then
+                    local p = _EMT.pad
+                    r[name] = {
+                        x1 = ap.X - p, y1 = ap.Y - p,
+                        x2 = ap.X + as.X + p, y2 = ap.Y + as.Y + p,
+                    }
+                    _EMT.zoneFor(name, btn)
+                end
+            end
+        end
+    end
+    _EMT.rects = r
+end
+
+function _EMT.hit(pos)
+    for name, r in pairs(_EMT.rects) do
+        if pos.X >= r.x1 and pos.X <= r.x2 and pos.Y >= r.y1 and pos.Y <= r.y2 then
+            return name
+        end
+    end
+    return nil
+end
+
+function _EMT.set(name, state)
+    local field = _EMT_MAP[name]
+    if field then _EMT[field] = state end
+end
+
+function _EMT.recompute()
+    local down = { Jump = false, Shoot = false, Aim = false }
+    for _, name in pairs(_EMT.touches) do down[name] = true end
+    _EMT.jumpDown = down.Jump
+    _EMT.fireDown = down.Shoot
+    _EMT.aimDown  = down.Aim
+end
+
+if _ECLIPSE_HUBIsMobile then
+    _EMT.enabled = true
+    pcall(_EMT.scan)
+
+    task.spawn(function()
+        while true do
+            task.wait(0.25)
+            pcall(function()
+                local n = 0
+                for _ in pairs(_EMT.buttons) do n = n + 1 end
+                if n < 3 or (tick() - (_EMT.lastScan or 0)) > 5 then
+                    _EMT.lastScan = tick()
+                    _EMT.scan()
+                end
+                _EMT.refreshRects()
+            end)
+        end
+    end)
+
+    pcall(function()
+        UserInput.TouchStarted:Connect(function(input)
+            _EMT.count = _EMT.count + 1
+            _ECLIPSE_HUBTouchActive = true
+            _EMT.refreshRects()
+            local name = _EMT.hit(input.Position)
+            if name then
+                _EMT.touches[input] = name
+                _EMT.recompute()
+            end
+        end)
+        UserInput.TouchMoved:Connect(function(input)
+            if _EMT.touches[input] then return end
+            local name = _EMT.hit(input.Position)
+            if name then
+                _EMT.touches[input] = name
+                _EMT.recompute()
+            end
+        end)
+        local function release(input)
+            _EMT.count = math.max(0, _EMT.count - 1)
+            if _EMT.count == 0 then _ECLIPSE_HUBTouchActive = false end
+            if _EMT.touches[input] then
+                _EMT.touches[input] = nil
+                _EMT.recompute()
+            end
+        end
+        UserInput.TouchEnded:Connect(release)
+        UserInput.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch then release(input) end
+        end)
+    end)
+
+    pcall(function()
+        LocalPlayer.CharacterAdded:Connect(function()
+            task.delay(0.6, function()
+                pcall(function()
+                    _EMT.layer = nil
+                    _EMT.zones = nil
+                    _EMT.touches = {}
+                    _EMT.recompute()
+                    _EMT.scan()
+                end)
+            end)
+        end)
+    end)
+end
+
+function _ECLIPSE_HUBMobileJumpHeld() return _EMT.jumpDown == true end
+function _ECLIPSE_HUBMobileShootHeld() return _EMT.fireDown == true end
+function _ECLIPSE_HUBMobileAimHeld() return _EMT.aimDown == true end
 
 function _ECLIPSE_HUBMobileAimAt(worldPos, alpha)
     if typeof(worldPos) ~= "Vector3" then return end
@@ -4549,9 +4734,10 @@ local function _rcsIsFiring(held)
     end)
     if okM and down then return true end
     
-    if _ECLIPSE_HUBIsMobile and _ECLIPSE_HUBTouchActive then
+    if _ECLIPSE_HUBIsMobile then
+        if _EMT and (_EMT.fireDown == true) then return true end
         if held then return true end
-        return true
+        return false
     end
     
     if RCSState.lastAmmoDropT and (tick() - RCSState.lastAmmoDropT) < 0.12 then
@@ -6594,8 +6780,8 @@ function _espProcessPlayer(plr, myRoot, center)
     
     if isFrozen then data._wantVisible = true end
 
-    local hP, hOn = Camera:WorldToViewportPoint(headPos + Vector3.new(0,0.5,0))
-    local fP, fOn = Camera:WorldToViewportPoint(rootPos - Vector3.new(0,3,0))
+    local hP, hOn = Camera:WorldToViewportPoint(headPos + Vector3.new(0,0.75,0))
+    local fP, fOn = Camera:WorldToViewportPoint(rootPos - Vector3.new(0,3.35,0))
     local onScreen = hOn and fOn and hP.Z > 0 and fP.Z > 0
     if not onScreen then
         data._wantVisible = false
@@ -6603,7 +6789,7 @@ function _espProcessPlayer(plr, myRoot, center)
         return nil
     end
 
-    local height  = math.abs(hP.Y - fP.Y); local width = height * 0.6
+    local height  = math.abs(hP.Y - fP.Y); local width = height * 0.78
     local cx = hP.X; local cy = ((hP.Y + fP.Y)/2)
     local L, R = cx - width/2, cx + width/2
     local T, B = cy - height/2, cy + height/2
@@ -8307,8 +8493,8 @@ if _ECLIPSE_HUBIsMobile then
 end
 
 local function _mobileFireHeld()
+    if _EMT and (_EMT.fireDown == true or _EMT.aimDown == true) then return true end
     if _ECLIPSE_HUBFireBtnHeld then return true end
-    
     local ok, w = pcall(function()
         return _G.ECLIPSE_HUBAS_FindEquipped and _G.ECLIPSE_HUBAS_FindEquipped() or nil
     end)
@@ -8664,99 +8850,48 @@ _MV.JBEB_RP.FilterType = Enum.RaycastFilterType.Exclude
 _MV.ASF_RAY.FilterType = Enum.RaycastFilterType.Exclude
 
 _MV.mobileJumpDown = false
-_MV._mobileJumpHooked = false
+_MV._mobileJumpHooked = true
 _MV._mobileJumpConns = {}
-function _MV.hookMobileJump()
-    if _MV._mobileJumpHooked then return end
-    local ok, plrgui = pcall(function() return LocalPlayer:FindFirstChildOfClass("PlayerGui") end)
-    if not ok or not plrgui then return end
-    local function bindBtn(btn)
-        if not btn or not btn:IsA("GuiButton") then return end
-        for _, c in ipairs(_MV._mobileJumpConns) do pcall(function() c:Disconnect() end) end
-        _MV._mobileJumpConns = {}
-        table.insert(_MV._mobileJumpConns, btn.InputBegan:Connect(function(inp)
-            if inp.UserInputType == Enum.UserInputType.Touch
-            or inp.UserInputType == Enum.UserInputType.MouseButton1 then
+function _MV.hookMobileJump() end
+
+if _ECLIPSE_HUBIsMobile then
+    task.spawn(function()
+        local RS = game:GetService("RunService")
+        while true do
+            RS.Heartbeat:Wait()
+            local touchJump = (_EMT and _EMT.jumpDown == true)
+            if touchJump then
+                _MV.mobileJumpDown = true
+                _MV._jumpPulseUntil = tick() + 0.12
+            else
+                _MV.mobileJumpDown = (tick() < (_MV._jumpPulseUntil or 0))
+            end
+        end
+    end)
+
+    pcall(function()
+        _MV._jumpRequestConn = UserInput.JumpRequest:Connect(function()
+            _MV._jumpPulseUntil = tick() + 0.25
+            _MV.mobileJumpDown = true
+        end)
+    end)
+
+    pcall(function()
+        local CAS = game:GetService("ContextActionService")
+        CAS:BindActionAtPriority("ECLIPSE_HUB_JumpWatch", function(_, state)
+            if state == Enum.UserInputState.Begin then
+                _MV._jumpPulseUntil = tick() + 0.25
                 _MV.mobileJumpDown = true
             end
-        end))
-        table.insert(_MV._mobileJumpConns, btn.InputEnded:Connect(function(inp)
-            if inp.UserInputType == Enum.UserInputType.Touch
-            or inp.UserInputType == Enum.UserInputType.MouseButton1 then
-                _MV.mobileJumpDown = false
-            end
-        end))
-        _MV._mobileJumpHooked = true
-    end
-    local function scan(root)
-        if not root then return end
-        local mb = root:FindFirstChild("MobileButtons", true)
-        if mb then
-            local jb = mb:FindFirstChild("Jump", true)
-            if jb then bindBtn(jb); return end
-        end
-        local direct = root:FindFirstChild("Jump", true)
-        if direct and direct:IsA("GuiButton") then bindBtn(direct) end
-    end
-    scan(plrgui)
-    
-    task.spawn(function()
-        local tries = 0
-        while not _MV._mobileJumpHooked and tries < 40 do
-            tries = tries + 1
-            task.wait(0.5)
-            scan(plrgui)
-        end
-    end)
-    pcall(function()
-        plrgui.DescendantAdded:Connect(function(d)
-            if _MV._mobileJumpHooked then return end
-            if d.Name == "Jump" and d:IsA("GuiButton") then bindBtn(d) end
-        end)
+            return Enum.ContextActionResult.Pass
+        end, false, 2001, Enum.PlayerActions.CharacterJump)
     end)
 end
-pcall(_MV.hookMobileJump)
-
-pcall(function()
-    _MV._jumpRequestConn = UserInput.JumpRequest:Connect(function()
-        _MV.mobileJumpDown = true
-        if _MV._jumpRequestClear then task.cancel(_MV._jumpRequestClear) end
-        _MV._jumpRequestClear = task.delay(0.35, function()
-            _MV.mobileJumpDown = false
-            _MV._jumpRequestClear = nil
-        end)
-    end)
-end)
-
-pcall(function()
-    local CAS = game:GetService("ContextActionService")
-    CAS:BindActionAtPriority("ECLIPSE_HUB_JumpWatch", function(_, state)
-        if state == Enum.UserInputState.Begin then
-            _MV.mobileJumpDown = true
-        elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
-            
-            if _MV._jumpRequestClear then task.cancel(_MV._jumpRequestClear) end
-            _MV._jumpRequestClear = task.delay(0.35, function()
-                _MV.mobileJumpDown = false
-                _MV._jumpRequestClear = nil
-            end)
-        end
-        return Enum.ContextActionResult.Pass
-    end, false, 2001, Enum.PlayerActions.CharacterJump)
-end)
-
-pcall(function()
-    LocalPlayer.CharacterAdded:Connect(function()
-        _MV._mobileJumpHooked = false
-        for _, c in ipairs(_MV._mobileJumpConns) do pcall(function() c:Disconnect() end) end
-        _MV._mobileJumpConns = {}
-        task.delay(0.5, function() pcall(_MV.hookMobileJump) end)
-    end)
-end)
 
 _MV.strafeKeyDown = false
 function _MV.strafeKeyHeld()
     if _MV.strafeKeyDown then return true end
+    if _ECLIPSE_HUBIsMobile then return true end
     if _MV.mobileJumpDown then return true end
     local kc = (Config.Movement and Config.Movement.StrafeKeyCode) or Enum.KeyCode.LeftControl
     local ok, down = pcall(function() return UserInput:IsKeyDown(kc) end)
@@ -13956,24 +14091,59 @@ do
         PV.hl = nil
     end
 
-    local function updateChams()
-        local on = Config.ESP.Chams and rig
-        if on then
-            if not PV.hl or not PV.hl.Parent then
-                PV.hl = Instance.new("Highlight")
-                PV.hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                PV.hl.Parent = rig
-                PV.hl.Adornee = rig
-            end
-            local col = Config.ESP.ChamsColor or Color3.fromRGB(180,90,255)
-            PV.hl.FillColor = col
-            PV.hl.OutlineColor = col
-            PV.hl.FillTransparency = math.clamp(1 - 0.45 * (Config.ESP.ChamsIntensity or 1), 0, 1)
-            PV.hl.OutlineTransparency = 0.2
-        elseif PV.hl then
-            PV.hl:Destroy(); PV.hl = nil
+    PV.chams = PV.chams or {}
+    local function clearPreviewChams()
+        for part, shell in pairs(PV.chams) do
+            pcall(function() shell:Destroy() end)
+            PV.chams[part] = nil
         end
     end
+
+    local function updateChams()
+        if PV.hl then pcall(function() PV.hl:Destroy() end); PV.hl = nil end
+        if not (Config.ESP.Chams and rig) then clearPreviewChams() return end
+
+        local col = Config.ESP.ChamsColor or Color3.fromRGB(255, 60, 60)
+        if Config.ESP.VisibleCheck then
+            col = Config.ESP.VisibleChamsColor or col
+        end
+        local tr = math.clamp(1 - 0.65 * (Config.ESP.ChamsIntensity or 1), 0, 0.9)
+
+        local seen = {}
+        for _, part in ipairs(rig:GetDescendants()) do
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart"
+                and not (part.Parent and part.Parent:IsA("Accessory"))
+                and part.Transparency < 1 then
+                seen[part] = true
+                local shell = PV.chams[part]
+                if not shell or not shell.Parent then
+                    shell = Instance.new("Part")
+                    shell.Name = "ECLIPSE_PVChams"
+                    shell.Anchored = true
+                    shell.CanCollide = false
+                    shell.CanQuery = false
+                    shell.CanTouch = false
+                    shell.CastShadow = false
+                    shell.Material = Enum.Material.Neon
+                    shell.Parent = wm
+                    PV.chams[part] = shell
+                end
+                pcall(function()
+                    shell.Size = part.Size * 1.03
+                    shell.CFrame = part.CFrame
+                    shell.Color = col
+                    shell.Transparency = tr
+                end)
+            end
+        end
+        for part, shell in pairs(PV.chams) do
+            if not seen[part] then
+                pcall(function() shell:Destroy() end)
+                PV.chams[part] = nil
+            end
+        end
+    end
+
 
     local SKEL_R15 = {
         {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
@@ -14016,12 +14186,12 @@ do
         local rootP = parts["HumanoidRootPart"] or parts["UpperTorso"] or parts["Torso"]
         if not (headP and rootP) then return end
 
-        local hP = project(headP.Position + Vector3.new(0, 0.5, 0))
-        local fP = project(rootP.Position - Vector3.new(0, 3, 0))
+        local hP = project(headP.Position + Vector3.new(0, 0.75, 0))
+        local fP = project(rootP.Position - Vector3.new(0, 3.35, 0))
         if not (hP and fP) then return end
 
         local height = math.abs(hP.Y - fP.Y)
-        local width  = height * 0.6
+        local width  = height * 0.78
         if height < 2 then return end
         local cx = hP.X
         local cy = (hP.Y + fP.Y) * 0.5
@@ -16493,75 +16663,6 @@ do
 end
 
 Config.Combat = Config.Combat or {}
-Config.Combat.KnifeBot      = Config.Combat.KnifeBot      or false
-Config.Combat.KnifeBotRange = Config.Combat.KnifeBotRange or 12
-
-local KnifeGB = Tabs.Movement:AddRightGroupbox("KNIFE BOT")
-KnifeGB:AddToggle("KnifeBot_Toggle", {
-    Text = "KNIFE BOT", Default = false,
-    Callback = function(v) Config.Combat.KnifeBot = v and true or false end,
-}):AddKeyPicker("KnifeBot_Key", { Default = "K", SyncToggleState = true, Mode = "Toggle", Text = "Knife Bot" })
-KnifeGB:AddSlider("KnifeBot_Range", {
-    Text = "RANGE", Default = 12, Min = 4, Max = 24, Rounding = 1, Suffix = " studs",
-    Callback = function(v) Config.Combat.KnifeBotRange = tonumber(v) or 12 end,
-})
-KnifeGB:AddToggle("KnifeBot_Back", { Text = "PREFER BACKSTAB", Default = true })
-
-task.spawn(function()
-    while scriptRunning do
-        task.wait(0.08)
-        if Config.Combat.KnifeBot and Config.GlobalEnable and IsAlive() then
-            pcall(function()
-                local ch   = LocalPlayer.Character
-                local root = ch and ch:FindFirstChild("HumanoidRootPart")
-                if not root then return end
-
-                local w = _ECLIPSE_HUB_GetEquipped()
-                if not w then return end
-                -- a knife has no Rounds field -> that is our knife check
-                if tonumber(_ECLIPSE_HUB_WField(w, "Rounds")) ~= nil then return end
-                if not _ECLIPSE_HUB_WField(w, "IsEquipped") then return end
-
-                local range = tonumber(Config.Combat.KnifeBotRange) or 12
-                local best, bestD
-                for _, pl in ipairs(Players:GetPlayers()) do
-                    if pl ~= LocalPlayer then
-                        if _IS_DEATHMATCH or not (Config.TeamCheck and IsAlly(pl)) then
-                            local c2 = pl.Character
-                            local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
-                            local r2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-                            if h2 and h2.Health > 0 and r2 then
-                                local d = (r2.Position - root.Position).Magnitude
-                                if d <= range and (not bestD or d < bestD) then best, bestD = r2, d end
-                            end
-                        end
-                    end
-                end
-                if not best then return end
-
-                local backstab = true
-                pcall(function()
-                    backstab = Toggles.KnifeBot_Back and Toggles.KnifeBot_Back.Value
-                end)
-                local toTarget = (best.Position - root.Position)
-                local isBack = backstab and (best.CFrame.LookVector:Dot(toTarget.Unit) > 0.35)
-
-                local slash = _ECLIPSE_HUB_WField(w, "slash")   or _ECLIPSE_HUB_WField(w, "Slash")
-                local stab  = _ECLIPSE_HUB_WField(w, "stab")    or _ECLIPSE_HUB_WField(w, "Stab")
-                local shoot = _ECLIPSE_HUB_WField(w, "shoot")   or _ECLIPSE_HUB_WField(w, "Shoot")
-
-                if isBack and type(stab) == "function" then
-                    pcall(stab, w)
-                elseif type(slash) == "function" then
-                    pcall(slash, w)
-                elseif type(shoot) == "function" then
-                    pcall(shoot, w)
-                end
-            end)
-        end
-    end
-end)
-
 task.spawn(function()
     local UIS = game:GetService("UserInputService")
     local BINDS = {
@@ -18637,6 +18738,27 @@ do
         return ok and down or false
     end
 
+    local _asLastTry = 0
+    local function _scopeSafeWeapon()
+        local w, props = _equippedProps()
+        if not w or type(props) ~= "table" then return nil end
+        local slot = tostring(props.Slot or "")
+        if slot == "Grenade" or slot == "C4" or slot == "Knife" then return nil end
+        local hasScope = props.HasScope
+        if hasScope == nil then hasScope = (props.AimingOptions == "SniperScope") end
+        if not hasScope then return nil end
+        return w
+    end
+
+    local function _scopeSet(w, state)
+        local fn = _ECLIPSE_HUB_WField(w, "scope") or _ECLIPSE_HUB_WField(w, "Scope")
+        if type(fn) == "function" then
+            local ok = pcall(fn, w, state)
+            if ok then return true end
+        end
+        return _setAim(state)
+    end
+
     task.spawn(function()
         while true do
             task.wait(0.05)
@@ -18644,15 +18766,19 @@ do
                 local alive = LocalPlayer.Character
                     and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
                     and LocalPlayer.Character:FindFirstChildOfClass("Humanoid").Health > 0
-                if alive and _isSniper() then
+                local w = alive and _scopeSafeWeapon() or nil
+                if w then
+                    local scoped = _ECLIPSE_HUB_WField(w, "IsScoped")
+                    if scoped == nil then scoped = _isScoped() end
                     if _fireHeld() then
-                        if not _isScoped() then
-                            _setAim(true)
+                        if not scoped and (tick() - _asLastTry) > 0.3 then
+                            _asLastTry = tick()
+                            _scopeSet(w, true)
                             _asHeldByUs = true
                         end
                     elseif _asHeldByUs then
                         _asHeldByUs = false
-                        _setAim(false)
+                        _scopeSet(w, false)
                     end
                 elseif _asHeldByUs then
                     _asHeldByUs = false
@@ -18663,6 +18789,7 @@ do
             end
         end
     end)
+
 
     local AP = { anchor = nil, out = false }
     local function _root()
@@ -18762,7 +18889,7 @@ do
             Config.Misc.AutoPeek = v and true or false
             if not v then _apReset() end
         end })
-        :AddKeyPicker("AutoPeek_Key", { Default = "V", SyncToggleState = true, Mode = "Toggle", Text = "Auto Peek" })
+        :AddKeyPicker("AutoPeek_Key", { Default = "J", SyncToggleState = true, Mode = "Toggle", Text = "Auto Peek" })
     PeekGB:AddSlider("AutoPeek_Dist", { Text = "PEEK DISTANCE", Default = Config.Misc.AutoPeekDist,
         Min = 1, Max = 12, Rounding = 1, Suffix = "m",
         Callback = function(v) Config.Misc.AutoPeekDist = tonumber(v) or 4 end })
