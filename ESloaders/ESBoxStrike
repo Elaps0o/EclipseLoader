@@ -26384,24 +26384,26 @@ end)()
             _ECLIPSE_HUB_SyncLogo()
             task.spawn(function()
                 local ok = _beat("join") == true
-                local hasLogo = (_ECLIPSE_HUB_SyncLogo() or "") ~= ""
                 if ok and SYNC.base then
-                    -- only a fully clean connection plays the success sound
-                    if hasLogo then
-                        _syncNotify("SYNCHRONIZATION",
-                            string.format("<b>Connected</b> — %d synced user%s in this place.",
-                                SYNC.count or 0, (SYNC.count == 1) and "" or "s"), 4)
-                        _syncSound(6026984224, 1.1)
-                    else
-                        _syncNotify("SYNCHRONIZATION",
-                            "<b>Connected</b> — icon asset still loading, it will appear shortly.", 4)
-                    end
+                    -- clean connection: sound only, no notification
+                    _syncSound(6026984224, 1.1)
                     if type(_ECLIPSE_HUB_MarkPresenceDirty) == "function" then
                         pcall(_ECLIPSE_HUB_MarkPresenceDirty)
                     end
                 else
-                    _syncNotify("SYNCHRONIZATION", "<b>Failed</b> — server unreachable, retrying...", 4)
-                    _syncSound(6026984224, 0.35)
+                    -- could not connect: turn the toggle back off + debug print only
+                    print("[EclipseHub] SYNCHRONIZATION failed: server unreachable, toggle disabled.")
+                    SYNC.enabled = false
+                    SYNC.users, SYNC.names, SYNC.idNames, SYNC.count = {}, {}, {}, 0
+                    getgenv().ECLIPSE_SYNC_ENABLED = false
+                    pcall(function()
+                        if Toggles and Toggles.Main_Sync then
+                            Toggles.Main_Sync:SetValue(false)
+                        end
+                    end)
+                    if type(_ECLIPSE_HUB_MarkPresenceDirty) == "function" then
+                        pcall(_ECLIPSE_HUB_MarkPresenceDirty)
+                    end
                 end
             end)
         else
@@ -26409,7 +26411,6 @@ end)()
             task.spawn(function() _beat("leave") end)
             for _, b in pairs(SYNC.boards) do pcall(function() b:Destroy() end) end
             SYNC.boards = {}
-            _syncNotify("SYNCHRONIZATION", "Disconnected.", 3)
         end
     end
 
