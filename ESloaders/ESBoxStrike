@@ -3785,7 +3785,7 @@ task.spawn(function()
         end)
     end
 end)
-oldshoot
+oldshoot = nil
 pcall(function()
     if not SendFunc then return end
     oldshoot = hookfunction(SendFunc, function(...)
