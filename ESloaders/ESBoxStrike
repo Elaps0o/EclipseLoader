@@ -355,8 +355,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
--- Register-limit shards (each IIFE has own 200 local budget)
-;(function()
 local MiscBox = Tabs.Misc:AddLeftGroupbox("Movement", "activity")
 MiscBox:AddToggle("AutoBhop", { Text = "AUTO BHOP", Default = false })
     :AddKeyPicker("AutoBhopKey", { Text = "BHOP", Default = "None", Mode = "Toggle" })
@@ -2218,8 +2216,6 @@ getgenv().esplib_instances = espinstances
 local espfunctions = {}
 local abs    = math.abs
 local huge   = math.huge
-end)()
-;(function()
 local floor  = math.floor
 local clamp  = math.clamp
 local sin    = math.sin
@@ -2975,7 +2971,7 @@ local function refreshAllCharacters()
     for c in next,espCharacters do removeEspFromCharacter(c) end
     scanCharactersFolder()
 end
-local function onChange() updateESPSettings(); refreshAllCharacters() end
+function onChange() updateESPSettings(); refreshAllCharacters() end
 Toggles.ESPEnabled:OnChanged(onChange); Toggles.ESPTeamCheck:OnChanged(onChange)
 Options.ESPBoxType:OnChanged(updateESPSettings)
 Options.ESPBoxColorA:OnChanged(updateESPSettings); Options.ESPBoxColorB:OnChanged(updateESPSettings)
@@ -3007,12 +3003,12 @@ Players.PlayerRemoving:Connect(function(p)
         end)
     end
 end)
-local SilentFovCircle = Drawing.new("Circle")
+SilentFovCircle = Drawing.new("Circle")
 SilentFovCircle.NumSides = 128
 SilentFovCircle.Thickness = 1
 SilentFovCircle.Filled = false
 SilentFovCircle.Visible = false
-local AimbotFovCircle = Drawing.new("Circle")
+AimbotFovCircle = Drawing.new("Circle")
 AimbotFovCircle.NumSides = 128
 AimbotFovCircle.Thickness = 1
 AimbotFovCircle.Filled = false
@@ -3035,16 +3031,16 @@ task.spawn(function()
         end)
     end
 end)
-local SilentTarget = nil
-local AimbotTarget = nil
-local RageTarget = nil
-local CubeSmartTarget = nil
-local lockedTargetInstance = nil
-local rayParams = RaycastParams.new()
+SilentTarget = nil
+AimbotTarget = nil
+RageTarget = nil
+CubeSmartTarget = nil
+lockedTargetInstance = nil
+rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 rayParams.IgnoreWater = true
-local frameCounter = 0
-local function isVisible(target)
+frameCounter = 0
+function isVisible(target)
     local ignoreList = {LP.Character}
     local myTeam = get_player_team(LP)
     for _, p in ipairs(Players:GetPlayers()) do
@@ -3064,7 +3060,7 @@ local function isVisible(target)
     end
     return true
 end
-local function keyActive(pickerName, toggleName)
+function keyActive(pickerName, toggleName)
     -- returns whether feature should run based on toggle + optional keypicker
     local on = Toggles[toggleName] and Toggles[toggleName].Value
     if not on then return false end
@@ -3076,7 +3072,7 @@ local function keyActive(pickerName, toggleName)
     if ok then return state == true end
     return on
 end
-local function getMemesenseActive()
+function getMemesenseActive()
     local memesenseActive = Toggles.MemesenseMainToggle and Toggles.MemesenseMainToggle.Value
     if Options.MemesenseKeybind then
         local kState = Options.MemesenseKeybind:GetState()
@@ -3102,7 +3098,7 @@ end
 _G.ECLIPSE_ESPKeyActive = function()
     return keyActive("ESPKey", "ESPEnabled")
 end
-local function isEnemy(char)
+function isEnemy(char)
     if not char then return false end
     local lchar = LP.Character
     if not lchar then return false end
@@ -3111,7 +3107,7 @@ local function isEnemy(char)
     if myHasVest then return not targetHasVest
     else return targetHasVest end
 end
-local function FindAllTargets()
+function FindAllTargets()
     local camera = Workspace.CurrentCamera
     local lchar = LP.Character
     if not lchar then return end
@@ -3250,7 +3246,7 @@ local function FindAllTargets()
     RageTarget      = rClose
     CubeSmartTarget = cClose
 end
-local ShowTargetHitMarkerLines = {}
+ShowTargetHitMarkerLines = {}
 for i = 1, 4 do
     local l = Drawing.new("Line")
     l.Thickness = 2
@@ -3258,7 +3254,7 @@ for i = 1, 4 do
     l.Visible = false
     ShowTargetHitMarkerLines[i] = l
 end
-local ShowTargetConnectorLine = Drawing.new("Line")
+ShowTargetConnectorLine = Drawing.new("Line")
 ShowTargetConnectorLine.Thickness = 1.5
 ShowTargetConnectorLine.Transparency = 1
 ShowTargetConnectorLine.Visible = false
@@ -3398,7 +3394,7 @@ RunService.RenderStepped:Connect(function()
         end)
     end
 end)
-local BulletImpactV1Part = Instance.new("Part")
+BulletImpactV1Part = Instance.new("Part")
 BulletImpactV1Part.Name = "CubeChecker_Physical"
 BulletImpactV1Part.Size = Vector3.new(1.5, 1.5, 1.5)
 BulletImpactV1Part.Anchored = true
@@ -3408,13 +3404,13 @@ BulletImpactV1Part.CanTouch = false
 BulletImpactV1Part.Material = Enum.Material.ForceField
 BulletImpactV1Part.Transparency = 0.55
 BulletImpactV1Part.Parent = Workspace
-local selectionBox = Instance.new("SelectionBox")
+selectionBox = Instance.new("SelectionBox")
 selectionBox.Adornee = BulletImpactV1Part
 selectionBox.Color3 = Color3.fromRGB(255, 60, 80)
 selectionBox.LineThickness = 0.05
 selectionBox.Transparency = 0.1
 selectionBox.Parent = BulletImpactV1Part
-local impactRayParams = RaycastParams.new()
+impactRayParams = RaycastParams.new()
 impactRayParams.FilterType = Enum.RaycastFilterType.Exclude
 impactRayParams.IgnoreWater = true
 RunService.RenderStepped:Connect(function()
@@ -3459,10 +3455,10 @@ RunService.RenderStepped:Connect(function()
         end
     end)
 end)
-local original = {}
-local firerateobjs = {}
-local SendFunc = nil
-local getCurrentEquipped = nil
+original = {}
+firerateobjs = {}
+SendFunc = nil
+getCurrentEquipped = nil
 pcall(function()
     for _, obj in next, getgc(true) do
         if type(obj) == "table" and rawget(obj, "FireRate") then
@@ -3540,14 +3536,14 @@ pcall(function()
         end
     end
 end)
-local function getEquipped()
+function getEquipped()
     local success, result = pcall(function()
         return debug.getupvalue(getCurrentEquipped, 1).CurrentEquipped
     end)
     if not success then return nil end
     return result
 end
-local Weapon = nil
+Weapon = nil
 task.spawn(function()
     while task.wait(1) do
         pcall(function()
@@ -3555,7 +3551,7 @@ task.spawn(function()
         end)
     end
 end)
-local function createTracerBean(startPos, endPos)
+function createTracerBean(startPos, endPos)
     if not Toggles.BulletTracers or not Toggles.BulletTracers.Value then return end
     if not startPos or not endPos then return end
     local style = Options.TracerStyle and Options.TracerStyle.Value or "Beam Thin"
@@ -3569,8 +3565,6 @@ local function createTracerBean(startPos, endPos)
     if dist < 0.15 then return end
     local mid = (startPos + endPos) / 2
     local cf = CFrame.lookAt(mid, endPos)
-end)()
-;(function()
 
     local function makeCore(th, mat, trans, col)
         local p = Instance.new("Part")
@@ -3654,7 +3648,7 @@ end)()
         end
     end)
 end
-local function createBulletImpact(hitPos)
+function createBulletImpact(hitPos)
     if not Toggles.BulletImpacts or not Toggles.BulletImpacts.Value then return end
     if not hitPos then return end
     local impactPart = Instance.new("Part")
@@ -3791,7 +3785,7 @@ task.spawn(function()
         end)
     end
 end)
-local oldshoot
+oldshoot
 pcall(function()
     if not SendFunc then return end
     oldshoot = hookfunction(SendFunc, function(...)
@@ -3873,20 +3867,20 @@ task.spawn(function()
         end)
     end
 end)
-local WorldSettings = {
+WorldSettings = {
     WorldColorEnabled = false,
     WorldColor = Color3.fromRGB(255, 255, 255),
     SkyColorEnabled = false,
     SkyColor = Color3.fromRGB(255, 255, 255)
 }
-local function isLocalPlayerObject(obj)
+function isLocalPlayerObject(obj)
     local char = LP.Character
     if char and (obj == char or obj:IsDescendantOf(char)) then return true end
     if obj:IsDescendantOf(Workspace.CurrentCamera) then return true end
     if obj.Name == "CubeChecker_Physical" or obj.Name:find("Memesense_") then return true end
     return false
 end
-local function colorObject(obj)
+function colorObject(obj)
     if isLocalPlayerObject(obj) then return end
     if obj:IsA("BasePart") then
         if not obj:GetAttribute("OriginalColor") then obj:SetAttribute("OriginalColor", obj.Color) end
@@ -3896,14 +3890,14 @@ local function colorObject(obj)
         obj.Color3 = WorldSettings.WorldColor
     end
 end
-local function restoreObject(obj)
+function restoreObject(obj)
     if obj:IsA("BasePart") then
         if obj:GetAttribute("OriginalColor") then obj.Color = obj:GetAttribute("OriginalColor") end
     elseif obj:IsA("Texture") or obj:IsA("Decal") then
         if obj:GetAttribute("OriginalColor3") then obj.Color3 = obj:GetAttribute("OriginalColor3") end
     end
 end
-local function RefreshWorldColor()
+function RefreshWorldColor()
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if WorldSettings.WorldColorEnabled then colorObject(obj) else restoreObject(obj) end
     end
@@ -3936,7 +3930,7 @@ RunService.RenderStepped:Connect(function()
         if atmosphere then atmosphere:Destroy() end
     end
 end)
-local NightModeBox = Tabs.World:AddLeftGroupbox("Night", "moon")
+NightModeBox = Tabs.World:AddLeftGroupbox("Night", "moon")
 NightModeBox:AddToggle("WorldColorToggle", {
     Text = "WORLD COLOR",
     Default = false,
@@ -3961,7 +3955,7 @@ NightModeBox:AddToggle("SkyColorToggle", {
     Title = "Second Color",
     Callback = function(c) WorldSettings.SkyColor = c end
 })
-local WorldBoxAtmosphere = Tabs.World:AddLeftGroupbox("Atmosphere", "globe")
+WorldBoxAtmosphere = Tabs.World:AddLeftGroupbox("Atmosphere", "globe")
 WorldBoxAtmosphere:AddToggle("Atmosphere", {
     Text = "ENABLE",
     Default = false,
@@ -4016,13 +4010,13 @@ task.wait(1)
 if type(_G.Config) ~= "table" then _G.Config = {} end
 _G.Config.SmokeZoneESP   = true
 _G.Config.MolotovZoneESP = true
-local function cfgDefault(k,v) if _G.Config[k]==nil then _G.Config[k]=v end end
+function cfgDefault(k,v) if _G.Config[k]==nil then _G.Config[k]=v end end
 cfgDefault("GrenadeESP",     false)
 cfgDefault("GrenadeTracers", false)
 cfgDefault("ColoredSmoke",   false)
 cfgDefault("NoSmoke",        false)
 cfgDefault("SmokeColor",     Color3.fromRGB(255, 0, 0))
-local SETTINGS = {
+SETTINGS = {
     Smoke = {
         RadiusTrim   = 0.0,
         HeightOffset = 0.3,
@@ -4036,29 +4030,29 @@ local SETTINGS = {
         Thickness    = 0.28,
     },
 }
-local FADE_IN_TIME    = 0.4
-local FADE_OUT_TIME   = 0.6
-local RECALC_INTERVAL = 0.05
-local RAYCAST_DOWN    = 14
-local function GetMolotovColor()
+FADE_IN_TIME    = 0.4
+FADE_OUT_TIME   = 0.6
+RECALC_INTERVAL = 0.05
+RAYCAST_DOWN    = 14
+function GetMolotovColor()
     if Options and Options.GrenadeZoneColor then
         return Options.GrenadeZoneColor.Value
     end
     return Color3.fromRGB(255, 60, 0)
 end
-local function GetSmokeColor()
+function GetSmokeColor()
     if Options and Options.SmokeZoneColor then
         return Options.SmokeZoneColor.Value
     end
     return Color3.fromRGB(180, 180, 180)
 end
-local RunService = game:GetService("RunService")
-local Camera     = workspace.CurrentCamera
-local ActiveZones       = {}
-local DebrisConnections = {}
-local RayParams = RaycastParams.new()
+RunService = game:GetService("RunService")
+Camera     = workspace.CurrentCamera
+ActiveZones       = {}
+DebrisConnections = {}
+RayParams = RaycastParams.new()
 RayParams.FilterType = Enum.RaycastFilterType.Exclude
-local function ComputeZoneBounds(parent)
+function ComputeZoneBounds(parent)
     local sumX, sumZ = 0, 0
     local minY = math.huge
     local count = 0
@@ -4085,7 +4079,7 @@ local function ComputeZoneBounds(parent)
     end
     return Vector3.new(cx, minY, cz), math.max(maxR, 1.2), true
 end
-local function GetGroundY(x, baseY, z, excludeList)
+function GetGroundY(x, baseY, z, excludeList)
     RayParams.FilterDescendantsInstances = excludeList or {}
     local result = workspace:Raycast(
         Vector3.new(x, baseY + 5, z),
@@ -4094,7 +4088,7 @@ local function GetGroundY(x, baseY, z, excludeList)
     )
     return result and result.Position.Y or baseY
 end
-local function MakeCylinder(col, thickness)
+function MakeCylinder(col, thickness)
     local p = Instance.new("Part")
     p.Name         = "BS_RingSeg"
     p.Anchored     = true
@@ -4109,7 +4103,7 @@ local function MakeCylinder(col, thickness)
     p.Parent       = workspace
     return p
 end
-local function CreateZoneRing(parent, cfg, isMolotov)
+function CreateZoneRing(parent, cfg, isMolotov)
     if ActiveZones[parent] then return end
     local segments  = cfg.Segments  or 40
     local thickness = cfg.Thickness or 0.28
@@ -4213,12 +4207,12 @@ local function CreateZoneRing(parent, cfg, isMolotov)
     end)
     record.updateConn = updateConn
 end
-local function IsToggleOn(name)
+function IsToggleOn(name)
     if Toggles and Toggles[name] then return Toggles[name].Value end
     return false
 end
-local ScannedObjects = {}
-local function TryHandleObject(obj)
+ScannedObjects = {}
+function TryHandleObject(obj)
     if not obj or not obj.Parent then return end
     if ScannedObjects[obj] then return end
     local name = obj.Name:lower()
@@ -4247,7 +4241,7 @@ local function TryHandleObject(obj)
         end)
     end
 end
-local function ScanFolder(folder)
+function ScanFolder(folder)
     if not folder then return end
     for _, child in ipairs(folder:GetChildren()) do
         TryHandleObject(child)
@@ -4296,10 +4290,10 @@ task.spawn(function()
         end
     end
 end)
-local function VisualizeShrapnel(pos)
+function VisualizeShrapnel(pos)
     if not _G.Config.GrenadeTracers then return end
-local GrenadeFlightTracers = {}
-local function StartGrenadeFlightTracer(part)
+GrenadeFlightTracers = {}
+function StartGrenadeFlightTracer(part)
     if not part or not part:IsA("BasePart") then return end
     if GrenadeFlightTracers[part] then return end
     local MAX_TRAIL = 30
@@ -4359,19 +4353,19 @@ local function StartGrenadeFlightTracer(part)
         end
     end)
 end
-local TrackedGrenades = {}
-local GRENADE_PATTERNS = {
+TrackedGrenades = {}
+GRENADE_PATTERNS = {
     "grenade","flash","molotov","bang","frag",
     "he_","_he","throwable","projectile","nade",
     "incendiary","decoy","c4"
 }
-local GRENADE_BLACKLIST = {
+GRENADE_BLACKLIST = {
     "gun","rifle","pistol","bullet","casing","debris",
     "light","muzzle","launch","effect","arm","leg",
     "torso","head","humanoid","mesh","handle",
     "constraint","weld","motor","zone","voxel"
 }
-local function isGrenadeObject(obj)
+function isGrenadeObject(obj)
     if not obj:IsA("BasePart") and not obj:IsA("Model") then return false end
     local name = obj.Name:lower()
     for _, p in ipairs(GRENADE_BLACKLIST) do
@@ -4383,7 +4377,7 @@ local function isGrenadeObject(obj)
     end
     return false
 end
-local function TryTrackGrenade(obj)
+function TryTrackGrenade(obj)
     if TrackedGrenades[obj] then return end
     local part = obj
     if obj:IsA("Model") then
@@ -4404,7 +4398,7 @@ local function TryTrackGrenade(obj)
     end)
     StartGrenadeFlightTracer(part)
 end
-local function ScanForGrenades(folder)
+function ScanForGrenades(folder)
     if not folder then return end
     for _, child in ipairs(folder:GetChildren()) do
         if isGrenadeObject(child) then TryTrackGrenade(child) end
@@ -8555,4 +8549,3 @@ ThemeManager:ApplyToTab(Tabs.Settings)
 SaveManager:LoadAutoloadConfig()
 
 
-end)()
