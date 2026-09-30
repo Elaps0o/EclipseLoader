@@ -183,13 +183,17 @@ local function GetPenetrationStats(origin, direction, maxPen, ignoreList, target
 end
 local function GetMoveDirection()
     local Direction = Vector3.zero
-    local LookVector = Camera.CFrame.LookVector
-    local RightVector = Camera.CFrame.RightVector
+    local cam = Workspace.CurrentCamera or Camera
+    if not cam then return Direction end
+    local LookVector = cam.CFrame.LookVector
+    local RightVector = cam.CFrame.RightVector
     if UserInputService:IsKeyDown(Enum.KeyCode.W) then Direction += LookVector end
     if UserInputService:IsKeyDown(Enum.KeyCode.S) then Direction -= LookVector end
     if UserInputService:IsKeyDown(Enum.KeyCode.A) then Direction -= RightVector end
     if UserInputService:IsKeyDown(Enum.KeyCode.D) then Direction += RightVector end
-    return Vector3.new(Direction.X, 0, Direction.Z).Unit
+    local flat = Vector3.new(Direction.X, 0, Direction.Z)
+    if flat.Magnitude < 0.01 then return Vector3.zero end
+    return flat.Unit
 end
 local charfolder = Workspace:WaitForChild("Characters", 10)
 local function get_player_team(player)
@@ -230,105 +234,204 @@ local Window = Library:CreateWindow({
     Size = UDim2.new(0, 700, 0, 560)
 })
 local Tabs = {
-    Main = Window:AddTab('MAIN', 'home'),
+    Main = Window:AddTab('HOME', 'home'),
     Combat = Window:AddTab('AIM', 'target'),
-    Weapons = Window:AddTab('WEAPONS', 'crosshair'),
     Visuals = Window:AddTab('VISUALS', 'eye'),
-    World = Window:AddTab('WORLD', 'globe'),
-    Misc = Window:AddTab('MISC', 'activity'),
     SkinChanger = Window:AddTab('SKINS', 'paintbrush'),
+    Movement = Window:AddTab('MOVEMENT', 'footprints'),
+    World = Window:AddTab('WORLD', 'globe'),
+    Misc = Window:AddTab('MISC', 'wrench'),
+    Weapons = Window:AddTab('WEAPONS', 'crosshair'),
     Settings = Window:AddTab('CONFIG', 'settings'),
 }
 
--- Logo + RGB wave gradient line under title (ES-style chrome)
+-- Logo (left of title) + RGB gradient bar under header (Obsidian chrome)
 task.spawn(function()
-    local LOGO_URL = "https://github.com/Elaps0o/EclipseLoader/blob/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png?raw=true"
-    local function findTitleBar()
-        local main = Library.Main or (Window and Window.Holder)
+    local LOGO_URLS = {
+        "https://github.com/Elaps0o/EclipseLoader/blob/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png?raw=true",
+        "https://raw.githubusercontent.com/Elaps0o/EclipseLoader/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png",
+        "https://github.com/Elaps0o/EclipseLoader/raw/main/ChatGPT_Image_Jul_12__2026__02_32_22_AM-removebg-preview.png",
+    }
+    local logoAsset = nil
+    local logoDrawn = false
+    local lineDrawn = false
+
+    local function resolveLogoAsset()
+        if logoAsset then return logoAsset end
+        pcall(function()
+            local path = "EclipseHub_logo.png"
+            if type(isfile) == "function" and isfile(path) and type(getcustomasset) == "function" then
+                logoAsset = getcustomasset(path)
+            end
+            if not logoAsset and type(writefile) == "function" and type(getcustomasset) == "function" then
+                for _, url in ipairs(LOGO_URLS) do
+                    local ok, data = pcall(function() return game:HttpGet(url) end)
+                    if ok and type(data) == "string" and #data > 256 then
+                        writefile(path, data)
+                        logoAsset = getcustomasset(path)
+                        if logoAsset then break end
+                    end
+                end
+            end
+            -- last resort: rbxassetid if user has none (transparent-ish placeholder skipped)
+        end)
+        return logoAsset
+    end
+
+    local function getMain()
+        return Library.Main or (Window and (Window.Holder or Window.Main)) or nil
+    end
+
+    local function findTitleLabel(main)
         if not main then return nil end
+        local best = nil
         for _, d in ipairs(main:GetDescendants()) do
-            if d:IsA("TextLabel") then
-                local t = tostring(d.Text):upper()
-                if t:find("ECLIPSE", 1, true) or t:find("ECL", 1, true) then
-                    return d
+            if d:IsA("TextLabel") or d:IsA("TextButton") then
+                local t = tostring(d.Text or ""):upper()
+                -- RichText title may still contain ECL / IPSE / ECLIPSE
+                if t:find("ECLIPSE", 1, true) or t:find("ECL", 1, true) or t:find("IPSE", 1, true) then
+                    if not best or d.AbsoluteSize.X > best.AbsoluteSize.X then
+                        best = d
+                    end
                 end
             end
         end
-        return nil
+        return best
     end
+
+    local function findHeaderFrame(main, title)
+        -- prefer the frame that holds the title (top bar)
+        if title and title.Parent and title.Parent:IsA("GuiObject") then
+            return title.Parent
+        end
+        if not main then return nil end
+        -- tallest top strip near y=0
+        local best, bestScore = nil, -1e9
+        for _, d in ipairs(main:GetDescendants()) do
+            if d:IsA("Frame") or d:IsA("ImageLabel") then
+                local ok, y, h, w = pcall(function()
+                    return d.AbsolutePosition.Y, d.AbsoluteSize.Y, d.AbsoluteSize.X
+                end)
+                if ok and h and h > 20 and h < 80 and w and w > 200 then
+                    local score = w - math.abs((y or 0) - (main.AbsolutePosition and main.AbsolutePosition.Y or 0))
+                    if score > bestScore then bestScore = score; best = d end
+                end
+            end
+        end
+        return best or main
+    end
+
     local function applyLogo()
-        local bar = findTitleBar()
-        if not bar or not bar.Parent then return end
-        if bar.Parent:FindFirstChild("EclipseLogo") then return end
+        if logoDrawn then return true end
+        local main = getMain()
+        if not main then return false end
+        local title = findTitleLabel(main)
+        local header = findHeaderFrame(main, title)
+        if not header then return false end
+        if header:FindFirstChild("EclipseLogo") then logoDrawn = true; return true end
+
+        local asset = resolveLogoAsset()
         local img = Instance.new("ImageLabel")
         img.Name = "EclipseLogo"
         img.BackgroundTransparency = 1
-        img.Image = LOGO_URL
         img.ScaleType = Enum.ScaleType.Fit
-        img.Size = UDim2.fromOffset(22, 22)
+        img.Size = UDim2.fromOffset(24, 24)
         img.AnchorPoint = Vector2.new(0, 0.5)
-        img.Position = UDim2.new(0, 8, 0.5, 0)
-        img.ZIndex = (bar.ZIndex or 1) + 2
-        img.Parent = bar.Parent
-        pcall(function()
-            bar.Position = UDim2.new(bar.Position.X.Scale, bar.Position.X.Offset + 28, bar.Position.Y.Scale, bar.Position.Y.Offset)
-        end)
+        img.Position = UDim2.new(0, 10, 0.5, 0)
+        img.ZIndex = 100
+        img.Visible = true
+        if asset then
+            img.Image = asset
+        else
+            -- fallback purple circle glyph if download fails
+            img.BackgroundTransparency = 0
+            img.BackgroundColor3 = Color3.fromRGB(139, 92, 246)
+            img.Image = ""
+            local c = Instance.new("UICorner")
+            c.CornerRadius = UDim.new(1, 0)
+            c.Parent = img
+        end
+        img.Parent = header
+        if title then
+            pcall(function()
+                title.Position = UDim2.new(title.Position.X.Scale, math.max(title.Position.X.Offset, 36), title.Position.Y.Scale, title.Position.Y.Offset)
+            end)
+        end
+        logoDrawn = true
+        return true
     end
+
     local function applyGradientLine()
-        local main = Library.Main or (Window and Window.Holder)
-        if not main then return end
-        if main:FindFirstChild("EclipseRGBLine", true) then return end
-        -- find a top header frame
-        local host = nil
-        local bar = findTitleBar()
-        if bar and bar.Parent then host = bar.Parent end
-        if not host then host = main end
+        if lineDrawn then return true end
+        local main = getMain()
+        if not main then return false end
+        if main:FindFirstChild("EclipseRGBLine", true) then lineDrawn = true; return true end
+
+        local title = findTitleLabel(main)
+        local header = findHeaderFrame(main, title)
+
         local line = Instance.new("Frame")
         line.Name = "EclipseRGBLine"
         line.BorderSizePixel = 0
-        line.Height = nil
-        line.Size = UDim2.new(1, 0, 0, 2)
-        line.Position = UDim2.new(0, 0, 1, -1)
-        line.AnchorPoint = Vector2.new(0, 1)
         line.BackgroundColor3 = Color3.fromRGB(168, 85, 247)
-        line.ZIndex = 50
-        line.Parent = host
-        -- if host is title text, put line on parent full width under header
-        if host == bar then
-            line.Parent = bar.Parent
-            line.Position = UDim2.new(0, 0, 0, (bar.AbsoluteSize and bar.AbsoluteSize.Y or 28))
+        line.ZIndex = 200
+        line.Visible = true
+        line.ClipsDescendants = false
+
+        -- full width under the window title area
+        if header and header ~= main then
+            line.Size = UDim2.new(1, 0, 0, 3)
+            line.Position = UDim2.new(0, 0, 1, 0)
             line.AnchorPoint = Vector2.new(0, 0)
+            line.Parent = header
+        else
+            line.Size = UDim2.new(1, -2, 0, 3)
+            line.Position = UDim2.new(0.5, 0, 0, 48)
+            line.AnchorPoint = Vector2.new(0.5, 0)
+            line.Parent = main
         end
+
         local grad = Instance.new("UIGradient")
-        grad.Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(168, 85, 247)),
-            ColorSequenceKeypoint.new(0.35, Color3.fromRGB(236, 72, 153)),
-            ColorSequenceKeypoint.new(0.65, Color3.fromRGB(56, 189, 248)),
-            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(168, 85, 247)),
-        })
         grad.Parent = line
+        local function makeSeq(t)
+            local function shift(base, phase)
+                local h = (base + math.sin(t * 0.6 + phase) * 0.08) % 1
+                return Color3.fromHSV(h, 0.8, 1)
+            end
+            return ColorSequence.new({
+                ColorSequenceKeypoint.new(0.00, shift(0.75, 0.0)),
+                ColorSequenceKeypoint.new(0.33, shift(0.85, 1.2)),
+                ColorSequenceKeypoint.new(0.66, shift(0.55, 2.1)),
+                ColorSequenceKeypoint.new(1.00, shift(0.75, 3.0)),
+            })
+        end
+        grad.Color = makeSeq(0)
         task.spawn(function()
-            local t0 = tick()
             while line and line.Parent do
-                local t = (tick() - t0) * 0.35
-                -- wave offset through gradient
-                grad.Offset = Vector2.new((math.sin(t) * 0.5 + 0.5) * 0.6 - 0.3, 0)
-                local h = (t * 0.15) % 1
-                grad.Color = ColorSequence.new({
-                    ColorSequenceKeypoint.new(0.00, Color3.fromHSV(h, 0.75, 1)),
-                    ColorSequenceKeypoint.new(0.33, Color3.fromHSV((h + 0.33) % 1, 0.8, 1)),
-                    ColorSequenceKeypoint.new(0.66, Color3.fromHSV((h + 0.66) % 1, 0.75, 1)),
-                    ColorSequenceKeypoint.new(1.00, Color3.fromHSV(h, 0.75, 1)),
-                })
+                local t = tick()
+                grad.Color = makeSeq(t)
+                grad.Offset = Vector2.new(math.sin(t * 0.4) * 0.25, 0)
                 task.wait(0.03)
             end
         end)
+        lineDrawn = true
+        return true
     end
-    for i = 1, 8 do
-        task.wait(0.4)
+
+    -- wait for Obsidian to build the window, then keep trying
+    for i = 1, 40 do
+        task.wait(0.25)
+        local okL = pcall(applyLogo)
+        local okG = pcall(applyGradientLine)
+        if logoDrawn and lineDrawn then break end
+    end
+    -- one more late pass (themes can rebuild UI)
+    task.delay(2, function()
+        logoDrawn = false
+        lineDrawn = false
         pcall(applyLogo)
         pcall(applyGradientLine)
-    end
+    end)
 end)
 local SettingsGroup = Tabs.Settings:AddLeftGroupbox("Interface", "settings")
 SettingsGroup:AddLabel("Menu Keybind"):AddKeyPicker("MenuKeybind", {
@@ -355,20 +458,36 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
-local MiscBox = Tabs.Misc:AddLeftGroupbox("Movement", "activity")
-MiscBox:AddToggle("AutoBhop", { Text = "AUTO BHOP", Default = false })
-    :AddKeyPicker("AutoBhopKey", { Text = "BHOP", Default = "None", Mode = "Toggle" })
-MiscBox:AddToggle("NoFallDamage", { Text = "NO FALL DAMAGE", Default = false })
-MiscBox:AddToggle("AutoStop", { Text = "AUTO STOP", Default = false })
-    :AddKeyPicker("AutoStopKey", { Text = "AUTO STOP", Default = "H", Mode = "Toggle" })
-MiscBox:AddDropdown("QuickStopOptions", {
+-- MOVEMENT tab (ES-style layout)
+local MoveGB = Tabs.Movement:AddLeftGroupbox("MOVEMENT", "footprints")
+MoveGB:AddToggle("AutoBhop", { Text = "BUNNY HOP", Default = false })
+    :AddKeyPicker("AutoBhopKey", { Text = "Bunny Hop", Default = "V", Mode = "Toggle" })
+MoveGB:AddToggle("AutoStrafeEnabled", { Text = "AUTO STRAFER", Default = false })
+    :AddKeyPicker("AutoStrafeKey", { Default = "C", Mode = "Toggle", Text = "Auto Strafer" })
+MoveGB:AddDropdown("AutoStrafeMode", {
+    Text = "STRAFER MODE",
+    Values = {"Keys", "Camera", "Always", "Directional"},
+    Default = "Keys",
+})
+MoveGB:AddSlider("AutoStrafeSpeed", { Text = "STRAFE SPEED", Default = 1.35, Min = 0.8, Max = 2.5, Rounding = 2 })
+MoveGB:AddToggle("AutoStop", { Text = "AUTO STOP", Default = false })
+    :AddKeyPicker("AutoStopKey", { Text = "Auto Stop", Default = "H", Mode = "Toggle" })
+MoveGB:AddDropdown("QuickStopOptions", {
     Text = "STOP OPTIONS",
     Values = { "Early", "In Air", "Duck", "Move Between Shots", "On Land" },
     Default = { ["Early"] = true },
     Multi = true,
 })
-MiscBox:AddToggle("QuickStop", { Text = "QUICK STOP", Default = false })
-    :AddKeyPicker("QuickStopKey", { Text = "QUICK STOP", Default = "None", Mode = "Hold" })
+MoveGB:AddToggle("QuickStop", { Text = "QUICK STOP", Default = false })
+    :AddKeyPicker("QuickStopKey", { Text = "Quick Stop", Default = "None", Mode = "Hold" })
+MoveGB:AddToggle("NoFallDamage", { Text = "NO FALL DAMAGE", Default = false })
+
+local MiscBox = MoveGB -- compat
+
+
+local MiscGeneral = Tabs.Misc:AddLeftGroupbox("MISC", "wrench")
+MiscGeneral:AddToggle("CustomFOVEnabled", { Text = "CUSTOM FOV", Default = false })
+MiscGeneral:AddSlider("CustomFOVValue", { Text = "FOV", Default = 90, Min = 60, Max = 120, Rounding = 0 })
 
 -- AutoStop / QuickStop (ES-style)
 do
@@ -517,6 +636,7 @@ do
         jumping = false
         if CC then pcall(CC.jump, false) end
     end
+    local BHOP_BOOST = 0.45
     RunService.Heartbeat:Connect(function()
         pcall(function()
             local bhopOn = _G.ECLIPSE_BhopKeyActive and _G.ECLIPSE_BhopKeyActive() or (Toggles.AutoBhop and Toggles.AutoBhop.Value)
@@ -524,12 +644,31 @@ do
                 if running then stopBhop() end
                 return
             end
-            if not runtimeInst or not CC then return end
             local spaceHeld = UserInputService:IsKeyDown(Enum.KeyCode.Space)
             if not spaceHeld then
                 if running then stopBhop() end
                 return
             end
+            -- follow WASD + camera (no free slide)
+            local move = (GetMoveDirection and GetMoveDirection()) or Vector3.zero
+            local hasKeys = move.Magnitude > 0.08
+            local char = LP.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local v = root.AssemblyLinearVelocity
+                if hasKeys then
+                    local dir = Vector3.new(move.X, 0, move.Z)
+                    if dir.Magnitude > 0.01 then
+                        dir = dir.Unit
+                        local spd = math.max(Vector3.new(v.X, 0, v.Z).Magnitude, 14)
+                        local horiz = dir * spd
+                        root.AssemblyLinearVelocity = Vector3.new(horiz.X, v.Y, horiz.Z)
+                    end
+                else
+                    root.AssemblyLinearVelocity = Vector3.new(v.X * 0.82, v.Y, v.Z * 0.82)
+                end
+            end
+            if not runtimeInst or not CC then return end
             if not running then
                 running = true
                 wasInAir = false
@@ -540,6 +679,11 @@ do
             if wasInAir and onGround then
                 wasInAir = false
                 pulse()
+                if root and hasKeys then
+                    local v = root.AssemblyLinearVelocity
+                    local dir = Vector3.new(move.X, 0, move.Z).Unit
+                    root.AssemblyLinearVelocity = v + dir * (BHOP_BOOST * 20)
+                end
             elseif not onGround then
                 wasInAir = true
             end
@@ -605,14 +749,8 @@ WeaponVisualBox:AddToggle("BulletImpacts", {
     Default = Color3.fromRGB(255, 0, 0),
     Title = "Impact Color",
 })
-local GrenadeVisualBox = Tabs.Visuals:AddRightGroupbox("Grenades", "activity")
-GrenadeVisualBox:AddToggle("GrenadeTracers", {
-    Text = "GRENADE TRACERS",
-    Default = false,
-}):AddColorPicker("GrenadeTracerColor", {
-    Default = Color3.fromRGB(255, 100, 0),
-    Title = "Tracer Color",
-})
+local GrenadeVisualBox = Tabs.Visuals:AddRightGroupbox("WORLD ESP", "eye")
+-- Grenade tracers removed (zone ESP only)
 GrenadeVisualBox:AddToggle("MolotovZoneESP", {
     Text = "MOLOTOV ZONE ESP",
     Default = false,
@@ -754,30 +892,63 @@ RunService.RenderStepped:Connect(function()
         end
     end)
 end)
-local AssistBox = Tabs.Combat:AddLeftGroupbox("Assist", "crosshair")
-AssistBox:AddToggle("MemesenseMainToggle", {
-    Text = "ASSIST MASTER",
-    Default = false,
+-- AIM layout: Main / Aimbot / Trigger / Pen
+-- AIM > GLOBAL (ES-style: only here, not on HOME)
+local AimMainBox = Tabs.Combat:AddLeftGroupbox("GLOBAL", "settings")
+AimMainBox:AddToggle("GlobalEnabled", {
+    Text = "GLOBAL SETTINGS",
+    Default = true,
 }):AddKeyPicker("MemesenseKeybind", {
-    Text = "ASSIST KEY",
+    Text = "GLOBAL",
     Default = "None",
     Mode = "Toggle",
 })
-local AssistDepBox = AssistBox:AddDependencyBox()
-AssistDepBox:AddToggle("CubeAimbotEnabled", { Text = "SMOOTH AIM ASSIST", Default = false })
+AimMainBox:AddToggle("AimTeamCheck", { Text = "TEAM CHECK", Default = true })
+-- Sync aliases used by older code paths (no extra UI)
+task.spawn(function()
+    task.wait(0.25)
+    pcall(function()
+        -- MemesenseMainToggle may not exist; create proxy table if library left it nil
+        if not Toggles.MemesenseMainToggle then
+            Toggles.MemesenseMainToggle = Toggles.GlobalEnabled
+        end
+        if not Toggles.GlobalTeamCheck then
+            Toggles.GlobalTeamCheck = Toggles.AimTeamCheck
+        end
+        if Toggles.GlobalEnabled and Toggles.MemesenseMainToggle and Toggles.MemesenseMainToggle ~= Toggles.GlobalEnabled then
+            Toggles.GlobalEnabled:OnChanged(function(v)
+                pcall(function() Toggles.MemesenseMainToggle:SetValue(v) end)
+            end)
+        end
+        if Toggles.AimTeamCheck then
+            Toggles.AimTeamCheck:OnChanged(function(v)
+                pcall(function() if Toggles.GlobalTeamCheck and Toggles.GlobalTeamCheck.SetValue then Toggles.GlobalTeamCheck:SetValue(v) end end)
+                pcall(function() if Toggles.SilentTeamCheck then Toggles.SilentTeamCheck:SetValue(v) end end)
+                pcall(function() if Toggles.ESPTeamCheck then Toggles.ESPTeamCheck:SetValue(v) end end)
+            end)
+        end
+    end)
+end)
+
+local AimbotBox = Tabs.Combat:AddLeftGroupbox("AIMBOT", "crosshair")
+local AssistBox = AimbotBox
+local AssistDepBox = AimbotBox
+AssistDepBox:AddToggle("CubeAimbotEnabled", { Text = "AIMBOT", Default = false })
     :AddKeyPicker("CubeAimbotKey", { Text = "AIM", Default = "MB1", Mode = "Hold" })
+AssistDepBox:AddSlider("AimSmoothYaw", { Text = "SMOOTH YAW", Default = 0.18, Min = 0.02, Max = 1, Rounding = 2 })
+AssistDepBox:AddSlider("AimSmoothPitch", { Text = "SMOOTH PITCH", Default = 0.18, Min = 0.02, Max = 1, Rounding = 2 })
 AssistDepBox:AddToggle("CubeVisibleCheck", { Text = "VISIBLE CHECK", Default = false })
+AssistDepBox:AddToggle("AimWallCheck", { Text = "WALL CHECK", Default = false })
 AssistDepBox:AddDropdown("CubeHitPart", {
     Text = "HIT PART",
     Values = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
     Default = "Head",
 })
-AssistDepBox:AddSlider("AimSmoothYaw", { Text = "SMOOTH YAW", Default = 0.18, Min = 0.02, Max = 1, Rounding = 2 })
-AssistDepBox:AddSlider("AimSmoothPitch", { Text = "SMOOTH PITCH", Default = 0.18, Min = 0.02, Max = 1, Rounding = 2 })
-AssistDepBox:AddDivider()
-AssistDepBox:AddToggle("CubeTriggerbot", { Text = "TRIGGERBOT", Default = false })
+
+local TriggerBoxUI = Tabs.Combat:AddLeftGroupbox("TRIGGER", "zap")
+TriggerBoxUI:AddToggle("CubeTriggerbot", { Text = "TRIGGERBOT", Default = false })
     :AddKeyPicker("CubeTriggerbotKey", { Text = "TRIGGER", Default = "MB1", Mode = "Hold" })
-AssistDepBox:AddToggle("TriggerNoSpread", {
+TriggerBoxUI:AddToggle("TriggerNoSpread", {
     Text = "NO SPREAD",
     Default = false,
     Callback = function(v)
@@ -791,69 +962,65 @@ AssistDepBox:AddToggle("TriggerNoSpread", {
         end)
     end,
 })
-AssistDepBox:AddSlider("CubeTriggerbotDelay", { Text = "DELAY", Default = 0.01, Min = 0, Max = 1, Rounding = 3 })
-AssistDepBox:AddSlider("TriggerHitChance", { Text = "HIT CHANCE", Default = 100, Min = 1, Max = 100, Rounding = 0, Suffix = "%" })
-AssistDepBox:AddSlider("TriggerSmooth", { Text = "SMOOTH", Default = 0, Min = 0, Max = 1, Rounding = 2 })
-AssistDepBox:AddToggle("TriggerAutowall", { Text = "TRIGGER AUTOWALL", Default = false })
-AssistDepBox:AddToggle("TriggerNoSeed", { Text = "NO TRIGGER SEED", Default = false })
-AssistDepBox:AddDivider()
-AssistDepBox:AddToggle("BulletImpactV1Enabled", {
-    Text = "PENETRATION CUBE",
+TriggerBoxUI:AddSlider("CubeTriggerbotDelay", { Text = "DELAY", Default = 0.01, Min = 0, Max = 1, Rounding = 3 })
+TriggerBoxUI:AddSlider("TriggerHitChance", { Text = "HIT CHANCE", Default = 100, Min = 1, Max = 100, Rounding = 0, Suffix = "%" })
+TriggerBoxUI:AddSlider("TriggerSmooth", { Text = "SMOOTH", Default = 0, Min = 0, Max = 1, Rounding = 2 })
+TriggerBoxUI:AddToggle("TriggerAutowall", { Text = "TRIGGER AUTOWALL", Default = false })
+TriggerBoxUI:AddToggle("TriggerNoSeed", { Text = "NO TRIGGER SEED", Default = false })
+local PenBox = Tabs.Combat:AddRightGroupbox("PEN", "box")
+PenBox:AddToggle("BulletImpactV1Enabled", {
+    Text = "PENETRATION CROSSHAIR",
     Default = false,
 }):AddColorPicker("BulletImpactV1Color", {
     Default = Color3.fromRGB(255, 60, 80),
-    Title = "Outline Color",
+    Title = "Outline",
 })
-AssistDepBox:AddLabel("Fill Color"):AddColorPicker("CubeFillColor", {
+PenBox:AddLabel("Fill"):AddColorPicker("CubeFillColor", {
     Default = Color3.fromRGB(255, 60, 80),
-    Title = "Fill Color",
+    Title = "Fill",
 })
-AssistDepBox:AddSlider("CubeFillTransparency", {
-    Text = "FILL TRANSPARENCY",
+PenBox:AddSlider("CubeFillTransparency", {
+    Text = "FILL ALPHA",
     Default = 0.55,
     Min = 0.1,
     Max = 0.95,
     Rounding = 2,
 })
-AssistDepBox:AddToggle("CubeFillEnabled", { Text = "CUBE FILL", Default = true })
-AssistDepBox:AddToggle("BulletImpactV1Rainbow", {
-    Text = "CUBE RAINBOW",
-    Default = false,
-})
-AssistDepBox:AddSlider("BulletImpactV1Size", {
-    Text = "CUBE SIZE",
+PenBox:AddToggle("CubeFillEnabled", { Text = "CUBE FILL", Default = true })
+PenBox:AddToggle("BulletImpactV1Rainbow", { Text = "RAINBOW", Default = false })
+PenBox:AddSlider("BulletImpactV1Size", {
+    Text = "SIZE",
     Default = 1.5,
     Min = 0.5,
     Max = 4,
     Rounding = 1,
-    Suffix = "studs"
+    Suffix = "studs",
 })
-AssistDepBox:AddSlider("BulletImpactV1Dist", {
-    Text = "MAX RAY DISTANCE",
+PenBox:AddSlider("BulletImpactV1Dist", {
+    Text = "RAY DIST",
     Default = 20,
     Min = 1,
     Max = 50,
     Rounding = 0,
-    Suffix = "m"
+    Suffix = "m",
 })
-AssistDepBox:AddDivider()
-AssistDepBox:AddToggle("ShowTargetPlayer", { Text = "SHOW TARGET", Default = false })
-AssistDepBox:AddDropdown("ShowTargetMode", {
-    Text = "TARGET DISPLAY",
+PenBox:AddToggle("ShowTargetPlayer", { Text = "SHOW TARGET", Default = false })
+PenBox:AddDropdown("ShowTargetMode", {
+    Text = "DISPLAY",
     Values = {"Line", "Crosshair"},
     Default = "Crosshair",
 })
-AssistDepBox:AddLabel("Line Color"):AddColorPicker("ShowTargetLineColor", {
+PenBox:AddLabel("Line"):AddColorPicker("ShowTargetLineColor", {
     Default = Color3.fromRGB(0, 255, 255),
-    Title = "Line Color",
+    Title = "Line",
 })
-AssistDepBox:AddLabel("Crosshair Color"):AddColorPicker("ShowTargetCrosshairColor", {
+PenBox:AddLabel("Cross"):AddColorPicker("ShowTargetCrosshairColor", {
     Default = Color3.fromRGB(0, 255, 255),
-    Title = "Crosshair Color",
+    Title = "Cross",
 })
-AssistBox:AddToggle("ShowPenetration", { Text = "SHOW PENETRATION", Default = false })
-AssistBox:AddToggle("AutowallEnabled", { Text = "AUTOWALL SCAN", Default = false })
-AssistBox:AddSlider("AutowallMinPen", { Text = "MIN PENETRATION", Default = 5, Min = 0, Max = 50, Rounding = 0 })
+PenBox:AddToggle("ShowPenetration", { Text = "SHOW PEN", Default = false })
+PenBox:AddToggle("AutowallEnabled", { Text = "AUTOWALL SCAN", Default = false })
+PenBox:AddSlider("AutowallMinPen", { Text = "MIN PEN", Default = 5, Min = 0, Max = 50, Rounding = 0 })
 task.spawn(function()
     local PenText = Drawing.new("Text")
     PenText.Visible = false
@@ -892,7 +1059,7 @@ task.spawn(function()
         end
     end)
 end)
-AssistDepBox:SetupDependencies({ {Toggles.MemesenseMainToggle, true} })
+-- global enable checked at runtime
 local HitSoundBox = Tabs.World:AddLeftGroupbox("Hitsound", "volume-2")
 HitSoundBox:AddToggle("HitSoundEnabled", { Text = "HIT SOUND", Default = false })
 HitSoundBox:AddToggle("CustomHitSoundToggle", { Text = "USE CUSTOM ID", Default = false })
@@ -980,7 +1147,7 @@ local function PlayHitSound()
         end)
     end)
 end
-local CustomCameraBox = Tabs.World:AddRightGroupbox("Camera", "video")
+local CustomCameraBox = Tabs.Misc:AddLeftGroupbox("CAMERA", "video")
 CustomCameraBox:AddToggle("CustomFovToggle", {
     Text = "CUSTOM FOV",
     Default = false,
@@ -1016,7 +1183,7 @@ CustomCameraBox:AddToggle("ThirdPerson", {
     end
 }):AddKeyPicker("ThirdPersonKey", { Text = "TP", Default = "V", Mode = "Toggle" })
 CustomCameraBox:AddSlider("ThirdPersonDist", {
-    Text = "DISTANCE",
+    Text = "ESP DISTANCE",
     Default = 8,
     Min = 3,
     Max = 25,
@@ -1048,7 +1215,7 @@ CustomCameraBox:AddDropdown("CustomPlayerModel", {
     Values = {"Off", "R15", "R6", "Force Visible"},
     Default = "Off",
 })
-local CustomScopeBox = Tabs.World:AddRightGroupbox("Scope", "crosshair")
+local CustomScopeBox = Tabs.World:AddLeftGroupbox("SNIPER CROSSHAIR", "crosshair")
 CustomScopeBox:AddToggle("CustomScopeFov", { Text = "CUSTOM SCOPE FOV", Default = false })
 CustomScopeBox:AddSlider("ScopeFovValue", { Text = "SCOPE FOV", Default = 70, Min = 10, Max = 100, Rounding = 1, Suffix = "deg" })
 CustomScopeBox:AddToggle("RemoveScope", { Text = "REMOVE SCOPE OVERLAY", Default = false })
@@ -1679,71 +1846,165 @@ for w, s in pairs(SD.SkinSelections) do
         })
     end
 end
-local function InitKnifeChanger()
+-- SoloScripts-style SkinsLib resolve (icons + skins + knife/glove model)
+local SoloSkins = { lib = nil, iconCache = {}, skinListCache = {} }
+local function SoloGetSkinsLib()
+    if SoloSkins.lib then return SoloSkins.lib end
     pcall(function()
-        local SM = RS:FindFirstChild("Database") and RS.Database:FindFirstChild("Components") and
-            RS.Database.Components:FindFirstChild("Libraries") and
-            RS.Database.Components.Libraries:FindFirstChild("Skins")
-        local VM = RS:FindFirstChild("Classes") and RS.Classes:FindFirstChild("WeaponComponent") and
-            RS.Classes.WeaponComponent:FindFirstChild("Classes") and
-            RS.Classes.WeaponComponent.Classes:FindFirstChild("Viewmodel")
-        if not SM or not VM then return end
-        local Sk = SafeRequire(SM)
-        local Vm = SafeRequire(VM)
-        if not Sk or not Vm then return end
-        local oGCM = Sk.GetCameraModel
-        Sk.GetCameraModel = function(w, sk, ...)
-            if Config.KnifeChanger.Enabled and w and Checkknife(w) then
-                local newKnife = Config.KnifeChanger.Model
-                local newSkin = Config.SkinChanger.Skins[newKnife] or "Vanilla"
-                local success, result = pcall(oGCM, newKnife, newSkin, ...)
-                if success and result then return result end
-            end
-            local success, result = pcall(oGCM, w, sk, ...)
-            if success then return result end
-            return nil
-        end
-        local oGChM = Sk.GetCharacterModel
-        Sk.GetCharacterModel = function(w, sk, ...)
-            if Config.KnifeChanger.Enabled and w and Checkknife(w) then
-                local newKnife = Config.KnifeChanger.Model
-                local newSkin = Config.SkinChanger.Skins[newKnife] or "Vanilla"
-                local success, result = pcall(oGChM, newKnife, newSkin, ...)
-                if success and result then return result end
-            end
-            local success, result = pcall(oGChM, w, sk, ...)
-            if success then return result end
-            return nil
-        end
-        local oVN = Vm.new
-        Vm.new = function(vc, w, sk, ...)
-            if Config.KnifeChanger.Enabled and w and Checkknife(w) then
-                local newKnife = Config.KnifeChanger.Model
-                local newSkin = Config.SkinChanger.Skins[newKnife] or "Vanilla"
-                local success, result = pcall(oVN, vc, newKnife, newSkin, ...)
-                if success and result then return result end
-            end
-            local success, result = pcall(oVN, vc, w, sk, ...)
-            if success then return result end
-            return nil
-        end
-        if Sk.GetGloves then
-            local oGG = Sk.GetGloves
-            Sk.GetGloves = function(g, sk)
-                if Config.GloveChanger.Enabled and Config.GloveChanger.Model then
-                    local gModel = Config.GloveChanger.Model
-                    local ts = Config.GloveChanger.Gloves[gModel] or "Default"
-                    local success, result = pcall(oGG, gModel, ts)
-                    if success and result then return result end
+        local SM = RS:FindFirstChild("Database") and RS.Database:FindFirstChild("Components")
+            and RS.Database.Components:FindFirstChild("Libraries")
+            and RS.Database.Components.Libraries:FindFirstChild("Skins")
+        if SM then SoloSkins.lib = SafeRequire(SM) end
+    end)
+    return SoloSkins.lib
+end
+
+local function SoloSkinsFor(weapon)
+    if SoloSkins.skinListCache[weapon] then return SoloSkins.skinListCache[weapon] end
+    local Sk = SoloGetSkinsLib()
+    local out = {}
+    if Sk and type(Sk.GetAllSkinsForWeapon) == "function" then
+        local ok, list = pcall(Sk.GetAllSkinsForWeapon, weapon)
+        if ok and type(list) == "table" then
+            for _, s in ipairs(list) do
+                local nm = s.skin or s.name
+                if type(nm) == "string" then
+                    local icon = s.imageAssetId
+                    if not icon and type(s.wearImages) == "table" then
+                        local first
+                        for _, v in pairs(s.wearImages) do
+                            if type(v) == "table" then
+                                first = first or v.assetId
+                                if v.wear == "Factory New" then icon = v.assetId; break end
+                            elseif type(v) == "string" then
+                                first = first or v
+                            end
+                        end
+                        icon = icon or first
+                    end
+                    out[#out+1] = { name = nm, icon = icon }
                 end
-                local success, result = pcall(oGG, g, sk)
-                if success then return result end
-                return nil
+            end
+        end
+    end
+    SoloSkins.skinListCache[weapon] = out
+    return out
+end
+
+local function SoloResolveIcon(weapon, skin)
+    local key = tostring(weapon) .. "|" .. tostring(skin or "")
+    if SoloSkins.iconCache[key] ~= nil then return SoloSkins.iconCache[key] end
+    local asset = nil
+    pcall(function()
+        for _, s in ipairs(SoloSkinsFor(weapon)) do
+            if not skin or s.name == skin or (skin == "Default" and (s.name == "Stock" or s.name == "Vanilla")) then
+                if s.icon then
+                    local id = tostring(s.icon)
+                    if not id:find("rbxassetid://", 1, true) then
+                        id = "rbxassetid://" .. id:gsub("%D", "")
+                    end
+                    asset = id
+                    break
+                end
+            end
+        end
+        -- weapon property icon fallback
+        if not asset then
+            local GWP = SafeRequire(RS.Components and RS.Components.Common and RS.Components.Common.GetWeaponProperties)
+            if type(GWP) == "function" then
+                local ok, p = pcall(GWP, weapon)
+                if ok and type(p) == "table" and (p.Icon or p.ReverseIcon) then
+                    local id = tostring(p.Icon or p.ReverseIcon)
+                    if not id:find("rbxassetid://", 1, true) then id = "rbxassetid://" .. id:gsub("%D", "") end
+                    asset = id
+                end
             end
         end
     end)
+    SoloSkins.iconCache[key] = asset
+    return asset
 end
-if G.knifeChangerSupported then InitKnifeChanger() end
+
+_G.ECLIPSE_ResolveWeaponIcon = function(weaponName)
+    if not weaponName or weaponName == "" or weaponName == "None" then return nil end
+    local skin = Config and Config.SkinChanger and Config.SkinChanger.Skins and Config.SkinChanger.Skins[weaponName]
+    return SoloResolveIcon(weaponName, skin)
+end
+
+_G.ECLIPSE_ResolveNadeIcon = function(kind)
+    -- kind: "Smoke" / "Molotov" / "HE" etc
+    local map = {
+        Smoke = "Smoke Grenade",
+        Molotov = "Molotov",
+        HE = "HE Grenade",
+        Flash = "Flashbang",
+        Incendiary = "Incendiary Grenade",
+    }
+    local w = map[kind] or kind
+    return SoloResolveIcon(w, nil)
+end
+
+local function SoloResolveWeapon(weapon, skin)
+    if type(weapon) ~= "string" then return weapon, skin end
+    local w, s = weapon, skin
+    if Config.KnifeChanger and Config.KnifeChanger.Enabled and Checkknife and Checkknife(weapon) then
+        w = Config.KnifeChanger.Model or weapon
+        s = (Config.SkinChanger and Config.SkinChanger.Skins and Config.SkinChanger.Skins[w]) or s or "Stock"
+    elseif Config.SkinChanger and Config.SkinChanger.Enabled then
+        local want = Config.SkinChanger.Skins and Config.SkinChanger.Skins[w]
+        if want and want ~= "Default" and want ~= "Vanilla" then s = want end
+    end
+    if Config.GloveChanger and Config.GloveChanger.Enabled and type(weapon) == "string" and (weapon:find("Glove") or weapon == "Hand Wraps") then
+        w = Config.GloveChanger.Model or w
+        s = (Config.GloveChanger.Gloves and Config.GloveChanger.Gloves[w]) or s
+    end
+    return w, s
+end
+
+local function InitKnifeChanger()
+    pcall(function()
+        local Sk = SoloGetSkinsLib()
+        local VM = RS:FindFirstChild("Classes") and RS.Classes:FindFirstChild("WeaponComponent") and
+            RS.Classes.WeaponComponent:FindFirstChild("Classes") and
+            RS.Classes.WeaponComponent.Classes:FindFirstChild("Viewmodel")
+        local Vm = VM and SafeRequire(VM)
+        if not Sk then return end
+        local function wrap(fnName)
+            local orig = Sk[fnName]
+            if type(orig) ~= "function" then return end
+            Sk[fnName] = function(weapon, skin, float, st, nameTag, charm, stickers, variant)
+                local w, s = SoloResolveWeapon(weapon, skin)
+                local ok, res = pcall(orig, w, s, float or 0, st, nameTag, charm, stickers, variant)
+                if ok and res then return res end
+                return orig(weapon, skin, float, st, nameTag, charm, stickers, variant)
+            end
+        end
+        wrap("GetCameraModel")
+        wrap("GetCharacterModel")
+        wrap("GetWorldModel")
+        wrap("GetMagazine")
+        if type(Sk.GetGloves) == "function" then
+            local oGG = Sk.GetGloves
+            Sk.GetGloves = function(name, skin, float)
+                local w, s = SoloResolveWeapon(name, skin)
+                local ok, res = pcall(oGG, w, s, float or 0)
+                if ok and res then return res end
+                return oGG(name, skin, float)
+            end
+        end
+        if type(Vm) == "table" and type(Vm.new) == "function" then
+            local oVN = Vm.new
+            Vm.new = function(comp, weapon, skin, inspecting)
+                local w, s = SoloResolveWeapon(weapon, skin)
+                local ok, res = pcall(oVN, comp, w, s, inspecting)
+                if ok and res then return res end
+                return oVN(comp, weapon, skin, inspecting)
+            end
+        end
+        _G.ECLIPSE_SkinsLib = Sk
+    end)
+end
+pcall(InitKnifeChanger) -- Solo-style skins always (knife support soft-fails inside)
 local function UpdateInventoryNames()
     local invGui = LP:FindFirstChild("PlayerGui") and LP.PlayerGui:FindFirstChild("MainGui")
     if not invGui then return end
@@ -2002,46 +2263,43 @@ WeaponModsBox:AddToggle("Firerate", {
     DisabledTooltip = "This feature is not available on your executor.",
 })
 WeaponModsBox:AddSlider("FirerateSlider", { Text = "FIRERATE", Default = 0.01, Min = 0, Max = 1, Rounding = 3 })
-WeaponModsBox:AddToggle("NoRecoil", {
-    Text = "NO RECOIL",
-    Default = false,
-    Disabled = typeof(hookfunction) ~= "function",
-    DisabledTooltip = "This feature is not available on your executor.",
-})
 WeaponModsBox:AddToggle("NoSpread", {
     Text = "NO SPREAD",
     Default = false,
     Disabled = typeof(hookfunction) ~= "function",
     DisabledTooltip = "This feature is not available on your executor.",
 })
-local CombatBlatantBox = Tabs.Combat:AddLeftGroupbox("Silent", "target")
-local RageBlatantBox = Tabs.Combat:AddRightGroupbox("Rage", "flame")
-local RCSBox = Tabs.Combat:AddRightGroupbox("RCS", "move")
-local WpnCfgBox = Tabs.Combat:AddLeftGroupbox("Configs", "sliders")
-CombatBlatantBox:AddToggle("SilentAim", {
+-- AIMBOT extras: DRAW FOV then SILENT / WALLBANG (ES order)
+AimbotBox:AddDivider()
+AimbotBox:AddToggle("SilentUseFovCircle", {
+    Text = "DRAW FOV",
+    Default = true,
+}):AddColorPicker("SilentFovColor", { Default = Color3.fromRGB(255, 255, 255), Title = "FOV" })
+AimbotBox:AddToggle("SilentFovFilled", { Text = "FOV FILL", Default = false })
+AimbotBox:AddSlider("SilentFovFillAlpha", { Text = "FILL ALPHA", Default = 0.85, Min = 0.5, Max = 0.98, Rounding = 2 })
+AimbotBox:AddSlider("SilentFovCircleRadius", { Text = "FOV SIZE", Default = 80, Min = 10, Max = 400, Rounding = 0 })
+AimbotBox:AddDivider()
+AimbotBox:AddToggle("SilentAim", {
     Text = "SILENT AIM",
     Default = false,
     Disabled = typeof(hookfunction) ~= "function",
     DisabledTooltip = "Unavailable on this executor.",
 }):AddKeyPicker("SilentAimKey", { Text = "SILENT", Default = "MB1", Mode = "Hold" })
-local BlatantDependencyBox = CombatBlatantBox:AddDependencyBox()
-BlatantDependencyBox:AddToggle("SilentWallbang", { Text = "WALLBANG", Default = false })
-BlatantDependencyBox:AddToggle("SilentUseFovCircle", {
-    Text = "DRAW FOV",
-    Default = true,
-}):AddColorPicker("SilentFovColor", { Default = Color3.fromRGB(255, 255, 255), Title = "FOV" })
-BlatantDependencyBox:AddToggle("SilentFovFilled", { Text = "FOV FILL", Default = false })
-BlatantDependencyBox:AddSlider("SilentFovFillAlpha", { Text = "FILL ALPHA", Default = 0.85, Min = 0.5, Max = 0.98, Rounding = 2 })
-BlatantDependencyBox:AddSlider("SilentFovCircleRadius", { Text = "FOV", Default = 80, Min = 10, Max = 400, Rounding = 0 })
-BlatantDependencyBox:AddDropdown("SilentHitPart", {
+AimbotBox:AddToggle("SilentWallbang", { Text = "WALLBANG", Default = false })
+AimbotBox:AddDropdown("SilentHitPart", {
     Text = "HITBOX",
     Values = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
     Default = "Head",
     Multi = false,
 })
-BlatantDependencyBox:AddSlider("SilentSmooth", { Text = "ASSIST SMOOTH", Default = 0.22, Min = 0.05, Max = 1, Rounding = 2 })
-BlatantDependencyBox:AddToggle("SilentTeamCheck", { Text = "TEAM CHECK", Default = true })
-BlatantDependencyBox:SetupDependencies({ {Toggles.SilentAim, true} })
+AimbotBox:AddSlider("SilentSmooth", { Text = "SILENT SMOOTH", Default = 0.22, Min = 0.05, Max = 1, Rounding = 2 })
+AimbotBox:AddToggle("SilentTeamCheck", { Text = "SILENT TEAM CHECK", Default = true })
+
+local RageBlatantBox = Tabs.Combat:AddRightGroupbox("RAGE", "flame")
+local RCSBox = Tabs.Combat:AddRightGroupbox("RCS", "move")
+local WpnCfgBox = Tabs.Combat:AddLeftGroupbox("Configs", "sliders")
+local CombatBlatantBox = AimbotBox -- compat
+local BlatantDependencyBox = AimbotBox -- compat
 RageBlatantBox:AddToggle("Ragebot", {
     Text = "RAGEBOT",
     Default = false,
@@ -2061,6 +2319,7 @@ RageDependencyBox:AddToggle("RagebotVisibleCheck", { Text = "VISIBLE CHECK", Def
 RageDependencyBox:AddToggle("RagebotTeamCheck", { Text = "TEAM CHECK", Default = true })
 RageDependencyBox:AddToggle("RagebotWallCheck", { Text = "WALL CHECK", Default = false })
 RageDependencyBox:SetupDependencies({ {Toggles.Ragebot, true} })
+RCSBox:AddToggle("NoRecoil", { Text = "NO RECOIL", Default = false })
 RCSBox:AddToggle("RCSEnabled", { Text = "RCS", Default = false })
 RCSBox:AddSlider("RCSVertical", { Text = "VERTICAL", Default = 50, Min = 0, Max = 100, Rounding = 0, Suffix = "%" })
 RCSBox:AddSlider("RCSHorizontal", { Text = "HORIZONTAL", Default = 30, Min = 0, Max = 100, Rounding = 0, Suffix = "%" })
@@ -2140,9 +2399,9 @@ VisualsESPBox:AddLabel("Fill Color "):AddColorPicker("ESPFillColorA", { Default 
 VisualsESPBox:AddLabel("Fill Color "):AddColorPicker("ESPFillColorB", { Default = Color3.fromRGB(200,200,210),  Title = "Fill Color B" })
 VisualsESPBox:AddToggle("ESPBoxFillRotation", { Text = "FILL ROTATION", Default = false })
 VisualsESPBox:AddSlider("ESPBoxRotationSpeed", { Text = "ROTATION SPEED", Min = 0.1, Max = 10, Default = 2, Rounding = 1 })
-VisualsESPBox:AddToggle("ESPName", { Text = "NAME", Default = true })
+VisualsESPBox:AddToggle("ESPName", { Text = "ESP NAME", Default = true })
 VisualsESPBox:AddLabel("Name Color"):AddColorPicker("ESPNameColor", { Default = Color3.fromRGB(255,255,255), Title = "Name Color" })
-VisualsESPBox:AddToggle("ESPHealth", { Text = "HEALTH BAR", Default = true })
+VisualsESPBox:AddToggle("ESPHealth", { Text = "ESP HEALTH", Default = true })
 VisualsESPBox:AddLabel("Health Top Color"):AddColorPicker("ESPHealthTopColor",       { Default = Color3.fromRGB(0,255,0),   Title = "Health Top"    })
 VisualsESPBox:AddLabel("Health Bottom Color"):AddColorPicker("ESPHealthBottomColor", { Default = Color3.fromRGB(255,0,0),   Title = "Health Bottom" })
 VisualsESPBox:AddToggle("ESPHealthText", { Text = "HEALTH TEXT", Default = false })
@@ -2153,7 +2412,7 @@ VisualsESPBox:AddToggle("ESPWeapon", { Text = "WEAPON", Default = true })
     :AddColorPicker("ESPWeaponColor", { Default = Color3.fromRGB(230,230,230), Title = "Weapon Color" })
 VisualsESPBox:AddToggle("ESPMoney", { Text = "MONEY", Default = false })
     :AddColorPicker("ESPMoneyColor", { Default = Color3.fromRGB(60, 220, 90), Title = "Money" })
-VisualsESPBox:AddToggle("ESPTrails", { Text = "TRAILS", Default = false })
+VisualsESPBox:AddToggle("ESPTrails", { Text = "ESP TRAILS", Default = false })
     :AddColorPicker("ESPTrailsColor", { Default = Color3.fromRGB(140, 100, 255), Title = "Trail" })
 VisualsESPBox:AddSlider("ESPTrailsLength", { Text = "TRAIL LENGTH", Default = 12, Min = 4, Max = 40, Rounding = 0 })
 VisualsESPBox:AddSlider("ESPTrailsThickness", { Text = "TRAIL THICKNESS", Default = 1.5, Min = 0.5, Max = 4, Rounding = 1 })
@@ -2163,7 +2422,7 @@ VisualsESPBox:AddLabel("Tracer Color "):AddColorPicker("ESPTracerColorB", { Defa
 VisualsESPBox:AddDropdown("ESPTracerOrigin", {
     Text = "TRACER ORIGIN", Values = {"Bottom","Top","Center","Mouse"}, Default = "Bottom",
 })
-VisualsESPBox:AddToggle("ESPSkeleton", { Text = "SKELETON", Default = false })
+VisualsESPBox:AddToggle("ESPSkeleton", { Text = "ESP SKELETON", Default = false })
 VisualsESPBox:AddLabel("Skeleton Color"):AddColorPicker("ESPSkeletonColorA", { Default = Color3.new(1,1,1),         Title = "Skel A" })
 VisualsESPBox:AddLabel("Skeleton Color "):AddColorPicker("ESPSkeletonColorB", { Default = Color3.fromRGB(0,255,255), Title = "Skel B" })
 VisualsESPBox:AddToggle("ESPCircularTarget", { Text = "CIRCULAR TARGET", Default = false })
@@ -2466,7 +2725,16 @@ end
 function espfunctions.add_weapon(instance)
     if not instance or (espinstances[instance] and espinstances[instance].weapon) then return end
     local t=Drawing.new("Text"); t.Center=true; t.Outline=true; t.Font=1; t.Transparency=1; t.Visible=false
-    espinstances[instance]=espinstances[instance] or {}; espinstances[instance].weapon=t
+    local img = nil
+    pcall(function()
+        img = Drawing.new("Image")
+        img.Visible = false
+        img.Size = Vector2.new(22, 22)
+        img.Transparency = 1
+    end)
+    espinstances[instance]=espinstances[instance] or {}
+    espinstances[instance].weapon=t
+    espinstances[instance].weaponIcon=img
 end
 function espfunctions.add_circulartarget(instance)
     if not instance or (espinstances[instance] and espinstances[instance].circulartarget) then return end
@@ -2764,11 +3032,34 @@ RunService.RenderStepped:Connect(function(dt)
             if needWep and onscreen and min2 and max2 then
                 if not data.player then data.player=Players:GetPlayerFromCharacter(instance) end
                 local wn=data.player and GetWeaponName(data.player) or "None"
-                data.weapon.Text="["..wn.."]"; data.weapon.Size=weaponCfg.size or 13
-                data.weapon.Color=weaponCfg.fill
-                data.weapon.Position=Vector2.new((min2.X+max2.X)*.5,max2.Y+15)
-                data.weapon.Center=true; data.weapon.Visible=true
-            else data.weapon.Visible=false end
+                -- resolve icon from ReplicatedStorage Weapons folder (skinchanger base)
+                local iconAsset = nil
+                pcall(function()
+                    if _G.ECLIPSE_ResolveWeaponIcon then
+                        iconAsset = _G.ECLIPSE_ResolveWeaponIcon(wn)
+                    end
+                end)
+                if iconAsset and data.weaponIcon then
+                    data.weapon.Visible = false
+                    local cx = (min2.X+max2.X)*.5
+                    local cy = max2.Y + 18
+                    data.weaponIcon.Data = iconAsset
+                    data.weaponIcon.Size = Vector2.new(22, 22)
+                    data.weaponIcon.Position = Vector2.new(cx - 11, cy - 11)
+                    data.weaponIcon.Visible = true
+                else
+                    if data.weaponIcon then data.weaponIcon.Visible = false end
+                    data.weapon.Text = wn
+                    data.weapon.Size = weaponCfg.size or 13
+                    data.weapon.Color = weaponCfg.fill
+                    data.weapon.Position = Vector2.new((min2.X+max2.X)*.5, max2.Y+15)
+                    data.weapon.Center = true
+                    data.weapon.Visible = true
+                end
+            else
+                data.weapon.Visible=false
+                if data.weaponIcon then data.weaponIcon.Visible=false end
+            end
         end
         if data.tracer then
             if needTracer and onscreen and min2 and max2 then
@@ -3073,14 +3364,18 @@ function keyActive(pickerName, toggleName)
     return on
 end
 function getMemesenseActive()
+    -- GLOBAL ENABLE for combat features
     local memesenseActive = Toggles.MemesenseMainToggle and Toggles.MemesenseMainToggle.Value
+    if Toggles.GlobalEnabled and Toggles.GlobalEnabled.Value == false then
+        return false
+    end
     if Options.MemesenseKeybind then
         local kState = Options.MemesenseKeybind:GetState()
         if Options.MemesenseKeybind.Value ~= "None" and Options.MemesenseKeybind.Value ~= "Always" and Options.MemesenseKeybind.Value ~= "Toggle" then
             memesenseActive = kState
         end
     end
-    return memesenseActive
+    return memesenseActive == true
 end
 -- aim / silent / trigger respect their keypickers (MB1 hold default)
 _G.ECLIPSE_AimKeyActive = function()
@@ -3379,6 +3674,13 @@ RunService.RenderStepped:Connect(function()
     local aimKeyOk = _G.ECLIPSE_AimKeyActive and _G.ECLIPSE_AimKeyActive() or false
     if memesenseActive and aimKeyOk and CubeSmartTarget and CubeSmartTarget.Parent then
         pcall(function()
+            if Toggles.AimWallCheck and Toggles.AimWallCheck.Value then
+                if isVisible and not isVisible(CubeSmartTarget) then return end
+            end
+            if Toggles.CubeVisibleCheck and Toggles.CubeVisibleCheck.Value then
+                local _, onScreen = Workspace.CurrentCamera:WorldToViewportPoint(CubeSmartTarget.Position)
+                if not onScreen then return end
+            end
             local smooth = Options.SilentSmooth and Options.SilentSmooth.Value or 0.22
             pcall(function()
                 if Options.WeaponCfgMode and Options.WeaponCfgMode.Value == "Per Weapon" then
@@ -4207,6 +4509,102 @@ function CreateZoneRing(parent, cfg, isMolotov)
     end)
     record.updateConn = updateConn
 end
+
+-- Smoke / Molotov zone timer + icon + progress bar (Solo-style icons)
+task.spawn(function()
+    local ZONE_LIFE = 18
+    local function ensureTimer(parent, record)
+        if record.timerGui and record.timerGui.Parent then return record.timerGui end
+        local isMolo = record.isMolotov == true
+        local bb = Instance.new("BillboardGui")
+        bb.Name = "ECLIPSE_ZoneTimer"
+        bb.Size = UDim2.fromOffset(96, 64)
+        bb.StudsOffset = Vector3.new(0, 1.6, 0)
+        bb.AlwaysOnTop = true
+        bb.MaxDistance = 220
+        bb.Parent = parent
+
+        local icon = Instance.new("ImageLabel")
+        icon.BackgroundTransparency = 1
+        icon.Size = UDim2.fromOffset(28, 28)
+        icon.Position = UDim2.new(0.5, -14, 0, 0)
+        icon.ScaleType = Enum.ScaleType.Fit
+        icon.Parent = bb
+        pcall(function()
+            local kind = isMolo and "Molotov" or "Smoke"
+            local id = _G.ECLIPSE_ResolveNadeIcon and _G.ECLIPSE_ResolveNadeIcon(kind)
+            if id then icon.Image = id end
+        end)
+
+        local tl = Instance.new("TextLabel")
+        tl.BackgroundTransparency = 1
+        tl.Size = UDim2.new(1, 0, 0, 16)
+        tl.Position = UDim2.new(0, 0, 0, 28)
+        tl.Font = Enum.Font.Code
+        tl.TextSize = 14
+        tl.TextColor3 = isMolo and Color3.fromRGB(255, 140, 60) or Color3.fromRGB(220, 220, 230)
+        tl.TextStrokeTransparency = 0.35
+        tl.Text = isMolo and "MOLOTOV 18.0" or "SMOKE 18.0"
+        tl.Parent = bb
+
+        local track = Instance.new("Frame")
+        track.Name = "BarBG"
+        track.Size = UDim2.new(0.82, 0, 0, 4)
+        track.Position = UDim2.new(0.09, 0, 0, 48)
+        track.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+        track.BorderSizePixel = 0
+        track.Parent = bb
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 2)
+        corner.Parent = track
+
+        local fill = Instance.new("Frame")
+        fill.Name = "BarFill"
+        fill.Size = UDim2.new(1, 0, 1, 0)
+        fill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        fill.BorderSizePixel = 0
+        fill.Parent = track
+        local corner2 = Instance.new("UICorner")
+        corner2.CornerRadius = UDim.new(0, 2)
+        corner2.Parent = fill
+
+        record.timerGui = bb
+        record.timerLabel = tl
+        record.timerBar = fill
+        record.timerIcon = icon
+        record.timerStart = tick()
+        return bb
+    end
+
+    RunService.RenderStepped:Connect(function()
+        pcall(function()
+            if not ActiveZones then return end
+            local smokeOn = Toggles.SmokeZoneESP and Toggles.SmokeZoneESP.Value
+            local moloOn = Toggles.MolotovZoneESP and Toggles.MolotovZoneESP.Value
+            for parent, rec in pairs(ActiveZones) do
+                local want = (rec.isMolotov and moloOn) or ((not rec.isMolotov) and smokeOn)
+                if not want or not parent or not parent.Parent then
+                    if rec.timerGui then pcall(function() rec.timerGui:Destroy() end); rec.timerGui = nil end
+                else
+                    ensureTimer(parent, rec)
+                    local left = math.max(0, ZONE_LIFE - (tick() - (rec.timerStart or tick())))
+                    local pct = left / ZONE_LIFE
+                    if rec.timerLabel then
+                        rec.timerLabel.Text = string.format("%s %.1f", rec.isMolotov and "MOLOTOV" or "SMOKE", left)
+                    end
+                    if rec.timerBar then
+                        rec.timerBar.Size = UDim2.new(math.clamp(pct, 0, 1), 0, 1, 0)
+                    end
+                    if left <= 0 and rec.timerGui then
+                        pcall(function() rec.timerGui:Destroy() end)
+                        rec.timerGui = nil
+                    end
+                end
+            end
+        end)
+    end)
+end)
+
 function IsToggleOn(name)
     if Toggles and Toggles[name] then return Toggles[name].Value end
     return false
@@ -4291,9 +4689,13 @@ task.spawn(function()
     end
 end)
 function VisualizeShrapnel(pos)
-    if not _G.Config.GrenadeTracers then return end
+    return -- grenade tracers disabled
+end
 GrenadeFlightTracers = {}
 function StartGrenadeFlightTracer(part)
+    return -- grenade tracers disabled
+end
+local function __disabled_StartGrenadeFlightTracer(part)
     if not part or not part:IsA("BasePart") then return end
     if GrenadeFlightTracers[part] then return end
     local MAX_TRAIL = 30
@@ -4440,48 +4842,10 @@ task.spawn(function()
         end)
     end)
 end)
-    local lines = {}
-    for i = 1, 16 do
-        local line = Drawing.new("Line")
-        line.Visible = true
-        line.Color = Color3.fromRGB(255,100,0)
-        line.Thickness = 2
-        line.Transparency = 1
-        local dir = Vector3.new(math.random()*2-1,math.random()*2-1,math.random()*2-1).Unit
-        table.insert(lines, {obj=line, dir=dir})
-    end
-    task.spawn(function()
-        local Cam = workspace.CurrentCamera
-        local s = tick()
-        local conn
-        conn = RunService.RenderStepped:Connect(function()
-            local t = tick()-s
-            if t > 0.8 then
-                conn:Disconnect()
-                for _,l in ipairs(lines) do l.obj:Remove() end
-                return
-            end
-            local a = math.clamp(t/0.8,0,1)
-            local e = (1-(1-a)^2)*12
-            for _,l in ipairs(lines) do
-                local wS = pos+l.dir*(e*0.2)
-                local wE = pos+l.dir*e
-                local sS,o1 = Cam:WorldToViewportPoint(wS)
-                local sE,o2 = Cam:WorldToViewportPoint(wE)
-                l.obj.Visible = o1 or o2
-                if l.obj.Visible then
-                    l.obj.From = Vector2.new(sS.X,sS.Y)
-                    l.obj.To   = Vector2.new(sE.X,sE.Y)
-                    l.obj.Transparency = 1-a
-                end
-            end
-        end)
-    end)
-end
 task.spawn(function()
     repeat task.wait() until Tabs and Tabs.Visuals
     repeat task.wait() until Toggles and Options
-    local ChamsGroupbox = Tabs.Visuals:AddRightGroupbox("Chams")
+    local ChamsGroupbox = Tabs.Visuals:AddRightGroupbox("CHAMS", "eye")
     ChamsGroupbox:AddToggle("ChamsEnabled",   { Text = "ENABLED",    Default = false })
     ChamsGroupbox:AddToggle("ChamsTeamCheck", { Text = "TEAMCHECK",  Default = true  })
     ChamsGroupbox:AddDivider()
@@ -4782,10 +5146,11 @@ end)
 -- 3D Skin Preview, ESP Preview, C4 ESP, Autowall helper
 -- ============================================================
 do
-    local MainBox = Tabs.Main:AddLeftGroupbox("Session", "user")
-    MainBox:AddToggle("GlobalEnabled", { Text = "GLOBAL ENABLED", Default = true })
-    MainBox:AddLabel("Master switch for combat assists.", true)
-    MainBox:AddDivider()
+    local LinksBox = Tabs.Main:AddRightGroupbox("LINKS", "link")
+    LinksBox:AddLabel("Discord: discord.gg/5Drj4Hkdgu", true)
+    LinksBox:AddLabel("EclipseHub is 100% FREE.", true)
+    LinksBox:AddLabel("If you paid for it, you were SCAMMED.", true)
+    local MainBox = Tabs.Main:AddLeftGroupbox("SESSION", "user")
     local GameName = "BloxStrike"
     pcall(function()
         GameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name or "BloxStrike"
@@ -4793,9 +5158,13 @@ do
     local lblUser = MainBox:AddLabel("Username: " .. LP.Name)
     local lblGame = MainBox:AddLabel("Game: " .. GameName)
     local lblSess = MainBox:AddLabel("Session: 00:00:00")
+    local lblExec = MainBox:AddLabel("Executor: Unknown")
+    pcall(function()
+        local n = (identifyexecutor and identifyexecutor()) or (getexecutorname and getexecutorname()) or "Unknown"
+        lblExec:SetText("Executor: " .. tostring(n))
+    end)
     MainBox:AddLabel("Version: " .. (EclipseHub.Version or "ECLIPSE"))
     MainBox:AddDivider()
-    MainBox:AddLabel("ECLIPSE is 100% free. No keys. No paywall.", true)
     local DISCORD = EclipseHub.Discord or "https://discord.gg/5Drj4Hkdgu"
     MainBox:AddButton({
         Text = "COPY DISCORD LINK",
@@ -4813,6 +5182,15 @@ do
         end,
     })
     MainBox:AddLabel("Discord: " .. tostring(DISCORD):gsub("https://", ""), true)
+    MainBox:AddDivider()
+    MainBox:AddToggle("Main_Sync", {
+        Text = "SYNCHRONIZATION",
+        Default = false,
+        Tooltip = "Connect to EclipseHub realtime. Other synced users are marked with [E].",
+    })
+    MainBox:AddLabel("ECLIPSE is 100% free. No keys. No paywall.", true)
+    MainBox:AddLabel("If you paid for it, you were SCAMMED.", true)
+
     local SessionStart = tick()
     local function setWindowFooter(text)
         pcall(function()
@@ -4848,57 +5226,152 @@ do
     AABox:AddToggle("AntiAimEnabled", { Text = "ANTI-AIM", Default = false }):AddKeyPicker("AntiAimKey", {
         Default = "None", Mode = "Toggle", Text = "ANTI-AIM",
     })
-    AABox:AddDropdown("AntiAimMode", { Text = "MODE", Values = {"Static", "Jitter", "Spin", "Random"}, Default = "Jitter" })
+    AABox:AddDropdown("AntiAimMode", { Text = "MODE", Values = {"Static", "Jitter", "Spin", "Random", "At Target"}, Default = "Jitter" })
     AABox:AddSlider("AntiAimYaw", { Text = "YAW OFFSET", Default = 180, Min = -180, Max = 180, Rounding = 0, Suffix = "deg" })
     AABox:AddSlider("AntiAimJitter", { Text = "JITTER ANGLE", Default = 45, Min = 0, Max = 180, Rounding = 0, Suffix = "deg" })
     AABox:AddSlider("AntiAimSpinSpeed", { Text = "SPIN SPEED", Default = 360, Min = 30, Max = 1440, Rounding = 0, Suffix = "deg/s" })
     AABox:AddDropdown("AntiAimPitch", { Text = "PITCH", Values = {"Camera", "Up", "Down", "Level"}, Default = "Camera" })
     AABox:AddToggle("AntiAimUpperBody", { Text = "UPPER BODY ONLY", Default = true })
 
-    local AA = { Started = 0, Side = 1, RandomYaw = 0 }
+    local AA = { Started = 0, Side = 1, RandomYaw = 0, SpinAccum = 0, LastStep = -1 }
+    local function aaFindNearestEnemy()
+        local best, bestD = nil, 1e9
+        local myChar = LP.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return nil end
+        local folder = Workspace:FindFirstChild("Characters")
+        local list = {}
+        if folder then
+            for _, m in ipairs(folder:GetChildren()) do if m:IsA("Model") then list[#list+1] = m end end
+        else
+            for _, p in ipairs(Players:GetPlayers()) do if p ~= LP and p.Character then list[#list+1] = p.Character end end
+        end
+        for _, char in ipairs(list) do
+            if char == myChar then continue end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root then
+                local d = (root.Position - myRoot.Position).Magnitude
+                if d < bestD then bestD = d; best = root end
+            end
+        end
+        return best
+    end
+    local function aaGetMotor(char, names)
+        for _, n in ipairs(names) do
+            local m = char:FindFirstChild(n, true)
+            if m and m:IsA("Motor6D") then return m end
+        end
+        return nil
+    end
     RunService.RenderStepped:Connect(function(dt)
         pcall(function()
             if not (Toggles.AntiAimEnabled and Toggles.AntiAimEnabled.Value) then return end
             if Toggles.GlobalEnabled and Toggles.GlobalEnabled.Value == false then return end
+            local kp = Options.AntiAimKey
+            if kp and kp.Value and kp.Value ~= "None" and kp.Value ~= "Always" then
+                local ok, st = pcall(function() return kp:GetState() end)
+                if ok and st ~= true then return end
+            end
             local cam = Workspace.CurrentCamera
             if not cam then return end
             local mode = Options.AntiAimMode and Options.AntiAimMode.Value or "Jitter"
-            local yawOff = math.rad(Options.AntiAimYaw and Options.AntiAimYaw.Value or 180)
+            local yawOffDeg = Options.AntiAimYaw and Options.AntiAimYaw.Value or 180
             if AA.Started == 0 then AA.Started = os.clock() end
             local elapsed = os.clock() - AA.Started
-            local step = math.floor(elapsed / 0.15)
-            AA.Side = step % 2 == 0 and -1 or 1
-            local yaw = cam.CFrame.LookVector
-            local baseYaw = math.atan2(-yaw.X, -yaw.Z)
-            local finalYaw = baseYaw + yawOff
-            if mode == "Jitter" then
-                finalYaw += math.rad(Options.AntiAimJitter and Options.AntiAimJitter.Value or 45) * AA.Side
-            elseif mode == "Spin" then
-                finalYaw += math.rad(elapsed * (Options.AntiAimSpinSpeed and Options.AntiAimSpinSpeed.Value or 360) % 360)
-            elseif mode == "Random" then
-                if step ~= AA.LastStep then
-                    AA.RandomYaw = math.rad(math.random(-90, 90))
-                    AA.LastStep = step
-                end
-                finalYaw += AA.RandomYaw
+            local step = math.floor(elapsed / 0.12)
+            if step ~= AA.LastStep then
+                AA.Side = -AA.Side
+                if AA.Side == 0 then AA.Side = 1 end
+                AA.LastStep = step
             end
-            local pitch = 0
+
+            local look = cam.CFrame.LookVector
+            local baseYaw = math.atan2(-look.X, -look.Z)
+            local finalYaw = baseYaw + math.rad(yawOffDeg)
+
+            -- Mode-gated behavior (only selected mode runs)
+            if mode == "Jitter" then
+                local j = Options.AntiAimJitter and Options.AntiAimJitter.Value or 45
+                finalYaw = finalYaw + math.rad(j) * AA.Side
+            elseif mode == "Spin" then
+                local spd = Options.AntiAimSpinSpeed and Options.AntiAimSpinSpeed.Value or 360
+                AA.SpinAccum = (AA.SpinAccum + spd * (dt or 0.016)) % 360
+                finalYaw = baseYaw + math.rad(AA.SpinAccum)
+            elseif mode == "Random" then
+                if step ~= (AA.RandStep or -1) then
+                    AA.RandomYaw = math.rad(math.random(-180, 180))
+                    AA.RandStep = step
+                end
+                finalYaw = baseYaw + AA.RandomYaw
+            elseif mode == "At Target" then
+                local tgt = aaFindNearestEnemy()
+                if tgt then
+                    local myRoot = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+                    if myRoot then
+                        local dir = (tgt.Position - myRoot.Position)
+                        local away = math.atan2(-dir.X, -dir.Z) -- face away = backs to target
+                        finalYaw = away + math.rad(180)
+                    end
+                end
+            else
+                -- Static: only yaw offset
+                finalYaw = baseYaw + math.rad(yawOffDeg)
+            end
+
             local pitchMode = Options.AntiAimPitch and Options.AntiAimPitch.Value or "Camera"
-            if pitchMode == "Up" then pitch = 1
-            elseif pitchMode == "Down" then pitch = -1
-            elseif pitchMode == "Level" then pitch = 0
-            else pitch = cam.CFrame.LookVector.Y end
-            -- soft body spin via HumanoidRootPart (upper-body feel: don't invert move)
+            local pitchAngle = 0
+            if pitchMode == "Up" then pitchAngle = math.rad(70)
+            elseif pitchMode == "Down" then pitchAngle = math.rad(-70)
+            elseif pitchMode == "Level" then pitchAngle = 0
+            else pitchAngle = math.asin(math.clamp(look.Y, -1, 1)) end
+
             local char = LP.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            if root and not (Toggles.AntiAimUpperBody and Toggles.AntiAimUpperBody.Value == false) then
-                local pos = root.Position
-                local target = CFrame.new(pos) * CFrame.Angles(0, finalYaw, 0)
-                if Toggles.AntiAimUpperBody and Toggles.AntiAimUpperBody.Value then
-                    -- only rotate torso yaw; keep velocity direction
-                    root.CFrame = root.CFrame:Lerp(target, math.clamp(dt * 12, 0, 1))
-                else
-                    root.CFrame = target
+            if not char then return end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+            local upperOnly = not (Toggles.AntiAimUpperBody and Toggles.AntiAimUpperBody.Value == false)
+
+            -- R6 Motor6D upper body
+            local neck = aaGetMotor(char, {"Neck"})
+            local lS = aaGetMotor(char, {"Left Shoulder", "LeftShoulder"})
+            local rS = aaGetMotor(char, {"Right Shoulder", "RightShoulder"})
+
+            if upperOnly then
+                -- Pitch via Neck
+                if neck and neck.C0 then
+                    local baseC0 = neck:GetAttribute("ECLIPSE_BaseC0")
+                    if not baseC0 then
+                        neck:SetAttribute("ECLIPSE_BaseC0", true)
+                        AA.NeckC0 = neck.C0
+                    end
+                    local base = AA.NeckC0 or neck.C0
+                    neck.C0 = base * CFrame.Angles(pitchAngle * 0.85, 0, 0)
+                end
+                -- Yaw jitter via shoulders / root slight
+                if root then
+                    local pos = root.Position
+                    local flat = CFrame.new(pos) * CFrame.Angles(0, finalYaw, 0)
+                    -- keep movement: only set look orientation partially
+                    local cur = root.CFrame
+                    local blended = CFrame.new(pos) * (cur - cur.Position) * CFrame.Angles(0, select(2, (flat:ToObjectSpace(cur)):ToEulerAnglesYXZ()) * 0, 0)
+                    -- simpler: lerp yaw only
+                    local _, cy, _ = cur:ToEulerAnglesYXZ()
+                    local targetCF = CFrame.new(pos) * CFrame.Angles(0, finalYaw, 0)
+                    root.CFrame = cur:Lerp(targetCF, math.clamp((dt or 0.016) * 18, 0.1, 1))
+                end
+            else
+                if root then
+                    local pos = root.Position
+                    root.CFrame = CFrame.new(pos) * CFrame.Angles(0, finalYaw, 0)
+                end
+                if neck and AA.NeckC0 then
+                    neck.C0 = AA.NeckC0 * CFrame.Angles(pitchAngle, 0, 0)
+                elseif neck then
+                    neck.C0 = neck.C0 * CFrame.Angles(0, 0, 0)
+                    pcall(function()
+                        neck.C0 = CFrame.new(neck.C0.Position) * CFrame.Angles(pitchAngle, finalYaw * 0.15, 0)
+                    end)
                 end
             end
         end)
@@ -5105,7 +5578,7 @@ do
         end)
     end
     local SkinPrevBox = Tabs.SkinChanger:AddLeftGroupbox("Preview", "box")
-    SkinPrevBox:AddToggle("SkinPreview3D", { Text = "3D SKIN PREVIEW", Default = true })
+    SkinPrevBox:AddToggle("SkinPreview3D", { Text = "3D SKIN PREVIEW", Default = true, Callback = function(v) if v and buildSkinPrev then pcall(buildSkinPrev) end end })
     SkinPrevBox:AddButton({ Text = "REFRESH 3D PREVIEW", Func = function()
         buildSkinPrev()
         pcall(function()
@@ -5154,91 +5627,277 @@ do
         end)
     end)
 
-    -- ESP Preview (local dummy)
-    local ESPPrev = { Gui = nil, VP = nil, Cam = nil, Model = nil, RotY = 0 }
-    local function buildESPPrev()
-        if ESPPrev.Gui then return end
-        local sg = Instance.new("ScreenGui")
-        sg.Name = "ECLIPSE_ESPPreview"
-        sg.ResetOnSpawn = false
-        sg.DisplayOrder = 110
-        sg.Enabled = false
-        pcall(function()
-            if gethui then sg.Parent = gethui() else sg.Parent = game:GetService("CoreGui") end
+    -- ESP Preview (always works: R6 dummy + ESP overlays)
+    local ESPPrev = {
+        Gui = nil, Frame = nil, VP = nil, Cam = nil, Model = nil,
+        RotY = 0, NameLbl = nil, WepLbl = nil, Box = nil, built = false,
+    }
+
+    local function parentGui(sg)
+        local ok = pcall(function()
+            if gethui then sg.Parent = gethui() return end
+            local cg = game:GetService("CoreGui")
+            sg.Parent = cg
         end)
-        local f = Instance.new("Frame")
-        f.Size = UDim2.fromOffset(220, 280)
-        f.Position = UDim2.fromOffset(18, 120)
-        f.BackgroundColor3 = Color3.fromRGB(16, 18, 24)
-        f.BorderSizePixel = 0
-        f.Parent = sg
-        Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
-        Instance.new("UIStroke", f).Color = Color3.fromRGB(90, 70, 160)
-        local t = Instance.new("TextLabel")
-        t.BackgroundTransparency = 1
-        t.Size = UDim2.new(1, -10, 0, 20)
-        t.Position = UDim2.fromOffset(8, 4)
-        t.Font = Enum.Font.GothamBold
-        t.TextSize = 12
-        t.TextColor3 = Color3.fromRGB(242, 244, 250)
-        t.TextXAlignment = Enum.TextXAlignment.Left
-        t.Text = "ESP PREVIEW"
-        t.Parent = f
-        local vp = Instance.new("ViewportFrame")
-        vp.Size = UDim2.new(1, -12, 1, -30)
-        vp.Position = UDim2.fromOffset(6, 24)
-        vp.BackgroundColor3 = Color3.fromRGB(8, 10, 14)
-        vp.Parent = f
-        Instance.new("UICorner", vp).CornerRadius = UDim.new(0, 4)
-        local cam = Instance.new("Camera")
-        cam.Parent = vp
-        vp.CurrentCamera = cam
-        ESPPrev.Gui, ESPPrev.VP, ESPPrev.Cam = sg, vp, cam
-        RunService.RenderStepped:Connect(function(dt)
-            if not ESPPrev.Gui or not ESPPrev.Gui.Enabled or not ESPPrev.Model then return end
-            ESPPrev.RotY = (ESPPrev.RotY + dt * 40) % 360
-            local rot = CFrame.Angles(0, math.rad(ESPPrev.RotY), 0)
-            ESPPrev.Cam.CFrame = CFrame.lookAt((rot * CFrame.new(0, 1.2, 7)).Position, Vector3.new(0, 1, 0))
-        end)
+        if not ok or not sg.Parent then
+            pcall(function()
+                sg.Parent = LP:WaitForChild("PlayerGui")
+            end)
+        end
     end
-    local ESPPrevBox = Tabs.Visuals:AddLeftGroupbox("Preview", "user")
-    ESPPrevBox:AddToggle("ESPPreviewEnabled", { Text = "SHOW ESP PREVIEW", Default = true })
-    ESPPrevBox:AddButton({ Text = "REFRESH DUMMY", Func = function()
-        buildESPPrev()
+
+    local function makeDummyR6()
+        local m = Instance.new("Model")
+        m.Name = "EclipseESPDummy"
+        local function part(name, size, cf, col)
+            local p = Instance.new("Part")
+            p.Name = name
+            p.Size = size
+            p.CFrame = cf
+            p.Anchored = true
+            p.CanCollide = false
+            p.CanQuery = false
+            p.CanTouch = false
+            p.Massless = true
+            p.Material = Enum.Material.SmoothPlastic
+            p.Color = col or Color3.fromRGB(160, 160, 170)
+            p.TopSurface = Enum.SurfaceType.Smooth
+            p.BottomSurface = Enum.SurfaceType.Smooth
+            p.Parent = m
+            return p
+        end
+        local GRAY = Color3.fromRGB(170, 170, 180)
+        local GRAYD = Color3.fromRGB(130, 130, 140)
+        local root = part("HumanoidRootPart", Vector3.new(2, 2, 1), CFrame.new(0, 0, 0), GRAY)
+        root.Transparency = 1
+        part("Torso", Vector3.new(2, 2, 1), CFrame.new(0, 0, 0), GRAY)
+        part("Head", Vector3.new(1.2, 1.2, 1.2), CFrame.new(0, 1.5, 0), GRAY)
+        part("Left Arm", Vector3.new(1, 2, 1), CFrame.new(-1.5, 0, 0), GRAYD)
+        part("Right Arm", Vector3.new(1, 2, 1), CFrame.new(1.5, 0, 0), GRAYD)
+        part("Left Leg", Vector3.new(1, 2, 1), CFrame.new(-0.5, -2, 0), GRAYD)
+        part("Right Leg", Vector3.new(1, 2, 1), CFrame.new(0.5, -2, 0), GRAYD)
+        m.PrimaryPart = root
+        return m
+    end
+
+    local function spawnModel()
+        if not ESPPrev.VP then return end
+        if ESPPrev.Model then pcall(function() ESPPrev.Model:Destroy() end) ESPPrev.Model = nil end
+        local clone = nil
         pcall(function()
             local char = LP.Character
-            if not char then return end
-            if ESPPrev.Model then ESPPrev.Model:Destroy() end
-            local clone = char:Clone()
-            for _, d in ipairs(clone:GetDescendants()) do
-                if d:IsA("Script") or d:IsA("LocalScript") or d:IsA("Sound") then d:Destroy()
-                elseif d:IsA("BasePart") then d.Anchored = true; d.CanCollide = false end
+            if char and char:FindFirstChild("HumanoidRootPart") then
+                local ok, c = pcall(function() return char:Clone() end)
+                if ok and c then clone = c end
             end
-            local hum = clone:FindFirstChildOfClass("Humanoid")
-            if hum then hum:Destroy() end
+        end)
+        if not clone then clone = makeDummyR6() end
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("Script") or d:IsA("LocalScript") or d:IsA("Sound") or d:IsA("Animator") then
+                pcall(function() d:Destroy() end)
+            elseif d:IsA("BasePart") then
+                d.Anchored = true
+                d.CanCollide = false
+            end
+        end
+        local hum = clone:FindFirstChildOfClass("Humanoid")
+        if hum then pcall(function() hum:Destroy() end) end
+        pcall(function()
             local cf = clone:GetBoundingBox()
             for _, p in ipairs(clone:GetDescendants()) do
                 if p:IsA("BasePart") then p.CFrame = p.CFrame + (-cf.Position) end
             end
-            clone.Parent = ESPPrev.VP
-            ESPPrev.Model = clone
-            local hl = Instance.new("Highlight")
-            hl.Adornee = clone
-            hl.FillTransparency = 0.55
-            hl.OutlineTransparency = 0
-            hl.FillColor = Color3.fromRGB(255, 95, 105)
-            hl.OutlineColor = Color3.fromRGB(255, 95, 105)
-            hl.Parent = clone
-            ESPPrev.Gui.Enabled = true
         end)
-    end })
+        clone.Parent = ESPPrev.VP
+        ESPPrev.Model = clone
+        local hl = Instance.new("Highlight")
+        hl.Adornee = clone
+        hl.FillTransparency = 0.5
+        hl.OutlineTransparency = 0
+        hl.FillColor = Color3.fromRGB(255, 95, 105)
+        hl.OutlineColor = Color3.fromRGB(255, 95, 105)
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent = clone
+        if ESPPrev.NameLbl then
+            ESPPrev.NameLbl.Text = (LP.DisplayName or LP.Name) .. " [PREVIEW]"
+        end
+        if ESPPrev.WepLbl then
+            ESPPrev.WepLbl.Text = "AK-47"
+            pcall(function()
+                if GetWeaponName then
+                    local wn = GetWeaponName(LP)
+                    if wn and wn ~= "None" then ESPPrev.WepLbl.Text = wn end
+                end
+            end)
+        end
+    end
+
+    local function buildESPPrev()
+        if ESPPrev.Gui and ESPPrev.Gui.Parent then return end
+        -- destroy stale
+        pcall(function() if ESPPrev.Gui then ESPPrev.Gui:Destroy() end end)
+
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "ECLIPSE_ESPPreview"
+        sg.ResetOnSpawn = false
+        sg.DisplayOrder = 200
+        sg.IgnoreGuiInset = true
+        sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        sg.Enabled = true
+        parentGui(sg)
+
+        local f = Instance.new("Frame")
+        f.Name = "Panel"
+        f.Size = UDim2.fromOffset(230, 300)
+        f.AnchorPoint = Vector2.new(1, 0)
+        f.Position = UDim2.new(1, -16, 0, 90)
+        f.BackgroundColor3 = Color3.fromRGB(14, 15, 20)
+        f.BorderSizePixel = 0
+        f.Parent = sg
+        Instance.new("UICorner", f).CornerRadius = UDim.new(0, 10)
+        local stroke = Instance.new("UIStroke", f)
+        stroke.Color = Color3.fromRGB(120, 80, 220)
+        stroke.Thickness = 1.5
+
+        local title = Instance.new("TextLabel")
+        title.BackgroundTransparency = 1
+        title.Size = UDim2.new(1, -12, 0, 22)
+        title.Position = UDim2.fromOffset(10, 6)
+        title.Font = Enum.Font.GothamBold
+        title.TextSize = 13
+        title.TextColor3 = Color3.fromRGB(235, 235, 245)
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Text = "ESP PREVIEW"
+        title.Parent = f
+
+        local vp = Instance.new("ViewportFrame")
+        vp.Name = "View"
+        vp.Size = UDim2.new(1, -16, 1, -70)
+        vp.Position = UDim2.fromOffset(8, 30)
+        vp.BackgroundColor3 = Color3.fromRGB(8, 9, 12)
+        vp.BorderSizePixel = 0
+        vp.Ambient = Color3.fromRGB(180, 180, 190)
+        vp.LightColor = Color3.fromRGB(255, 255, 255)
+        vp.LightDirection = Vector3.new(-1, -1, -1)
+        vp.Parent = f
+        Instance.new("UICorner", vp).CornerRadius = UDim.new(0, 6)
+
+        local cam = Instance.new("Camera")
+        cam.Parent = vp
+        vp.CurrentCamera = cam
+        cam.CFrame = CFrame.lookAt(Vector3.new(0, 1.2, 7), Vector3.new(0, 1, 0))
+
+        -- overlay labels (ESP-style)
+        local nameLbl = Instance.new("TextLabel")
+        nameLbl.BackgroundTransparency = 1
+        nameLbl.Size = UDim2.new(1, -8, 0, 16)
+        nameLbl.Position = UDim2.new(0, 4, 0, 4)
+        nameLbl.Font = Enum.Font.Code
+        nameLbl.TextSize = 13
+        nameLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+        nameLbl.TextStrokeTransparency = 0.4
+        nameLbl.Text = "PLAYER"
+        nameLbl.ZIndex = 5
+        nameLbl.Parent = vp
+
+        local wepLbl = Instance.new("TextLabel")
+        wepLbl.BackgroundTransparency = 1
+        wepLbl.Size = UDim2.new(1, -8, 0, 14)
+        wepLbl.Position = UDim2.new(0, 4, 1, -18)
+        wepLbl.Font = Enum.Font.Code
+        wepLbl.TextSize = 12
+        wepLbl.TextColor3 = Color3.fromRGB(200, 200, 210)
+        wepLbl.TextStrokeTransparency = 0.4
+        wepLbl.Text = "WEAPON"
+        wepLbl.ZIndex = 5
+        wepLbl.Parent = vp
+
+        local tip = Instance.new("TextLabel")
+        tip.BackgroundTransparency = 1
+        tip.Size = UDim2.new(1, -12, 0, 18)
+        tip.Position = UDim2.new(0, 8, 1, -24)
+        tip.Font = Enum.Font.Gotham
+        tip.TextSize = 11
+        tip.TextColor3 = Color3.fromRGB(140, 140, 155)
+        tip.TextXAlignment = Enum.TextXAlignment.Left
+        tip.Text = "dummy · ESP style preview"
+        tip.Parent = f
+
+        ESPPrev.Gui = sg
+        ESPPrev.Frame = f
+        ESPPrev.VP = vp
+        ESPPrev.Cam = cam
+        ESPPrev.NameLbl = nameLbl
+        ESPPrev.WepLbl = wepLbl
+        ESPPrev.built = true
+
+        spawnModel()
+
+        -- rotate camera around dummy
+        RunService.RenderStepped:Connect(function(dt)
+            if not ESPPrev.Gui or not ESPPrev.Gui.Enabled or not ESPPrev.Cam then return end
+            ESPPrev.RotY = (ESPPrev.RotY + dt * 35) % 360
+            local rot = CFrame.Angles(0, math.rad(ESPPrev.RotY), 0)
+            ESPPrev.Cam.CFrame = CFrame.lookAt((rot * CFrame.new(0, 1.4, 6.5)).Position, Vector3.new(0, 1.0, 0))
+        end)
+    end
+
+    local function setESPPrevVisible(on)
+        pcall(function()
+            if on then
+                buildESPPrev()
+                if ESPPrev.Gui then
+                    if not ESPPrev.Gui.Parent then parentGui(ESPPrev.Gui) end
+                    ESPPrev.Gui.Enabled = true
+                end
+                if not ESPPrev.Model then spawnModel() end
+            else
+                if ESPPrev.Gui then ESPPrev.Gui.Enabled = false end
+            end
+        end)
+    end
+
+    local ESPPrevBox = Tabs.Visuals:AddLeftGroupbox("PREVIEW", "user")
+    ESPPrevBox:AddToggle("ESPPreviewEnabled", {
+        Text = "SHOW ESP PREVIEW",
+        Default = true,
+        Callback = function(v)
+            setESPPrevVisible(v == true)
+        end,
+    })
+    ESPPrevBox:AddButton({
+        Text = "REFRESH DUMMY",
+        Func = function()
+            buildESPPrev()
+            spawnModel()
+            setESPPrevVisible(true)
+            pcall(function()
+                if Toggles.ESPPreviewEnabled then Toggles.ESPPreviewEnabled:SetValue(true) end
+            end)
+        end,
+    })
+
+    -- auto show when menu opens / keep alive
+    task.spawn(function()
+        task.wait(1)
+        if Toggles.ESPPreviewEnabled and Toggles.ESPPreviewEnabled.Value then
+            setESPPrevVisible(true)
+        end
+    end)
     RunService.Heartbeat:Connect(function()
         pcall(function()
-            if Toggles.ESPPreviewEnabled and Toggles.ESPPreviewEnabled.Value and Library.Toggled then
-                buildESPPrev()
-                if ESPPrev.Gui then ESPPrev.Gui.Enabled = true end
-            elseif ESPPrev.Gui then
-                ESPPrev.Gui.Enabled = false
+            local on = Toggles.ESPPreviewEnabled and Toggles.ESPPreviewEnabled.Value
+            if not on then
+                if ESPPrev.Gui then ESPPrev.Gui.Enabled = false end
+                return
+            end
+            -- show while menu is open (and keep if already built)
+            local menuOpen = true
+            pcall(function() menuOpen = Library.Toggled ~= false end)
+            if menuOpen then
+                setESPPrevVisible(true)
+            else
+                if ESPPrev.Gui then ESPPrev.Gui.Enabled = false end
             end
         end)
     end)
@@ -5466,7 +6125,7 @@ do
         end
         return #unique
     end
-    local SpecBox = Tabs.Misc:AddRightGroupbox("Specs", "users")
+    local SpecBox = Tabs.Misc:AddRightGroupbox("SPECTATORS", "users")
     SpecBox:AddToggle("SpectatorList", { Text = "SPECTATOR LIST", Default = true })
     task.spawn(function()
         while true do
@@ -5740,7 +6399,7 @@ do
     end)
 
     -- ----- Custom Crosshair (overwrite game crosshair style) -----
-    local XHBox = Tabs.Misc:AddLeftGroupbox("Crosshair", "crosshair")
+    local XHBox = Tabs.Misc:AddLeftGroupbox("CROSSHAIR", "crosshair")
     XHBox:AddToggle("CustomCrosshairEnabled", { Text = "CUSTOM CROSSHAIR", Default = false })
     XHBox:AddToggle("XHCenterDot", { Text = "CENTER DOT", Default = true })
     XHBox:AddToggle("XHOutline", { Text = "OUTLINE", Default = true })
@@ -5979,17 +6638,35 @@ do
         return star .. model
     end
 
+    local function resolveSkinForWeapon(rawName)
+        if not rawName or not Config or not Config.SkinChanger or not Config.SkinChanger.Skins then return nil end
+        local skins = Config.SkinChanger.Skins
+        if skins[rawName] then return skins[rawName], rawName end
+        -- fuzzy match (HUD may say "AK47" while key is "AK-47")
+        local low = rawName:lower():gsub("[%s%-%_]", "")
+        for k, v in pairs(skins) do
+            local kk = tostring(k):lower():gsub("[%s%-%_]", "")
+            if kk == low or kk:find(low, 1, true) or low:find(kk, 1, true) then
+                return v, k
+            end
+        end
+        return nil, nil
+    end
+
     local function desiredWeaponText(rawName)
         if not rawName or rawName == "" then return nil end
         if isKnifeName(rawName) then return desiredKnifeText() end
         if not (Config and Config.SkinChanger and Config.SkinChanger.Enabled) then
             return nil
         end
-        local skin = Config.SkinChanger.Skins and Config.SkinChanger.Skins[rawName]
+        local skin, key = resolveSkinForWeapon(rawName)
         local pretty = prettySkin(skin or "")
-        if pretty == "" then return nil end
-        if Toggles.HUDShowSkinSuffix and Toggles.HUDShowSkinSuffix.Value then
-            return rawName .. " | " .. pretty
+        local display = key or rawName
+        if Toggles.HUDShowSkinSuffix and Toggles.HUDShowSkinSuffix.Value and pretty ~= "" then
+            return display .. " | " .. pretty
+        end
+        if pretty ~= "" then
+            return display .. " | " .. pretty
         end
         return nil
     end
@@ -6054,7 +6731,7 @@ do
     ----------------------------------------------------------------
     -- MOVEMENT: EdgeBug / JumpBug / PixelSurf
     ----------------------------------------------------------------
-    local MoveAdv = Tabs.Misc:AddLeftGroupbox("Movement+", "footprints")
+    local MoveAdv = Tabs.Movement:AddRightGroupbox("ADVANCED", "activity")
     MoveAdv:AddToggle("EdgeBug", { Text = "EDGE BUG", Default = false })
     MoveAdv:AddToggle("JumpBug", { Text = "JUMP BUG", Default = false })
     MoveAdv:AddToggle("PixelSurf", { Text = "PIXEL SURF", Default = false })
@@ -6117,7 +6794,7 @@ do
     ----------------------------------------------------------------
     -- FAKE LAG (hold position / hop)
     ----------------------------------------------------------------
-    local FLBox = Tabs.Misc:AddLeftGroupbox("Fakelag", "wifi")
+    local FLBox = Tabs.Misc:AddLeftGroupbox("FAKELAG", "wifi")
     FLBox:AddToggle("FakeLagEnabled", { Text = "FAKE LAG", Default = false })
     FLBox:AddSlider("FakeLagAmount", { Text = "LAG AMOUNT", Default = 0.12, Min = 0.02, Max = 0.4, Rounding = 2, Suffix = "s" })
     FLBox:AddSlider("FakeLagHop", { Text = "POSITION HOP", Default = 0.35, Min = 0, Max = 2, Rounding = 2, Suffix = "studs" })
@@ -6220,7 +6897,7 @@ do
     ----------------------------------------------------------------
     -- CHINA HAT + SELF CHAMS
     ----------------------------------------------------------------
-    local VisAdv = Tabs.Visuals:AddRightGroupbox("Extras", "sparkles")
+    local VisAdv = Tabs.Visuals:AddRightGroupbox("PLAYER VISUALS", "user")
     VisAdv:AddToggle("ChinaHatEnabled", { Text = "CHINA HAT", Default = false })
         :AddColorPicker("ChinaHatColor", { Default = Color3.fromRGB(220, 220, 220), Title = "Hat" })
     VisAdv:AddSlider("ChinaHatSize", { Text = "HAT SIZE", Default = 1.0, Min = 0.5, Max = 2.5, Rounding = 2 })
@@ -6429,7 +7106,7 @@ do
     ----------------------------------------------------------------
     -- KILL EFFECT + simple match log
     ----------------------------------------------------------------
-    local KillBox = Tabs.Misc:AddRightGroupbox("Kills", "skull")
+    local KillBox = Tabs.Misc:AddRightGroupbox("KILLS", "skull")
     KillBox:AddToggle("KillEffectEnabled", { Text = "KILL EFFECT", Default = false })
     KillBox:AddDropdown("KillEffectType", {
         Text = "EFFECT TYPE",
@@ -6835,9 +7512,9 @@ do
     end
     RunService.RenderStepped:Connect(function()
         pcall(function()
-            local enabled = not (Toggles.ESPTrails and Toggles.ESPTrails.Value == false)
-            -- default ON: only off if explicitly toggled false
-            if Toggles.ESPTrails and Toggles.ESPTrails.Value == false then
+            local trailsOn = Toggles.ESPTrails and Toggles.ESPTrails.Value
+            local espOn = _G.ECLIPSE_ESPKeyActive and _G.ECLIPSE_ESPKeyActive() or (Toggles.ESPEnabled and Toggles.ESPEnabled.Value)
+            if not trailsOn or not espOn then
                 for char, _ in pairs(Trails) do clearTrail(char) end
                 return
             end
@@ -6855,8 +7532,13 @@ do
                 if hum and hum.Health <= 0 then return end
                 seen[char] = true
                 local pack = getTrailPack(char)
-                local pos = root.Position - Vector3.new(0, 2.9, 0) -- under feet
-                table.insert(pack.points, 1, pos)
+                local pos = root.Position - Vector3.new(0, 2.85, 0)
+                local last = pack.points[1]
+                if not last or (pos - last).Magnitude > 0.15 then
+                    table.insert(pack.points, 1, pos)
+                else
+                    pack.points[1] = pos
+                end
                 while #pack.points > maxLen do table.remove(pack.points) end
                 for i = 1, TRAIL_MAX do
                     local l = pack.lines[i]
@@ -6864,13 +7546,13 @@ do
                     if p1 and p2 then
                         local s1, o1 = cam:WorldToViewportPoint(p1)
                         local s2, o2 = cam:WorldToViewportPoint(p2)
-                        if (o1 or o2) and s1.Z > 0 and s2.Z > 0 then
-                            local fade = 1 - (i / maxLen)
+                        if s1.Z > 0 and s2.Z > 0 then
+                            local fade = 1 - ((i - 1) / math.max(maxLen, 1))
                             l.From = Vector2.new(s1.X, s1.Y)
                             l.To = Vector2.new(s2.X, s2.Y)
                             l.Color = col
-                            l.Thickness = thick * fade
-                            l.Transparency = fade
+                            l.Thickness = math.max(0.6, thick * fade)
+                            l.Transparency = math.clamp(fade, 0.15, 1)
                             l.Visible = true
                         else
                             l.Visible = false
@@ -7135,9 +7817,10 @@ end
 -- ============================================================
 do
     -- MAIN: Global + Team (compact)
-    local GT = Tabs.Main:AddRightGroupbox("Global", "globe")
-    GT:AddToggle("GlobalTeamCheck", { Text = "TEAM CHECK", Default = true })
-    GT:AddLabel("Uses the same team logic as Silent / ESP.", true)
+    -- Team check primary lives in AIM > Main; keep alias toggle for wiring
+    pcall(function()
+        if not Toggles.GlobalTeamCheck and Toggles.AimTeamCheck then end
+    end)
 
     -- wire GlobalTeamCheck into SilentTeamCheck when possible
     task.spawn(function()
@@ -7188,58 +7871,7 @@ do
         end)
     end)
 
-    -- Anti-aim: upper body only via Waist / UpperTorso motors (legs keep walk dir)
-    RunService.RenderStepped:Connect(function(dt)
-        pcall(function()
-            if not (Toggles.AntiAimEnabled and Toggles.AntiAimEnabled.Value) then return end
-            local char = LP.Character
-            if not char then return end
-            local root = char:FindFirstChild("HumanoidRootPart")
-            local upper = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
-            local head = char:FindFirstChild("Head")
-            if not root then return end
-            local mode = Options.AntiAimMode and Options.AntiAimMode.Value or "Jitter"
-            local yawOff = math.rad(Options.AntiAimYaw and Options.AntiAimYaw.Value or 180)
-            local t = os.clock()
-            local side = (math.floor(t / 0.12) % 2 == 0) and -1 or 1
-            local yaw = yawOff
-            if mode == "Jitter" then
-                yaw = yawOff + math.rad(Options.AntiAimJitter and Options.AntiAimJitter.Value or 45) * side
-            elseif mode == "Spin" then
-                yaw = math.rad((t * (Options.AntiAimSpinSpeed and Options.AntiAimSpinSpeed.Value or 360)) % 360)
-            elseif mode == "Random" then
-                yaw = yawOff + math.rad(math.noise(t * 0.7) * 90)
-            end
-            local upperOnly = not (Toggles.AntiAimUpperBody and Toggles.AntiAimUpperBody.Value == false)
-            if upperOnly then
-                -- rotate UpperTorso / Waist relative to root, leave HRP facing move
-                local waist = char:FindFirstChild("Waist", true)
-                if waist and waist:IsA("Motor6D") then
-                    local base = waist.C0
-                    waist.C0 = base:Lerp(CFrame.new(base.Position) * CFrame.Angles(0, yaw, 0), math.clamp(dt * 14, 0, 1))
-                elseif upper then
-                    local _, ry = root.CFrame:ToEulerAnglesYXZ()
-                    local look = CFrame.new(upper.Position) * CFrame.Angles(0, ry + yaw, 0)
-                    upper.CFrame = upper.CFrame:Lerp(look, math.clamp(dt * 10, 0, 1))
-                end
-                if head then
-                    local pitchMode = Options.AntiAimPitch and Options.AntiAimPitch.Value or "Camera"
-                    local pitch = 0
-                    if pitchMode == "Up" then pitch = -0.9
-                    elseif pitchMode == "Down" then pitch = 0.9
-                    elseif pitchMode == "Level" then pitch = 0
-                    end
-                    local neck = char:FindFirstChild("Neck", true)
-                    if neck and neck:IsA("Motor6D") then
-                        local c0 = neck.C0
-                        neck.C0 = c0:Lerp(CFrame.new(c0.Position) * CFrame.Angles(pitch, yaw * 0.35, 0), math.clamp(dt * 12, 0, 1))
-                    end
-                end
-            else
-                root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, select(2, root.CFrame:ToEulerAnglesYXZ()) + yaw, 0)
-            end
-        end)
-    end)
+    -- (legacy AA loop removed — single AA handler above)
 
     -- Third person: clone / force world weapons onto character (CPM-style)
     local TPWeaponClones = {}
@@ -7391,51 +8023,59 @@ do
     end)
 
     ----------------------------------------------------------------
-    -- AUTO STRAFER (Keys / Camera / Always)
+    -- AUTO STRAFE (UI lives in MISC > Movement)
     ----------------------------------------------------------------
-    local StrafeBox = Tabs.Misc:AddRightGroupbox("Strafe", "move")
-    StrafeBox:AddToggle("AutoStrafeEnabled", { Text = "AUTO STRAFE", Default = false })
-        :AddKeyPicker("AutoStrafeKey", { Default = "None", Mode = "Toggle", Text = "STRAFE" })
-    StrafeBox:AddDropdown("AutoStrafeMode", {
-        Text = "MODE",
-        Values = {"Keys", "Camera", "Always"},
-        Default = "Camera",
-    })
-    StrafeBox:AddSlider("AutoStrafeSpeed", { Text = "SPEED", Default = 1.5, Min = 0.5, Max = 3, Rounding = 2 })
-
-    RunService.Heartbeat:Connect(function()
+    RunService.Heartbeat:Connect(function(dt)
         pcall(function()
             if not (Toggles.AutoStrafeEnabled and Toggles.AutoStrafeEnabled.Value) then return end
+            local kp = Options.AutoStrafeKey
+            if kp and kp.Value and kp.Value ~= "None" and kp.Value ~= "Always" then
+                local ok, st = pcall(function() return kp:GetState() end)
+                if ok and st ~= true then return end
+            end
             local char = LP.Character
             local root = char and char:FindFirstChild("HumanoidRootPart")
             local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if not root or not hum then return end
-            local state = hum:GetState()
-            local inAir = state == Enum.HumanoidStateType.Freefall or state == Enum.HumanoidStateType.Jumping
+            if not root or not hum or hum.Health <= 0 then return end
+            -- air only
+            local inAir = hum.FloorMaterial == Enum.Material.Air
+                or hum:GetState() == Enum.HumanoidStateType.Freefall
+                or hum:GetState() == Enum.HumanoidStateType.Jumping
             if not inAir then return end
-            local mode = Options.AutoStrafeMode and Options.AutoStrafeMode.Value or "Camera"
-            local speed = Options.AutoStrafeSpeed and Options.AutoStrafeSpeed.Value or 1.5
+
+            local mode = Options.AutoStrafeMode and Options.AutoStrafeMode.Value or "Keys"
+            local speedMul = Options.AutoStrafeSpeed and Options.AutoStrafeSpeed.Value or 1.35
             local cam = Workspace.CurrentCamera
             if not cam then return end
+
+            local keyDir = GetMoveDirection() -- camera-relative WASD
+            local hasKeys = keyDir.Magnitude > 0.05
             local look = cam.CFrame.LookVector
             local camFlat = Vector3.new(look.X, 0, look.Z)
-            if camFlat.Magnitude < 0.05 then return end
-            camFlat = camFlat.Unit
-            local move = hum.MoveDirection
-            local inputFlat = (move.Magnitude > 0.05) and Vector3.new(move.X, 0, move.Z) or nil
+            if camFlat.Magnitude > 0.05 then camFlat = camFlat.Unit else camFlat = Vector3.new(0, 0, -1) end
+
             local dir
             if mode == "Keys" then
-                if not inputFlat or inputFlat.Magnitude < 0.05 then return end
-                dir = inputFlat.Unit
+                if not hasKeys then return end
+                dir = keyDir
             elseif mode == "Always" then
-                dir = (inputFlat and inputFlat.Magnitude > 0.05) and inputFlat.Unit:Lerp(camFlat, 0.4).Unit or camFlat
-            else -- Camera
-                dir = (inputFlat and inputFlat.Magnitude > 0.05) and camFlat:Lerp(inputFlat.Unit, 0.35).Unit or camFlat
+                dir = hasKeys and keyDir:Lerp(camFlat, 0.25).Unit or camFlat
+            else -- Camera: air strafe follows camera, blend keys if held
+                dir = hasKeys and camFlat:Lerp(keyDir, 0.4).Unit or camFlat
             end
+            if not dir or dir.Magnitude < 0.05 then return end
+            dir = Vector3.new(dir.X, 0, dir.Z)
+            if dir.Magnitude < 0.05 then return end
+            dir = dir.Unit
+
             local vel = root.AssemblyLinearVelocity
             local horiz = Vector3.new(vel.X, 0, vel.Z)
-            local targetSpeed = math.max(horiz.Magnitude, hum.WalkSpeed) * speed
-            local newHoriz = dir * targetSpeed
+            local base = math.max(horiz.Magnitude, hum.WalkSpeed * 0.9, 12)
+            local targetSpeed = math.clamp(base * speedMul, 12, 48)
+            -- smooth toward target direction (keeps jump Y intact)
+            local alpha = math.clamp((dt or 0.016) * 14, 0.08, 0.45)
+            local desired = dir * targetSpeed
+            local newHoriz = horiz:Lerp(desired, alpha)
             root.AssemblyLinearVelocity = Vector3.new(newHoriz.X, vel.Y, newHoriz.Z)
         end)
     end)
@@ -7591,7 +8231,7 @@ do
     ----------------------------------------------------------------
     -- WATERMARK
     ----------------------------------------------------------------
-    local WMBox = Tabs.Misc:AddLeftGroupbox("Mark", "info")
+    local WMBox = Tabs.Misc:AddLeftGroupbox("WATERMARK", "info")
     WMBox:AddToggle("WatermarkEnabled", { Text = "WATERMARK", Default = true })
     WMBox:AddToggle("WMShowFPS", { Text = "SHOW FPS", Default = true })
     WMBox:AddToggle("WMShowPing", { Text = "SHOW PING", Default = true })
@@ -7685,7 +8325,7 @@ do
     ----------------------------------------------------------------
     -- KEYBIND LIST (hotkey indicator)
     ----------------------------------------------------------------
-    local KBBox = Tabs.Misc:AddRightGroupbox("Binds", "keyboard")
+    local KBBox = Tabs.Misc:AddRightGroupbox("KEYBINDS", "keyboard")
     KBBox:AddToggle("KeybindListEnabled", { Text = "KEYBIND LIST", Default = true })
     KBBox:AddLabel("List Color"):AddColorPicker("KBColor", {
         Default = Color3.fromRGB(140, 100, 255),
@@ -7972,7 +8612,7 @@ do
         :AddColorPicker("ESPOffScreenColor", { Default = Color3.fromRGB(255, 255, 255), Title = "Arrow" })
     VisualsESPBox:AddSlider("ESPOffScreenSize", { Text = "ARROW SIZE", Default = 14, Min = 8, Max = 28, Rounding = 0 })
     VisualsESPBox:AddSlider("ESPOffScreenRadius", { Text = "EDGE RADIUS", Default = 0.42, Min = 0.25, Max = 0.48, Rounding = 2 })
-    VisualsESPBox:AddToggle("ESPFootstep", { Text = "FOOTSTEPS", Default = false })
+    VisualsESPBox:AddToggle("ESPFootstep", { Text = "ESP FOOTSTEPS", Default = false })
         :AddColorPicker("ESPFootstepColor", { Default = Color3.fromRGB(180, 180, 200), Title = "Step" })
     VisualsESPBox:AddSlider("ESPFootstepLife", { Text = "STEP LIFE", Default = 1.2, Min = 0.3, Max = 3, Rounding = 1, Suffix = "s" })
 
@@ -8425,12 +9065,7 @@ end
 
 -- SYNCHRONIZATION full (ES presence roster + [E] tags)
 do
-    local MainSyncBox = Tabs.Main:AddRightGroupbox("Sync", "radio")
-    MainSyncBox:AddToggle("Main_Sync", {
-        Text = "SYNCHRONIZATION",
-        Default = false,
-        Tooltip = "Connect to EclipseHub realtime. Other synced users get marked.",
-    })
+    -- SYNCHRONIZATION toggle lives in MAIN > SESSION (ES-style)
     local PresenceUsers = {}
     local presenceDirty = false
     local presenceLastSignature = ""
@@ -8549,3 +9184,20 @@ ThemeManager:ApplyToTab(Tabs.Settings)
 SaveManager:LoadAutoloadConfig()
 
 
+
+-- Custom FOV
+task.spawn(function()
+    local baseFov = nil
+    RunService.RenderStepped:Connect(function()
+        pcall(function()
+            local cam = Workspace.CurrentCamera
+            if not cam then return end
+            if not baseFov then baseFov = cam.FieldOfView end
+            if Toggles.CustomFOVEnabled and Toggles.CustomFOVEnabled.Value then
+                cam.FieldOfView = Options.CustomFOVValue and Options.CustomFOVValue.Value or 90
+            else
+                if baseFov then cam.FieldOfView = baseFov end
+            end
+        end)
+    end)
+end)
