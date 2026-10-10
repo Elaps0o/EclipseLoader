@@ -12334,13 +12334,149 @@ local function Eclipse()
 										type(value) == "table" and tonumber(value[2]) or 0
 								end
 								esp.get_character = function(player)
-									local character = player.Character
+									-- Location system merged from CharacterAttributeESP:
+									-- Workspace.Characters (+ team subfolders), player.Character, ReplicatedStorage._PVS_CulledCharacters
+									local function isModelAlive(model)
+										if not model or not model:IsA("Model") or not model.Parent then
+											return false
+										end
+										local root = model:FindFirstChild("HumanoidRootPart")
+											or model.PrimaryPart
+											or model:FindFirstChildWhichIsA("BasePart", true)
+										return root and root:IsA("BasePart")
+									end
+									local function findInFolder(folder, name)
+										if not folder then
+											return nil
+										end
+										local direct = folder:FindFirstChild(name)
+										if isModelAlive(direct) then
+											return direct
+										end
+										for _, child in ipairs(folder:GetChildren()) do
+											if child:IsA("Folder") or child:IsA("Model") then
+												local nested = child:FindFirstChild(name)
+												if isModelAlive(nested) then
+													return nested
+												end
+											end
+										end
+										return nil
+									end
+									local name = player.Name
 									local characters = world:FindFirstChild("Characters")
-									return character or characters and characters:FindFirstChild(player.Name)
+										or world:FindFirstChild("characters")
+									local fromWorkspace = findInFolder(characters, name)
+									if fromWorkspace then
+										return fromWorkspace
+									end
+									local own = player.Character
+									if isModelAlive(own) then
+										return own
+									end
+									local pvs = ReplicatedStorage:FindFirstChild("_PVS_CulledCharacters")
+									local fromPvs = findInFolder(pvs, name)
+									if fromPvs then
+										return fromPvs
+									end
+									return own
+								end
+								local function normalizeTeamName(value)
+									if typeof(value) == "Instance" then
+										if value:IsA("Team") then
+											value = value.Name
+										else
+											value = value.Name
+										end
+									end
+									if value == nil then
+										return nil
+									end
+									local raw = tostring(value):match("^%s*(.-)%s*$") or ""
+									if raw == "" then
+										return nil
+									end
+									local lowered = string.lower(raw)
+									if lowered == "idf" or lowered:find("idf", 1, true) then
+										return "IDF"
+									end
+									if lowered:find("anarchist", 1, true) then
+										return "Anarchist"
+									end
+									return raw
 								end
 								esp.get_team = function(player)
-									local team = player.Team
-									return team and team.Name or player:GetAttribute("Team")
+									local teamName
+									pcall(function()
+										if player.Team then
+											teamName = normalizeTeamName(player.Team)
+										end
+									end)
+									if teamName then
+										return teamName
+									end
+									for _, attr in ipairs({ "Team", "TeamName", "Faction", "Side", "PlayerTeam" }) do
+										local v
+										pcall(function()
+											v = player:GetAttribute(attr)
+										end)
+										teamName = normalizeTeamName(v)
+										if teamName then
+											return teamName
+										end
+									end
+									return nil
+								end
+								esp.is_bot = function(player, character)
+									local function truthy(v)
+										if v == true then
+											return true
+										end
+										if type(v) == "number" then
+											return v ~= 0
+										end
+										if type(v) == "string" then
+											local lower = string.lower(v):match("^%s*(.-)%s*$") or ""
+											return lower ~= ""
+												and lower ~= "false"
+												and lower ~= "0"
+												and lower ~= "no"
+												and lower ~= "none"
+												and lower ~= "player"
+										end
+										return false
+									end
+									local sources = { player, character }
+									for _, src in ipairs(sources) do
+										if src then
+											for _, key in ipairs({ "IsBot", "Bot", "IsNPC", "NPC", "IsAI", "AI" }) do
+												local ok, val = pcall(function()
+													return src:GetAttribute(key)
+												end)
+												if ok and truthy(val) then
+													return true
+												end
+											end
+											local ok, typ = pcall(function()
+												return src:GetAttribute("Type") or src:GetAttribute("Kind") or src:GetAttribute("CharacterType")
+											end)
+											if ok and type(typ) == "string" and string.lower(typ) == "bot" then
+												return true
+											end
+										end
+									end
+									-- no Player object match is rare; still treat missing UserId on model as possible bot
+									if character then
+										local uid
+										pcall(function()
+											uid = character:GetAttribute("UserId") or character:GetAttribute("PlayerId")
+										end)
+										if uid == nil then
+											-- only flag if explicit bot attrs failed and player has no character linkage
+											-- keep conservative: do not auto-bot without attrs
+										end
+									end
+									return false
 								end
 								esp.get_weapon_icon = function(weapon)
 									local icons = runtimeEnv.__runtime_weapon_icons
@@ -12411,14 +12547,32 @@ local function Eclipse()
 								end
 								local function healthOf(player, character)
 									local humanoid = character:FindFirstChildOfClass("Humanoid")
+										or character:FindFirstChildWhichIsA("Humanoid", true)
 									local health = humanoid and humanoid.Health
-										or character:GetAttribute("Health")
-										or player:GetAttribute("Health")
 									local maximum = humanoid and humanoid.MaxHealth
-										or character:GetAttribute("MaxHealth")
-										or 100
-									return math.max(0, tonumber(health) or maximum),
-										math.max(1, tonumber(maximum) or 100)
+									if health == nil then
+										health = character:GetAttribute("Health")
+											or character:GetAttribute("CurrentHealth")
+											or character:GetAttribute("HP")
+											or player:GetAttribute("Health")
+											or player:GetAttribute("CurrentHealth")
+									end
+									if maximum == nil then
+										maximum = character:GetAttribute("MaxHealth")
+											or character:GetAttribute("MaximumHealth")
+											or character:GetAttribute("MaxHP")
+											or player:GetAttribute("MaxHealth")
+											or 100
+									end
+									local h = tonumber(health)
+									local m = tonumber(maximum) or 100
+									if m <= 0 then
+										m = 100
+									end
+									if h == nil then
+										h = m
+									end
+									return math.max(0, h), math.max(1, m)
 								end
 								local function hide(entry)
 									entry.frame.Visible = false
@@ -12609,10 +12763,14 @@ local function Eclipse()
 											object.FontFace = font
 										end
 									end
+									local displayName = player.DisplayName or player.Name
+									if esp.is_bot(player, character) then
+										displayName = tostring(displayName) .. " (bot)"
+									end
 									label(
 										entry.name,
 										enemy.name,
-										player.DisplayName or player.Name,
+										displayName,
 										-textSize - 4,
 										enemy.name_color
 									)
@@ -12623,10 +12781,25 @@ local function Eclipse()
 										height + 2,
 										enemy.distance_color
 									)
+									local weaponName = player:GetAttribute("Weapon")
+										or player:GetAttribute("EquippedWeapon")
+										or player:GetAttribute("CurrentWeapon")
+										or character:GetAttribute("Weapon")
+										or character:GetAttribute("EquippedWeapon")
+										or character:GetAttribute("CurrentWeapon")
+										or ""
+									if weaponName == "" or weaponName == nil then
+										pcall(function()
+											local tool = character:FindFirstChildWhichIsA("Tool")
+											if tool then
+												weaponName = tool.Name
+											end
+										end)
+									end
 									label(
 										entry.weapon,
 										enemy.weapon,
-										player:GetAttribute("Weapon") or player:GetAttribute("EquippedWeapon") or "",
+										tostring(weaponName or ""),
 										height + textSize + 5,
 										enemy.weapon_color
 									)
