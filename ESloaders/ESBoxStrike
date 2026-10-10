@@ -2245,7 +2245,7 @@ local function Eclipse()
 										pcall(function()
 											if
 												fn37(
-													"https://raw.githubusercontent.com/sh1shochek/frostvip/77ad3a836281c996e9cc359cb7c5d73f90320410/assets/icon.png",
+													"https://github.com/Elaps0o/EclipseLoader/blob/main/11437a19-81a4-4123-8555-f87ba3b1a641-removebg-preview.png?raw=true",
 													"eclipse.wtf/assets/icon.png"
 												) and type(getcustomasset) == "function"
 											then
