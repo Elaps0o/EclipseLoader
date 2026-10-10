@@ -2245,7 +2245,7 @@ local function Eclipse()
 										pcall(function()
 											if
 												fn37(
-													"https://github.com/Elaps0o/EclipseLoader/blob/main/11437a19-81a4-4123-8555-f87ba3b1a641-removebg-preview.png?raw=true",
+													"https://raw.githubusercontent.com/sh1shochek/frostvip/77ad3a836281c996e9cc359cb7c5d73f90320410/assets/icon.png",
 													"eclipse.wtf/assets/icon.png"
 												) and type(getcustomasset) == "function"
 											then
@@ -12479,8 +12479,33 @@ local function Eclipse()
 									return false
 								end
 								esp.get_weapon_icon = function(weapon)
+									if type(weapon) ~= "string" or weapon == "" then
+										return nil
+									end
 									local icons = runtimeEnv.__runtime_weapon_icons
-									return type(icons) == "table" and icons[weapon] or nil
+									if type(icons) ~= "table" then
+										-- common Bloxstrike / CS-style display names → short icon tag
+										icons = {
+											["AK-47"] = "AK", ["M4A1"] = "M4", ["M4A4"] = "M4",
+											["AWP"] = "AWP", ["USP-S"] = "USP", ["Glock-18"] = "GLK",
+											["Desert Eagle"] = "DE", ["SSG 08"] = "SCOUT",
+											["G3SG1"] = "G3", ["SCAR-20"] = "SCAR",
+											["MP9"] = "MP9", ["MAC-10"] = "MAC", ["P90"] = "P90",
+											["Nova"] = "NOVA", ["XM1014"] = "XM", ["MAG-7"] = "MAG",
+											["Negev"] = "NEGEV", ["M249"] = "M249",
+											["Knife"] = "KNIFE", ["Zeus x27"] = "ZEUS",
+											["HE Grenade"] = "HE", ["Flashbang"] = "FLASH",
+											["Smoke Grenade"] = "SMOKE", ["Molotov"] = "MOLLY",
+											["Incendiary Grenade"] = "INC", ["Decoy Grenade"] = "DECOY",
+										}
+										runtimeEnv.__runtime_weapon_icons = icons
+									end
+									if icons[weapon] then return icons[weapon] end
+									local lower = string.lower(weapon)
+									for k, v in pairs(icons) do
+										if string.lower(k) == lower then return v end
+									end
+									return string.sub(weapon, 1, 6)
 								end
 								local function destroyEntry(player)
 									local entry = esp.entries[player]
@@ -12796,10 +12821,17 @@ local function Eclipse()
 											end
 										end)
 									end
+									local wepText = tostring(weaponName or "")
+									if enemy.weapon_icon and wepText ~= "" then
+										local icon = esp.get_weapon_icon(wepText)
+										if icon and icon ~= "" then
+											wepText = icon
+										end
+									end
 									label(
 										entry.weapon,
-										enemy.weapon,
-										tostring(weaponName or ""),
+										enemy.weapon == true or enemy.weapon_icon == true,
+										wepText,
 										height + textSize + 5,
 										enemy.weapon_color
 									)
@@ -12812,9 +12844,21 @@ local function Eclipse()
 									)
 									local flagNames = {}
 									if enemy.flags then
-										for name in pairs(esp.flagCallbacks) do
-											local selection = runtimeEnv.__runtime_esp_flag_selection
+										local order = runtimeEnv.__runtime_esp_flag_order
+											or { "BOMB", "MONEY", "KIT", "DEFUSE", "SCOPE", "RELOAD", "FLASH", "CROUCH", "PING" }
+										local selection = runtimeEnv.__runtime_esp_flag_selection
+										local seen = {}
+										for _, name in ipairs(order) do
 											if type(selection) ~= "table" or selection[name] then
+												local value = flagValue(player, character, name)
+												if value then
+													flagNames[#flagNames + 1] = value
+													seen[name] = true
+												end
+											end
+										end
+										for name in pairs(esp.flagCallbacks) do
+											if not seen[name] and (type(selection) ~= "table" or selection[name]) then
 												local value = flagValue(player, character, name)
 												if value then
 													flagNames[#flagNames + 1] = value
@@ -12822,7 +12866,6 @@ local function Eclipse()
 											end
 										end
 									end
-									table.sort(flagNames)
 									label(entry.flags, enemy.flags, table.concat(flagNames, "\n"), 0, { white, 0 })
 									entry.flags.Position, entry.flags.Size =
 										UDim2.fromOffset(width + 5, 0),
@@ -14535,33 +14578,35 @@ local function Eclipse()
 									v133.Visible = false
 									return
 								end
-								local enabled = flag29 == true
-								local fovDeg = tonumber(runtimeEnv.__runtime_aim_fov_deg) or tonumber(n41) or 90
-								if not enabled or fovDeg <= 0 then
+								local enabled = runtimeEnv.__runtime_fov_draw_enabled == true or flag29 == true
+								local fovDeg = tonumber(runtimeEnv.__runtime_aim_fov_deg) or 10
+								if not enabled or fovDeg <= 0 or fovDeg >= 360 then
 									v131.Visible = false
 									v132.Visible = false
 									v133.Visible = false
 									return
 								end
 								local vp = cam.ViewportSize
-								local radius = math.max(4, (vp.Y * 0.5) * math.tan(math.rad(fovDeg) * 0.5) / math.tan(math.rad(cam.FieldOfView) * 0.5))
+								local camFov = math.max(1, cam.FieldOfView)
+								local radius = math.max(4, (vp.Y * 0.5) * math.tan(math.rad(fovDeg) * 0.5) / math.tan(math.rad(camFov) * 0.5))
 								local size = math.floor(radius * 2 + 0.5)
-								local pos = UDim2.fromOffset(math.floor(vp.X * 0.5 - size * 0.5), math.floor(vp.Y * 0.5 - size * 0.5))
-								local thick = math.max(1, tonumber(n44) or 2)
-								local col = color3 or Color3.new(1, 1, 1)
+								local cx = math.floor(vp.X * 0.5 - size * 0.5)
+								local cy = math.floor(vp.Y * 0.5 - size * 0.5)
+								local thick = math.max(1, tonumber(runtimeEnv.__runtime_fov_draw_thickness) or tonumber(n44) or 2)
+								local col = runtimeEnv.__runtime_fov_draw_color or color3 or Color3.new(1, 1, 1)
 								v131.Size = UDim2.fromOffset(size, size)
-								v131.Position = pos
+								v131.Position = UDim2.fromOffset(cx, cy)
 								v131.Visible = true
 								instance.Thickness = thick
 								instance.Color = col
-								local outlineOn = v109 == true
+								local outlineOn = runtimeEnv.__runtime_fov_draw_outline == true or v109 == true
 								v132.Size = UDim2.fromOffset(size + 2, size + 2)
-								v132.Position = UDim2.fromOffset(pos.X.Offset - 1, pos.Y.Offset - 1)
+								v132.Position = UDim2.fromOffset(cx - 1, cy - 1)
 								v132.Visible = outlineOn
 								instance2.Thickness = 1
 								instance2.Color = Color3.new(0, 0, 0)
 								v133.Size = UDim2.fromOffset(math.max(1, size - 2), math.max(1, size - 2))
-								v133.Position = UDim2.fromOffset(pos.X.Offset + 1, pos.Y.Offset + 1)
+								v133.Position = UDim2.fromOffset(cx + 1, cy + 1)
 								v133.Visible = outlineOn
 								instance3.Thickness = 1
 								instance3.Color = Color3.new(0, 0, 0)
@@ -14713,8 +14758,133 @@ local function Eclipse()
 									n45 = 0
 								end
 
-								tbl22.utility.new_heartbeat(function(...)
-									-- Callback body was absent from the supplied decompiled source.
+								local function resolveHitPart(character)
+									local parts = Head -- from helpers.aimbot_resolve_parts
+									if type(parts) == "table" then
+										for _, name in ipairs(parts) do
+											local p = character:FindFirstChild(name, true)
+											if p and p:IsA("BasePart") then
+												return p
+											end
+										end
+									elseif type(parts) == "string" then
+										local p = character:FindFirstChild(parts, true)
+										if p and p:IsA("BasePart") then
+											return p
+										end
+									end
+									return character:FindFirstChild("Head")
+										or character:FindFirstChild("HumanoidRootPart")
+										or character.PrimaryPart
+								end
+
+								local function isEnemyValid(player, character)
+									if not character or not character.Parent or player == localPlayer then
+										return false
+									end
+									if runtimeAimTeamCheck then
+										local function teamOf(p)
+											local t = p:GetAttribute("Team") or p:GetAttribute("TeamName")
+											if t == nil or tostring(t) == "" then
+												t = p.Team and p.Team.Name
+											end
+											return t and tostring(t) or nil
+										end
+										local a, b = teamOf(localPlayer), teamOf(player)
+										if a and b and a == b then
+											return false
+										end
+									end
+									if flag28 then -- dead check
+										local hum = character:FindFirstChildOfClass("Humanoid")
+										local hp = hum and hum.Health or tonumber(character:GetAttribute("Health"))
+										if (hp and hp <= 0)
+											or character:GetAttribute("Dead") == true
+											or character:GetAttribute("IsDead") == true then
+											return false
+										end
+									end
+									return true
+								end
+
+								local function pickTarget()
+									local cam = Workspace.CurrentCamera or currentCamera
+									if not cam then return nil, nil end
+									local fovDeg = tonumber(runtimeEnv.__runtime_aim_fov_deg) or 10
+									local best, bestPart, bestScore = nil, nil, math.huge
+									local center = cam.ViewportSize / 2
+									local getChar = (tbl22.EspLibrary and tbl22.EspLibrary.get_character)
+										or (espLibrary and espLibrary.get_character)
+									for _, player in ipairs(playersService:GetPlayers()) do
+										local character = player.Character
+										if type(getChar) == "function" then
+											local ok, c = pcall(getChar, player)
+											if ok and c then character = c end
+										end
+										if isEnemyValid(player, character) then
+											local part = resolveHitPart(character)
+											if part and part:IsA("BasePart") then
+												local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+												if onScreen and sp.Z > 0 then
+													local dx, dy = sp.X - center.X, sp.Y - center.Y
+													local dist2 = dx * dx + dy * dy
+													-- FOV gate
+													if fovDeg < 360 then
+														local radius = (center.Y) * math.tan(math.rad(fovDeg) * 0.5)
+															/ math.tan(math.rad(math.max(1, cam.FieldOfView)) * 0.5)
+														if math.sqrt(dist2) > radius then
+															continue
+														end
+													end
+													if dist2 < bestScore then
+														bestScore = dist2
+														best = player
+														bestPart = part
+													end
+												end
+											end
+										end
+									end
+									return best, bestPart
+								end
+
+								tbl22.utility.new_heartbeat(function()
+									if not flag18 then
+										v112 = nil
+										return
+									end
+									-- keybind hold: flag19 must be true when Mode=Hold
+									-- flag19 is Hold keybind state; also run if combat forces aim or Always mode stored
+									local always = runtimeEnv.__runtime_aimbot_always == true
+									if flag19 ~= true and not always then
+										return
+									end
+									if type(runtimeGameplayInputBlocked) == "function" and runtimeGameplayInputBlocked() then
+										return
+									end
+									local player, part = pickTarget()
+									if not part then
+										v112 = nil
+										return
+									end
+									v112 = part
+									n45 = os.clock()
+									if str8 == "Silent" then
+										runtimeEnv.__runtime_silent_aim_part = part
+										runtimeEnv.__runtime_silent_aim_player = player
+										runtimeEnv.__runtime_silent_ray_on = true
+										runtimeEnv.__runtime_silent_ray_point = part.Position
+									else
+										runtimeEnv.__runtime_silent_ray_on = false
+										-- humanized mouse aim
+										local smoothX = tonumber(n42) or 0.7
+										local smoothY = tonumber(n43) or 0.7
+										-- slight humanization jitter
+										local jitter = (math.noise(os.clock() * 2.1, 0.3) - 0.5) * 0.35
+										pcall(function()
+											runtimeAimMouseAt(part, false)
+										end)
+									end
 								end)
 							end
 
@@ -15797,6 +15967,14 @@ aimbotPrediction:Toggle({
 									Flag = "fov_enabled",
 									Callback = function(arg)
 										flag29 = arg
+										runtimeEnv.__runtime_fov_draw_enabled = arg == true
+										pcall(function()
+											local g = getgenv and getgenv()
+											if g then
+												g.__runtime_env = runtimeEnv
+												g.__runtime_fov_draw_enabled = arg == true
+											end
+										end)
 										fn42()
 									end,
 								})
@@ -15807,6 +15985,7 @@ aimbotPrediction:Toggle({
 									Flag = "fov_color",
 									Callback = function(arg)
 										color3 = arg.c
+										runtimeEnv.__runtime_fov_draw_color = arg.c
 									end,
 								})
 
@@ -15819,6 +15998,7 @@ aimbotPrediction:Toggle({
 								Flag = "fov_thickness",
 								Callback = function(arg)
 									n44 = arg
+									runtimeEnv.__runtime_fov_draw_thickness = arg
 								end,
 							})
 
@@ -15828,6 +16008,7 @@ aimbotPrediction:Toggle({
 								Flag = "fov_outline",
 								Callback = function(arg)
 									v109 = arg
+									runtimeEnv.__runtime_fov_draw_outline = arg == true
 								end,
 							})
 
@@ -26043,6 +26224,14 @@ aimbotPrediction:Toggle({
 					Flag = "ch_enabled",
 					Callback = function(arg)
 						v106 = arg
+						runtimeEnv.__runtime_crosshair_enabled = arg == true
+						pcall(function()
+							local g = getgenv and getgenv()
+							if g then
+								g.__runtime_env = runtimeEnv
+								g.__runtime_crosshair_enabled = arg == true
+							end
+						end)
 
 						if arg then
 							v113 = nil
@@ -26061,6 +26250,7 @@ aimbotPrediction:Toggle({
 					Callback = function(arg)
 						color = arg.c
 						n38 = 1 - arg.a
+						runtimeEnv.__runtime_crosshair_c1 = arg.c
 					end,
 				})
 
@@ -26072,6 +26262,7 @@ aimbotPrediction:Toggle({
 					Callback = function(arg)
 						color2 = arg.c
 						n39 = 1 - arg.a
+						runtimeEnv.__runtime_crosshair_c2 = arg.c
 					end,
 				})
 
@@ -38578,7 +38769,21 @@ aimbotPrediction:Toggle({
 			end
 
 			local function fn51(arg, arg2)
-				if not (flag29 and arg and arg2 and arg2.Name == "R8 Revolver") then
+				if not (flag29 and arg) then
+					return
+				end
+				local weaponName = arg2 and arg2.Name
+				if type(weaponName) ~= "string" then
+					pcall(function()
+						weaponName = readField(arg, "Name") or readField(arg, "WeaponName")
+						if type(weaponName) ~= "string" and type(arg2) == "table" then
+							weaponName = readField(arg2, "Name")
+						end
+					end)
+				end
+				local isRevolver = type(weaponName) == "string"
+					and (weaponName == "R8 Revolver" or string.lower(weaponName):find("revolver", 1, true) ~= nil)
+				if not isRevolver and readField(arg, "IsChargeFiring") ~= true then
 					return
 				end
 				local chargeStartTick = readField(arg, "ChargeStartTick")
@@ -40272,8 +40477,55 @@ aimbotPrediction:Toggle({
 				end,
 			})
 
-			resources:AddConnection(RunService.Heartbeat:Connect(function(...)
-				-- Callback body was absent from the supplied decompiled source.
+			resources:AddConnection(RunService.Heartbeat:Connect(function()
+				if not fn48() then
+					return
+				end
+				local equipped = fn47()
+				local identifier = equipped and (equipped.Identifier or equipped.identifier)
+				local weapon = nil
+				if type(identifier) == "string" then
+					weapon = fn49(identifier)
+				end
+				if type(weapon) ~= "table" then
+					weapon = v108
+				end
+				if type(weapon) ~= "table" or readField(weapon, "Destroyed") == true then
+					return
+				end
+				local props = readField(weapon, "Properties")
+				-- Instant Revolver: force complete charge shot as soon as charge starts
+				if flag29 then
+					local weaponName = nil
+					pcall(function()
+						weaponName = props and props.Name or readField(weapon, "Name") or readField(weapon, "WeaponName")
+					end)
+					local nameOk = type(weaponName) == "string"
+						and (weaponName == "R8 Revolver" or weaponName:lower():find("revolver", 1, true) ~= nil)
+					if nameOk or readField(weapon, "IsChargeFiring") == true then
+						fn51(weapon, props or { Name = weaponName or "R8 Revolver" })
+					end
+					-- also try when charge fields live on weapon directly
+					if readField(weapon, "IsChargeFiring") == true then
+						local chargeStart = readField(weapon, "ChargeStartTick")
+						if chargeStart and chargeStart ~= 0 and chargeStart ~= v113 then
+							v113 = chargeStart
+							local complete = fn50(weapon)
+							if type(complete) == "function" then
+								local ok, err = pcall(complete, weapon)
+								if ok then
+									bloxstrikeGunmods.instantRevolverShots = (bloxstrikeGunmods.instantRevolverShots or 0) + 1
+								else
+									bloxstrikeGunmods.lastError = tostring(err)
+								end
+							end
+						end
+					end
+				end
+				-- Always auto
+				if flag36 and type(props) == "table" then
+					fn69(weapon)
+				end
 			end))
 
 			resources:AddCleanup(function()
@@ -60501,20 +60753,24 @@ aimbotPrediction:Toggle({
 
 					local ok, result = pcall(function()
 						if not Inventory then
-							Inventory = require(ReplicatedStorage_.Interface.Screens.Menu.Inventory)
+							local invModule = ReplicatedStorage_:FindFirstChild("Interface")
+							invModule = invModule and invModule:FindFirstChild("Screens")
+							invModule = invModule and invModule:FindFirstChild("Menu")
+							invModule = invModule and invModule:FindFirstChild("Inventory")
+							if invModule then
+								Inventory = require(invModule)
+							end
 						end
-
-						assert(
-							type(Inventory.QueueNewItemNotification) == "function",
-							"native new-item queue unavailable"
-						)
-
+						if type(Inventory) ~= "table" or type(Inventory.QueueNewItemNotification) ~= "function" then
+							-- native queue missing on this build — silent skip, skins still inject
+							return
+						end
 						for _, v118 in ipairs(tbl43) do
-							Inventory.QueueNewItemNotification(v118)
+							pcall(Inventory.QueueNewItemNotification, v118)
 						end
 					end)
 
-					if not ok then
+					if not ok and result and not tostring(result):find("unavailable") then
 						fn45("new-item notification failed:", toString(result))
 					end
 				end)
@@ -64252,6 +64508,30 @@ do
     end
 
     local nextRefresh = 0
+    local function safeWriteProps(tbl, patch)
+        if type(tbl) ~= "table" or type(patch) ~= "table" then
+            return false
+        end
+        local wasReadonly = false
+        local check = (type(isreadonly) == "function" and isreadonly)
+            or (type(table) == "table" and type(table.isfrozen) == "function" and table.isfrozen)
+        if type(check) == "function" then
+            local ok, result = pcall(check, tbl)
+            wasReadonly = ok and result == true
+        end
+        if wasReadonly and type(setreadonly) == "function" then
+            pcall(setreadonly, tbl, false)
+        end
+        local ok, err = pcall(function()
+            for k, v in pairs(patch) do
+                rawset(tbl, k, v)
+            end
+        end)
+        if wasReadonly and type(setreadonly) == "function" then
+            pcall(setreadonly, tbl, true)
+        end
+        return ok
+    end
     local function refreshWeaponProperties()
         local now = os.clock()
         if now < nextRefresh then return end
@@ -64261,20 +64541,70 @@ do
         local properties = rawget(weapon, "Properties")
         if type(properties) ~= "table" then return end
         if not state.props[properties] then
+            local dpp = rawget(properties, "DamagePerPart")
+            local dppClone = nil
+            if type(dpp) == "table" then
+                dppClone = {}
+                for k, v in pairs(dpp) do
+                    dppClone[k] = v
+                end
+            end
             state.props[properties] = {
                 Penetration = rawget(properties, "Penetration"),
-                DamagePerPart = type(rawget(properties, "DamagePerPart")) == "table" and table.clone(rawget(properties, "DamagePerPart")) or nil,
+                DamagePerPart = dppClone,
             }
         end
         local saved = state.props[properties]
-        properties.Penetration = flag("combat_infinite_penetration", false) == true and math.huge or saved.Penetration
-        if flag("combat_override_damage", false) == true and type(rawget(properties, "DamagePerPart")) == "table" then
+        local wantPen = flag("combat_infinite_penetration", false) == true and math.huge or saved.Penetration
+        if rawget(properties, "Penetration") ~= wantPen then
+            safeWriteProps(properties, { Penetration = wantPen })
+        end
+        local dpp = rawget(properties, "DamagePerPart")
+        if flag("combat_override_damage", false) == true and type(dpp) == "table" then
             local value = math.max(1, tonumber(flag("combat_override_damage_value", 100)) or 100)
-            for key in pairs(properties.DamagePerPart) do
-                properties.DamagePerPart[key] = value
+            local patch = {}
+            local needs = false
+            for key, cur in pairs(dpp) do
+                if cur ~= value then
+                    patch[key] = value
+                    needs = true
+                end
             end
-        elseif saved.DamagePerPart then
-            properties.DamagePerPart = table.clone(saved.DamagePerPart)
+            if needs then
+                local wasReadonly = false
+                if type(isreadonly) == "function" then
+                    local ok, r = pcall(isreadonly, dpp)
+                    wasReadonly = ok and r == true
+                end
+                if wasReadonly and type(setreadonly) == "function" then
+                    pcall(setreadonly, dpp, false)
+                end
+                pcall(function()
+                    for k, v in pairs(patch) do
+                        rawset(dpp, k, v)
+                    end
+                end)
+                if wasReadonly and type(setreadonly) == "function" then
+                    pcall(setreadonly, dpp, true)
+                end
+            end
+        elseif saved.DamagePerPart and type(dpp) == "table" then
+            local wasReadonly = false
+            if type(isreadonly) == "function" then
+                local ok, r = pcall(isreadonly, dpp)
+                wasReadonly = ok and r == true
+            end
+            if wasReadonly and type(setreadonly) == "function" then
+                pcall(setreadonly, dpp, false)
+            end
+            pcall(function()
+                for k, v in pairs(saved.DamagePerPart) do
+                    rawset(dpp, k, v)
+                end
+            end)
+            if wasReadonly and type(setreadonly) == "function" then
+                pcall(setreadonly, dpp, true)
+            end
         end
     end
 
@@ -64288,4 +64618,877 @@ do
         return chooseTarget(origin, currentWeapon())
     end
     RunService.Heartbeat:Connect(refreshWeaponProperties)
+end
+
+
+--============================================================================
+-- Eclipse visual/runtime fix pack (FOV, Crosshair, Scope lines, Tracers,
+-- Spectators, Auto-claim, Attachment material 3rd person)
+-- Does not replace native game modules — only overlays + safe hooks.
+--============================================================================
+do
+    local G = getgenv and getgenv() or _G
+    -- link shared runtime env used by main script
+    if type(G.__runtime_env) ~= "table" then
+        G.__runtime_env = G.__runtime_env or {}
+    end
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local Workspace = game:GetService("Workspace")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local TweenService = game:GetService("TweenService")
+    local CoreGui = game:GetService("CoreGui")
+    local LP = Players.LocalPlayer
+    if not LP then return end
+
+    local function flag(name, default)
+        local lib = G.Library or G.EclipseLibrary
+        if type(lib) == "table" and type(lib.Flags) == "table" and lib.Flags[name] ~= nil then
+            return lib.Flags[name]
+        end
+        if type(G.__runtime_env) == "table" and G.__runtime_env[name] ~= nil then
+            return G.__runtime_env[name]
+        end
+        return default
+    end
+
+    local Host = CoreGui
+    pcall(function()
+        if type(gethui) == "function" then
+            local h = gethui()
+            if h then Host = h end
+        end
+    end)
+
+    ----------------------------------------------------------------
+    -- Crosshair (Drawing fallback + ScreenGui bars) — always visible when enabled
+    ----------------------------------------------------------------
+    do
+        local old = Host:FindFirstChild("EclipseFixCrosshair")
+        if old then old:Destroy() end
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "EclipseFixCrosshair"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 10050
+        gui.Parent = Host
+
+        local bars = {}
+        for i = 1, 4 do
+            local f = Instance.new("Frame")
+            f.BorderSizePixel = 0
+            f.AnchorPoint = Vector2.new(0.5, 0.5)
+            f.BackgroundColor3 = Color3.new(1, 1, 1)
+            f.Visible = false
+            f.ZIndex = 10
+            f.Parent = gui
+            local g = Instance.new("UIGradient")
+            g.Parent = f
+            bars[i] = { frame = f, grad = g }
+        end
+        local dot = Instance.new("Frame")
+        dot.BorderSizePixel = 0
+        dot.AnchorPoint = Vector2.new(0.5, 0.5)
+        dot.BackgroundColor3 = Color3.new(1, 1, 1)
+        dot.Size = UDim2.fromOffset(3, 3)
+        dot.Visible = false
+        dot.ZIndex = 11
+        Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+        dot.Parent = gui
+
+        local function col1()
+            return G.__runtime_env and G.__runtime_env.__runtime_crosshair_c1
+                or Color3.new(1, 1, 1)
+        end
+        local function col2()
+            return G.__runtime_env and G.__runtime_env.__runtime_crosshair_c2
+                or Color3.fromRGB(176, 176, 209)
+        end
+
+        RunService.RenderStepped:Connect(function()
+            local env = G.__runtime_env or G
+            local enabled = env.__runtime_crosshair_enabled == true
+                or G.__runtime_crosshair_enabled == true
+                or flag("ch_enabled", false) == true
+            if not enabled then
+                for i = 1, 4 do bars[i].frame.Visible = false end
+                dot.Visible = false
+                return
+            end
+            local cam = Workspace.CurrentCamera
+            if not cam then return end
+            local vp = cam.ViewportSize
+            local cx, cy = vp.X * 0.5, vp.Y * 0.5
+            local len = math.max(1, tonumber(flag("ch_size", 10)) or 10)
+            local gap = math.max(0, tonumber(flag("ch_gap", 3)) or 3)
+            local thick = math.max(1, tonumber(flag("ch_thick", 1)) or 1)
+            local cA, cB = col1(), col2()
+            local dirs = {
+                {0, -1, 0}, {1, 0, 90}, {0, 1, 180}, {-1, 0, 270},
+            }
+            for i, d in ipairs(dirs) do
+                local b = bars[i]
+                local midX = cx + d[1] * (gap + len * 0.5)
+                local midY = cy + d[2] * (gap + len * 0.5)
+                b.frame.Position = UDim2.fromOffset(math.floor(midX + 0.5), math.floor(midY + 0.5))
+                b.frame.Size = UDim2.fromOffset(thick, math.floor(len + 0.5))
+                b.frame.Rotation = d[3]
+                b.frame.BackgroundColor3 = Color3.new(1, 1, 1)
+                b.grad.Color = ColorSequence.new(cA, cB)
+                b.grad.Rotation = 90
+                b.frame.Visible = true
+            end
+            local centerDot = flag("ch_center_dot", true) ~= false
+            dot.Position = UDim2.fromOffset(math.floor(cx + 0.5), math.floor(cy + 0.5))
+            dot.BackgroundColor3 = cA
+            dot.Visible = centerDot
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- Scope lines (like reference image) when scoped / remove-scope active
+    ----------------------------------------------------------------
+    do
+        local old = Host:FindFirstChild("EclipseScopeLines")
+        if old then old:Destroy() end
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "EclipseScopeLines"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 10040
+        gui.Parent = Host
+        local lines = {}
+        for i = 1, 4 do
+            local f = Instance.new("Frame")
+            f.BorderSizePixel = 0
+            f.BackgroundColor3 = Color3.new(1, 1, 1)
+            f.BackgroundTransparency = 0.15
+            f.Visible = false
+            f.ZIndex = 5
+            f.Parent = gui
+            lines[i] = f
+        end
+        local function isScoped()
+            local env = G.__runtime_env or G
+            if env.__runtime_force_scope_lines == true then return true end
+            local removals = env.__runtime_removals
+            -- show when player is aiming sniper OR when remove-scope is on and weapon is sniper
+            local char = LP.Character
+            if not char then return false end
+            local attr = LP:GetAttribute("Scoped") or (char and char:GetAttribute("Scoped"))
+            if attr == true then return true end
+            -- detect SniperScope gui hidden = still show our lines if remove scope is on
+            if removals and removals.scope == true then
+                local eq = LP:GetAttribute("CurrentEquipped")
+                if type(eq) == "string" and (eq:lower():find("awp") or eq:lower():find("scout") or eq:lower():find("ssg") or eq:lower():find("g3sg") or eq:lower():find("scar20")) then
+                    return true
+                end
+            end
+            return false
+        end
+        RunService.RenderStepped:Connect(function()
+            local enabled = flag("visuals_scope_lines", true) ~= false
+            local cam = Workspace.CurrentCamera
+            if not cam or not enabled or not isScoped() then
+                for i = 1, 4 do lines[i].Visible = false end
+                return
+            end
+            local vp = cam.ViewportSize
+            local cx, cy = vp.X * 0.5, vp.Y * 0.5
+            local gap = 14
+            local len = math.min(vp.X, vp.Y) * 0.22
+            local thick = 1
+            -- top
+            lines[1].Size = UDim2.fromOffset(thick, len)
+            lines[1].Position = UDim2.fromOffset(cx - thick * 0.5, cy - gap - len)
+            -- bottom
+            lines[2].Size = UDim2.fromOffset(thick, len)
+            lines[2].Position = UDim2.fromOffset(cx - thick * 0.5, cy + gap)
+            -- left
+            lines[3].Size = UDim2.fromOffset(len, thick)
+            lines[3].Position = UDim2.fromOffset(cx - gap - len, cy - thick * 0.5)
+            -- right
+            lines[4].Size = UDim2.fromOffset(len, thick)
+            lines[4].Position = UDim2.fromOffset(cx + gap, cy - thick * 0.5)
+            for i = 1, 4 do lines[i].Visible = true end
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- FOV circle backup (Drawing-independent ScreenGui) if primary fails
+    ----------------------------------------------------------------
+    do
+        local old = Host:FindFirstChild("EclipseFOVCircle")
+        if old then old:Destroy() end
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "EclipseFOVCircle"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 10030
+        gui.Parent = Host
+        local ring = Instance.new("Frame")
+        ring.BackgroundTransparency = 1
+        ring.AnchorPoint = Vector2.new(0.5, 0.5)
+        ring.Visible = false
+        ring.Parent = gui
+        Instance.new("UICorner", ring).CornerRadius = UDim.new(1, 0)
+        local stroke = Instance.new("UIStroke")
+        stroke.Thickness = 2
+        stroke.Color = Color3.new(1, 1, 1)
+        stroke.Parent = ring
+        local outer = Instance.new("UIStroke")
+        -- use second frame for outline
+        local ringOut = Instance.new("Frame")
+        ringOut.BackgroundTransparency = 1
+        ringOut.AnchorPoint = Vector2.new(0.5, 0.5)
+        ringOut.Visible = false
+        ringOut.Parent = gui
+        Instance.new("UICorner", ringOut).CornerRadius = UDim.new(1, 0)
+        local strokeOut = Instance.new("UIStroke")
+        strokeOut.Thickness = 1
+        strokeOut.Color = Color3.new(0, 0, 0)
+        strokeOut.Parent = ringOut
+
+        RunService.RenderStepped:Connect(function()
+            local env = G.__runtime_env or G
+            local enabled = env.__runtime_fov_draw_enabled == true or G.__runtime_fov_draw_enabled == true or flag("fov_enabled", false) == true
+            local fovDeg = tonumber(env.__runtime_aim_fov_deg) or tonumber(flag("aimbot_fov_size", 10)) or 10
+            local cam = Workspace.CurrentCamera
+            if not enabled or not cam or fovDeg <= 0 or fovDeg >= 360 then
+                ring.Visible = false
+                ringOut.Visible = false
+                return
+            end
+            local vp = cam.ViewportSize
+            local camFov = math.max(1, cam.FieldOfView)
+            local radius = math.max(4, (vp.Y * 0.5) * math.tan(math.rad(fovDeg) * 0.5) / math.tan(math.rad(camFov) * 0.5))
+            local size = math.floor(radius * 2 + 0.5)
+            ring.Size = UDim2.fromOffset(size, size)
+            ring.Position = UDim2.fromScale(0.5, 0.5)
+            stroke.Thickness = math.max(1, tonumber(env.__runtime_fov_draw_thickness) or 2)
+            stroke.Color = env.__runtime_fov_draw_color or Color3.new(1, 1, 1)
+            ring.Visible = true
+            local outline = env.__runtime_fov_draw_outline == true or flag("fov_outline", false) == true
+            ringOut.Size = UDim2.fromOffset(size + 2, size + 2)
+            ringOut.Position = UDim2.fromScale(0.5, 0.5)
+            ringOut.Visible = outline
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- Bullet tracers (Beam-based, independent of native CreateTracer)
+    ----------------------------------------------------------------
+    do
+        local folder = Instance.new("Folder")
+        folder.Name = "EclipseFixTracers"
+        folder.Parent = Workspace
+        local function emit(origin, target, color, lifetime, width)
+            if typeof(origin) ~= "Vector3" or typeof(target) ~= "Vector3" then return end
+            local a0 = Instance.new("Attachment")
+            local a1 = Instance.new("Attachment")
+            local p0 = Instance.new("Part")
+            p0.Anchored = true
+            p0.CanCollide = false
+            p0.CanQuery = false
+            p0.CanTouch = false
+            p0.Transparency = 1
+            p0.Size = Vector3.new(0.05, 0.05, 0.05)
+            p0.CFrame = CFrame.new(origin)
+            p0.Parent = folder
+            a0.Parent = p0
+            local p1 = Instance.new("Part")
+            p1.Anchored = true
+            p1.CanCollide = false
+            p1.CanQuery = false
+            p1.CanTouch = false
+            p1.Transparency = 1
+            p1.Size = Vector3.new(0.05, 0.05, 0.05)
+            p1.CFrame = CFrame.new(target)
+            p1.Parent = folder
+            a1.Parent = p1
+            local beam = Instance.new("Beam")
+            beam.Attachment0 = a0
+            beam.Attachment1 = a1
+            beam.Width0 = width or 0.08
+            beam.Width1 = width or 0.04
+            beam.FaceCamera = true
+            beam.LightEmission = 1
+            beam.Color = ColorSequence.new(color or Color3.fromRGB(180, 100, 255))
+            beam.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.05),
+                NumberSequenceKeypoint.new(1, 0.85),
+            })
+            beam.Parent = p0
+            task.delay(lifetime or 0.45, function()
+                pcall(function() p0:Destroy() end)
+                pcall(function() p1:Destroy() end)
+            end)
+        end
+        G.__eclipse_emit_tracer = emit
+        -- Hook into existing shot packet tracer path
+        local lastBind = 0
+        RunService.Heartbeat:Connect(function()
+            if os.clock() - lastBind < 1 then return end
+            lastBind = os.clock()
+            if flag("tracers_enabled", false) ~= true then return end
+            if type(G.__runtime_shot_packet_tracer) ~= "function" then
+                G.__runtime_shot_packet_tracer = function(packet)
+                    if type(packet) ~= "table" then return end
+                    local origin = packet.Origin or packet.origin
+                    local dir = packet.Direction or packet.direction or packet.Aim
+                    local hit = packet.HitPosition or packet.hit
+                    if typeof(origin) ~= "Vector3" then return end
+                    local target = typeof(hit) == "Vector3" and hit
+                        or (typeof(dir) == "Vector3" and origin + dir.Unit * 400)
+                    if typeof(target) ~= "Vector3" then return end
+                    local color = flag("tracers_color", Color3.fromRGB(180, 100, 255))
+                    if typeof(color) ~= "Color3" then color = Color3.fromRGB(180, 100, 255) end
+                    local thick = tonumber(flag("tracers_thickness", 2)) or 2
+                    local life = tonumber(flag("tracers_lifetime", 0.5)) or 0.5
+                    emit(origin, target, color, life, thick * 0.04)
+                end
+            end
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- Spectators list (style match reference)
+    ----------------------------------------------------------------
+    do
+        local old = Host:FindFirstChild("EclipseSpectators")
+        if old then old:Destroy() end
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "EclipseSpectators"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        gui.Parent = Host
+        local panel = Instance.new("Frame")
+        panel.Name = "Panel"
+        panel.AnchorPoint = Vector2.new(1, 0)
+        panel.Position = UDim2.new(1, -18, 0.2, 0)
+        panel.Size = UDim2.new(0, 220, 0, 40)
+        panel.BackgroundColor3 = Color3.fromRGB(8, 8, 10)
+        panel.BackgroundTransparency = 0.18
+        panel.BorderSizePixel = 0
+        panel.Visible = false
+        panel.Parent = gui
+        Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 2)
+        local border = Instance.new("UIStroke")
+        border.Color = Color3.fromRGB(55, 55, 60)
+        border.Thickness = 1
+        border.Transparency = 0.25
+        border.Parent = panel
+        local header = Instance.new("TextLabel")
+        header.BackgroundTransparency = 1
+        header.Position = UDim2.new(0, 0, 0, 6)
+        header.Size = UDim2.new(1, 0, 0, 16)
+        header.Font = Enum.Font.GothamMedium
+        header.TextSize = 14
+        header.TextColor3 = Color3.new(1, 1, 1)
+        header.Text = "Spectators"
+        header.Parent = panel
+        local list = Instance.new("Frame")
+        list.BackgroundTransparency = 1
+        list.Position = UDim2.new(0, 12, 0, 30)
+        list.Size = UDim2.new(1, -24, 1, -36)
+        list.Parent = panel
+        local layout = Instance.new("UIListLayout")
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        layout.Padding = UDim.new(0, 3)
+        layout.Parent = list
+        local rows, lastKey, clock = {}, "", 0
+        local function isSpec(plr)
+            if plr == LP then return false end
+            if plr:GetAttribute("IsSpectating") ~= true then return false end
+            local uid, name = LP.UserId, LP.Name
+            for _, a in ipairs({"SpectatingUserId","SpectateTargetUserId","SpectateTarget","SpectatingPlayer","SpectateTargetName"}) do
+                local v = plr:GetAttribute(a)
+                if v == uid or v == tostring(uid) or v == name then return true end
+            end
+            return false
+        end
+        local function rebuild(specs)
+            local key = table.concat((function()
+                local t = {}
+                for i, p in ipairs(specs) do t[i] = tostring(p.UserId) end
+                return t
+            end)(), ",")
+            if key == lastKey then return end
+            lastKey = key
+            for _, r in pairs(rows) do if r.Root then r.Root:Destroy() end end
+            table.clear(rows)
+            for i, plr in ipairs(specs) do
+                local root = Instance.new("Frame")
+                root.BackgroundTransparency = 1
+                root.Size = UDim2.new(1, 0, 0, 15)
+                root.LayoutOrder = i
+                root.Parent = list
+                local nameLbl = Instance.new("TextLabel")
+                nameLbl.BackgroundTransparency = 1
+                nameLbl.Size = UDim2.new(0.58, 0, 1, 0)
+                nameLbl.Font = Enum.Font.Gotham
+                nameLbl.TextSize = 13
+                nameLbl.TextColor3 = Color3.new(1, 1, 1)
+                nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+                nameLbl.Text = plr.Name
+                nameLbl.Parent = root
+                local status = Instance.new("TextLabel")
+                status.BackgroundTransparency = 1
+                status.Position = UDim2.new(0.42, 0, 0, 0)
+                status.Size = UDim2.new(0.58, 0, 1, 0)
+                status.Font = Enum.Font.Gotham
+                status.TextSize = 13
+                status.TextColor3 = Color3.new(1, 1, 1)
+                status.TextXAlignment = Enum.TextXAlignment.Right
+                status.Text = "spectating"
+                status.Parent = root
+                rows[plr.UserId] = { Root = root }
+            end
+            local n = #specs
+            panel.Size = UDim2.new(0, 220, 0, math.max(36 + n * 18, 36))
+            panel.Visible = n > 0 and flag("misc_spectators", true) ~= false
+        end
+        RunService.Heartbeat:Connect(function()
+            if os.clock() - clock < 0.35 then return end
+            clock = os.clock()
+            local out = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if isSpec(p) then out[#out + 1] = p end
+            end
+            table.sort(out, function(a, b) return a.Name < b.Name end)
+            rebuild(out)
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- Auto-claim missions / rewards (safe remote probe)
+    ----------------------------------------------------------------
+    do
+        local lastScan = 0
+        local function tryClaim()
+            if flag("misc_auto_claim", true) == false then return end
+            local remotes = ReplicatedStorage:FindFirstChild("NetworkRemotes")
+            if not remotes then return end
+            local candidates = {}
+            local function walk(node, depth)
+                if depth > 4 or not node then return end
+                for _, ch in ipairs(node:GetChildren()) do
+                    local n = string.lower(ch.Name)
+                    if ch:IsA("RemoteEvent") or ch:IsA("RemoteFunction") then
+                        if n:find("claim", 1, true) or n:find("mission", 1, true)
+                            or n:find("reward", 1, true) or n:find("daily", 1, true)
+                            or n:find("collect", 1, true) then
+                            candidates[#candidates + 1] = ch
+                        end
+                    end
+                    if ch:IsA("Folder") or ch:IsA("ModuleScript") then
+                        walk(ch, depth + 1)
+                    end
+                end
+            end
+            walk(remotes, 0)
+            for _, remote in ipairs(candidates) do
+                pcall(function()
+                    if remote:IsA("RemoteEvent") then
+                        remote:FireServer()
+                    elseif remote:IsA("RemoteFunction") then
+                        remote:InvokeServer()
+                    end
+                end)
+            end
+            -- MissionCompleted module signal if present
+            pcall(function()
+                local m = ReplicatedStorage:FindFirstChild("Database")
+                    or ReplicatedStorage:FindFirstChild("Components")
+                -- soft: no force require that could error
+            end)
+        end
+        RunService.Heartbeat:Connect(function()
+            if os.clock() - lastScan < 8 then return end
+            lastScan = os.clock()
+            pcall(tryClaim)
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- Attachment / viewmodel material in third person
+    ----------------------------------------------------------------
+    do
+        local lastMat = 0
+        RunService.Heartbeat:Connect(function()
+            if os.clock() - lastMat < 0.5 then return end
+            lastMat = os.clock()
+            local env = G.__runtime_env or G
+            local matName = env.__runtime_attachment_material or flag("view_attachment_material", nil)
+            if type(matName) ~= "string" or matName == "" or matName == "Default" then return end
+            local ok, matEnum = pcall(function() return Enum.Material[matName] end)
+            if not ok or not matEnum then return end
+            local char = LP.Character
+            if not char then return end
+            for _, d in ipairs(char:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    local n = string.lower(d.Name)
+                    if n:find("attachment", 1, true) or n:find("sight", 1, true)
+                        or n:find("scope", 1, true) or n:find("muzzle", 1, true)
+                        or n:find("stock", 1, true) or n:find("grip", 1, true)
+                        or n:find("magazine", 1, true) or n:find("barrel", 1, true) then
+                        pcall(function() d.Material = matEnum end)
+                    end
+                end
+            end
+            -- also world third-person weapon models under Characters
+            local chars = Workspace:FindFirstChild("Characters")
+            if chars then
+                local mine = chars:FindFirstChild(LP.Name)
+                if mine then
+                    for _, d in ipairs(mine:GetDescendants()) do
+                        if d:IsA("BasePart") then
+                            local n = string.lower(d.Name)
+                            if n:find("attachment", 1, true) or n:find("weapon", 1, true) then
+                                pcall(function() d.Material = matEnum end)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- ESP flags order (match reference: BOMB, money, KIT stacked right)
+    ----------------------------------------------------------------
+    do
+        local preferred = { "BOMB", "MONEY", "KIT", "DEFUSE", "SCOPE", "RELOAD", "FLASH", "CROUCH", "PING" }
+        local env = G.__runtime_env or G
+        if type(env.__runtime_esp_flag_order) ~= "table" then
+            env.__runtime_esp_flag_order = preferred
+        end
+        -- ensure selection includes these by default when empty
+        if type(env.__runtime_esp_flag_selection) ~= "table" then
+            local sel = {}
+            for _, n in ipairs(preferred) do sel[n] = true end
+            env.__runtime_esp_flag_selection = sel
+        end
+    end
+
+    print("[Eclipse] visual/runtime fix pack loaded")
+end
+
+
+--============================================================================
+-- Eclipse combat feedback pack: hit numbers, hit cross, anti-decoy, grenade rings
+--============================================================================
+do
+    local G = getgenv and getgenv() or _G
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local Workspace = game:GetService("Workspace")
+    local TweenService = game:GetService("TweenService")
+    local CoreGui = game:GetService("CoreGui")
+    local SoundService = game:GetService("SoundService")
+    local LP = Players.LocalPlayer
+    if not LP then return end
+
+    local Host = CoreGui
+    pcall(function()
+        if type(gethui) == "function" then
+            local h = gethui()
+            if h then Host = h end
+        end
+    end)
+
+    ----------------------------------------------------------------
+    -- World hit damage number + hit crosshair marker
+    ----------------------------------------------------------------
+    do
+        local old = Host:FindFirstChild("EclipseHitMarkers")
+        if old then old:Destroy() end
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "EclipseHitMarkers"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 10060
+        gui.Parent = Host
+
+        local function spawnDamageNumber(worldPos, damage, isKill)
+            local cam = Workspace.CurrentCamera
+            if not cam or typeof(worldPos) ~= "Vector3" then return end
+            local sp, on = cam:WorldToViewportPoint(worldPos + Vector3.new(0, 1.2, 0))
+            if not on or sp.Z <= 0 then return end
+            local lbl = Instance.new("TextLabel")
+            lbl.BackgroundTransparency = 1
+            lbl.Size = UDim2.fromOffset(80, 28)
+            lbl.AnchorPoint = Vector2.new(0.5, 0.5)
+            lbl.Position = UDim2.fromOffset(sp.X, sp.Y)
+            lbl.Font = Enum.Font.GothamBold
+            lbl.TextSize = isKill and 22 or 18
+            lbl.TextColor3 = isKill and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 255, 255)
+            lbl.TextStrokeTransparency = 0
+            lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+            lbl.Text = tostring(math.floor(damage + 0.5))
+            lbl.TextTransparency = 1
+            lbl.ZIndex = 20
+            lbl.Parent = gui
+            TweenService:Create(lbl, TweenInfo.new(0.12), { TextTransparency = 0 }):Play()
+            local start = os.clock()
+            local conn
+            conn = RunService.RenderStepped:Connect(function()
+                local t = os.clock() - start
+                local cam2 = Workspace.CurrentCamera
+                if not cam2 or t > 0.85 or not lbl.Parent then
+                    if conn then conn:Disconnect() end
+                    pcall(function() lbl:Destroy() end)
+                    return
+                end
+                local lift = worldPos + Vector3.new(0, 1.2 + t * 1.4, 0)
+                local sp2, on2 = cam2:WorldToViewportPoint(lift)
+                if on2 and sp2.Z > 0 then
+                    lbl.Position = UDim2.fromOffset(sp2.X, sp2.Y)
+                end
+                if t > 0.5 then
+                    lbl.TextTransparency = math.clamp((t - 0.5) / 0.35, 0, 1)
+                end
+            end)
+        end
+
+        local function spawnHitCross(worldPos)
+            local cam = Workspace.CurrentCamera
+            if not cam or typeof(worldPos) ~= "Vector3" then return end
+            local sp, on = cam:WorldToViewportPoint(worldPos)
+            if not on or sp.Z <= 0 then return end
+            local root = Instance.new("Frame")
+            root.BackgroundTransparency = 1
+            root.Size = UDim2.fromOffset(20, 20)
+            root.AnchorPoint = Vector2.new(0.5, 0.5)
+            root.Position = UDim2.fromOffset(sp.X, sp.Y)
+            root.Parent = gui
+            local function arm(rot)
+                local f = Instance.new("Frame")
+                f.BorderSizePixel = 0
+                f.AnchorPoint = Vector2.new(0.5, 0.5)
+                f.Position = UDim2.fromScale(0.5, 0.5)
+                f.Size = UDim2.fromOffset(2, 12)
+                f.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+                f.Rotation = rot
+                f.Parent = root
+                local s = Instance.new("UIStroke")
+                s.Color = Color3.new(0, 0, 0)
+                s.Thickness = 1
+                s.Parent = f
+            end
+            arm(0) arm(90)
+            TweenService:Create(root, TweenInfo.new(0.08), { Size = UDim2.fromOffset(28, 28) }):Play()
+            task.delay(0.35, function()
+                for _, c in ipairs(root:GetChildren()) do
+                    if c:IsA("Frame") then
+                        TweenService:Create(c, TweenInfo.new(0.2), { BackgroundTransparency = 1 }):Play()
+                    end
+                end
+                task.delay(0.22, function() pcall(function() root:Destroy() end) end)
+            end)
+        end
+
+        -- wrap predicted hit reporter
+        local function onHit(player, part, damage, remaining)
+            local pos = typeof(part) == "Instance" and part:IsA("BasePart") and part.Position
+            if not pos and typeof(player) == "Instance" and player:IsA("Player") and player.Character then
+                local h = player.Character:FindFirstChild("Head") or player.Character:FindFirstChild("HumanoidRootPart")
+                pos = h and h.Position
+            end
+            if not pos then return end
+            local dmg = tonumber(damage) or 0
+            local rem = tonumber(remaining)
+            spawnDamageNumber(pos, dmg, rem ~= nil and rem <= 0)
+            spawnHitCross(pos)
+            -- also queue existing hitmarker helper if present
+            local q = G.__runtime_env and G.__runtime_env.queue_hitmarker
+            if type(q) ~= "function" and type(helpers) == "table" then
+                q = helpers.queue_hitmarker
+            end
+            -- helpers may be local; try getgenv
+            pcall(function()
+                local env = G.__runtime_env
+                if type(env) == "table" and type(env.__runtime_queue_hitmarker) == "function" then
+                    env.__runtime_queue_hitmarker(pos, 1)
+                end
+            end)
+        end
+
+        -- poll / wrap report
+        local lastWrap = 0
+        RunService.Heartbeat:Connect(function()
+            if os.clock() - lastWrap < 0.5 then return end
+            lastWrap = os.clock()
+            local env = G.__runtime_env
+            if type(env) ~= "table" then return end
+            local orig = env.__runtime_report_predicted_hit
+            if type(orig) == "function" and not env.__eclipse_hit_wrapped then
+                env.__eclipse_hit_wrapped = true
+                env.__runtime_report_predicted_hit = function(player, part, damage, remaining, ...)
+                    pcall(onHit, player, part, damage, remaining)
+                    return orig(player, part, damage, remaining, ...)
+                end
+            end
+        end)
+        G.__eclipse_spawn_hit_fx = onHit
+    end
+
+    ----------------------------------------------------------------
+    -- Anti-decoy: mute/ignore decoy grenade sounds near player
+    ----------------------------------------------------------------
+    do
+        local decoyKeywords = { "decoy", "decoygrenade", "fake" }
+        local function isDecoySound(sound)
+            if not sound or not sound:IsA("Sound") then return false end
+            local name = string.lower(sound.Name or "")
+            local id = tostring(sound.SoundId or ""):lower()
+            for _, k in ipairs(decoyKeywords) do
+                if name:find(k, 1, true) or id:find(k, 1, true) then
+                    return true
+                end
+            end
+            -- attribute from game
+            local ok, attr = pcall(function() return sound:GetAttribute("IsDecoy") end)
+            if ok and attr == true then return true end
+            local parent = sound.Parent
+            if parent then
+                local pn = string.lower(parent.Name or "")
+                if pn:find("decoy", 1, true) then return true end
+            end
+            return false
+        end
+        local function silence(sound)
+            pcall(function()
+                sound.Volume = 0
+                sound:Stop()
+            end)
+        end
+        Workspace.DescendantAdded:Connect(function(inst)
+            if inst:IsA("Sound") and isDecoySound(inst) then
+                silence(inst)
+            end
+        end)
+        -- also scan existing periodically
+        task.spawn(function()
+            while true do
+                task.wait(1.5)
+                for _, s in ipairs(Workspace:GetDescendants()) do
+                    if s:IsA("Sound") and s.Playing and isDecoySound(s) then
+                        silence(s)
+                    end
+                end
+            end
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- Grenade prediction radius rings (molotov / flash / HE / smoke)
+    ----------------------------------------------------------------
+    do
+        local folder = Instance.new("Folder")
+        folder.Name = "EclipseGrenadeRings"
+        folder.Parent = Workspace
+
+        local radii = {
+            molotov = 12, incendiary = 12, fire = 12,
+            he = 18, explosion = 18, frag = 18,
+            flash = 22, flashbang = 22,
+            smoke = 14,
+        }
+        local colors = {
+            molotov = Color3.fromRGB(255, 120, 40),
+            he = Color3.fromRGB(255, 60, 60),
+            flash = Color3.fromRGB(255, 255, 180),
+            smoke = Color3.fromRGB(180, 180, 190),
+        }
+
+        local function classify(name)
+            name = string.lower(tostring(name or ""))
+            if name:find("molotov", 1, true) or name:find("incendi", 1, true) then return "molotov" end
+            if name:find("flash", 1, true) then return "flash" end
+            if name:find("smoke", 1, true) then return "smoke" end
+            if name:find("he", 1, true) or name:find("frag", 1, true) or name:find("grenade", 1, true) then return "he" end
+            return nil
+        end
+
+        local function makeRing(pos, radius, color)
+            local part = Instance.new("Part")
+            part.Name = "GrenadeRadius"
+            part.Shape = Enum.PartType.Cylinder
+            part.Anchored = true
+            part.CanCollide = false
+            part.CanQuery = false
+            part.CanTouch = false
+            part.Material = Enum.Material.Neon
+            part.Color = color
+            part.Transparency = 0.72
+            part.Size = Vector3.new(0.12, radius * 2, radius * 2)
+            part.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+            part.Parent = folder
+            task.delay(2.8, function()
+                pcall(function() part:Destroy() end)
+            end)
+            return part
+        end
+
+        -- observe projectiles in Debris / Workspace
+        local function watch(inst)
+            if not inst:IsA("BasePart") and not inst:IsA("Model") then return end
+            local kind = classify(inst.Name)
+            if not kind then
+                local attr = inst:GetAttribute and (inst:GetAttribute("GrenadeType") or inst:GetAttribute("ProjectileType"))
+                kind = classify(attr)
+            end
+            if not kind then return end
+            local env = G.__runtime_env or G
+            if env.__runtime_grenade_radius_enabled == false then return end
+            task.delay(0.05, function()
+                local pos
+                if inst:IsA("BasePart") then
+                    pos = inst.Position
+                elseif inst:IsA("Model") then
+                    pos = inst:GetPivot().Position
+                end
+                if typeof(pos) ~= "Vector3" then return end
+                makeRing(pos, radii[kind] or 14, colors[kind] or Color3.fromRGB(200, 200, 255))
+            end)
+        end
+        local debris = Workspace:FindFirstChild("Debris")
+        if debris then
+            debris.ChildAdded:Connect(watch)
+        end
+        Workspace.DescendantAdded:Connect(function(inst)
+            local n = string.lower(inst.Name or "")
+            if n:find("grenade", 1, true) or n:find("molotov", 1, true)
+                or n:find("flash", 1, true) or n:find("smoke", 1, true) then
+                watch(inst)
+            end
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- Soft glowing scope lines (match reference cross style)
+    ----------------------------------------------------------------
+    do
+        local gui = Host:FindFirstChild("EclipseScopeLines")
+        if gui then
+            for _, f in ipairs(gui:GetChildren()) do
+                if f:IsA("Frame") then
+                    f.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+                    f.BackgroundTransparency = 0.05
+                    local stroke = f:FindFirstChildOfClass("UIStroke")
+                    if not stroke then
+                        stroke = Instance.new("UIStroke")
+                        stroke.Parent = f
+                    end
+                    stroke.Color = Color3.fromRGB(255, 255, 255)
+                    stroke.Thickness = 2
+                    stroke.Transparency = 0.55
+                end
+            end
+        end
+    end
+
+    print("[Eclipse] combat feedback pack loaded")
 end
